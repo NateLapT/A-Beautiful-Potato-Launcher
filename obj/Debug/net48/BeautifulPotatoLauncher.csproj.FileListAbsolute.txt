@@ -1,0 +1,8 @@
+P:\BeautifulPotatoLauncher\bin\Debug\net48\BeautifulPotatoLauncher.exe.config
+P:\BeautifulPotatoLauncher\bin\Debug\net48\BeautifulPotatoLauncher.exe
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.csproj.AssemblyReference.cache
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.GeneratedMSBuildEditorConfig.editorconfig
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.AssemblyInfoInputs.cache
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.AssemblyInfo.cs
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.csproj.CoreCompileInputs.cache
+P:\BeautifulPotatoLauncher\obj\Debug\net48\BeautifulPotatoLauncher.exe

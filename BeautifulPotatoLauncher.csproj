@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- net48 on purpose: .NET Framework 4.8 ships with Windows 10 and 11, so
+         players install nothing. A net8/net9 build would need either a runtime
+         download or a ~70 MB self-contained publish. -->
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>BeautifulPotatoLauncher</AssemblyName>
+    <RootNamespace>BeautifulPotatoLauncher</RootNamespace>
+    <ApplicationIcon>assets\potato.ico</ApplicationIcon>
+    <Product>Beautiful Potato Launcher</Product>
+    <AssemblyTitle>Beautiful Potato Launcher</AssemblyTitle>
+    <Company>A Beautiful Potato</Company>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Copyright>A Beautiful Potato</Copyright>
+    <DebugType>none</DebugType>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- LogicalName is set explicitly so the lookup names in code cannot drift
+         with the folder layout. -->
+    <EmbeddedResource Include="assets\logo_title.png"   LogicalName="logo_title.png" />
+    <EmbeddedResource Include="assets\logo_potato.png"  LogicalName="logo_potato.png" />
+    <EmbeddedResource Include="assets\banner_motox.png" LogicalName="banner_motox.png" />
+    <EmbeddedResource Include="assets\DayZLogo.png"      LogicalName="dayz_logo.png" />
+  </ItemGroup>
+
+</Project>
