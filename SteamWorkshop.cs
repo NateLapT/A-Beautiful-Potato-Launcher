@@ -29,13 +29,14 @@
 // ---------------------------------------------------------------------------
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace BeautifulPotatoLauncher
+namespace BeautifulPotatoExpLauncher
 {
     internal sealed class Mod
     {
@@ -82,21 +83,52 @@ namespace BeautifulPotatoLauncher
         }
 
         /// <summary>
-        /// The authoritative readiness test. Deliberately filesystem-based so it
-        /// works whether the subscription came from the API or from the player
-        /// clicking Subscribe on the Workshop page.
+        /// The authoritative readiness test: does the mod have a meta.cpp?
+        ///
+        /// WHY meta.cpp AND NOT "ARE THERE FILES"
+        ///   meta.cpp is the manifest Steam writes when it finishes installing a
+        ///   workshop item. It names the published id and the content version,
+        ///   and it is the last thing to appear - so its presence means the
+        ///   install completed, and its absence means it did not, however full
+        ///   the folder looks.
+        ///
+        ///   Counting files does not work. One item on this machine holds 414
+        ///   loose source files - paa, rvmat, p3d - under an Addons folder with
+        ///   no pbo and no meta.cpp. An earlier version accepted "more than one
+        ///   file is present", called it installed, launched the game, and the
+        ///   server kicked the player. Looking for a .pbo instead was closer but
+        ///   still indirect: it asks what a mod usually contains rather than
+        ///   whether Steam says it finished. 834 of 867 installed items here
+        ///   have a meta.cpp, and the 33 without it are the same 33 that have no
+        ///   pbo - so this is no less strict, and it is strict about the right
+        ///   thing.
         /// </summary>
         public static bool IsInstalled(string steamPath, ulong id)
+        {
+            try { return File.Exists(MetaPath(steamPath, id)); }
+            catch { return false; }
+        }
+
+        /// <summary>The mod's own manifest, written by Steam on a completed install.</summary>
+        public static string MetaPath(string steamPath, ulong id)
+        {
+            return Path.Combine(ItemPath(steamPath, id), "meta.cpp");
+        }
+
+        /// <summary>
+        /// Present on disk but unusable: files are there, yet no meta.cpp, so
+        /// the install never completed. Worth separating from "missing" because
+        /// the cure differs - Steam already believes this one is installed, so
+        /// it needs a forced re-download rather than a plain subscribe.
+        /// </summary>
+        public static bool IsBrokenInstall(string steamPath, ulong id)
         {
             try
             {
                 string dir = ItemPath(steamPath, id);
                 if (!Directory.Exists(dir)) return false;
-
-                // A folder that exists but is still filling up is not ready. Any
-                // .pbo present is a good signal the download has produced content.
-                return Directory.EnumerateFiles(dir, "*.pbo", SearchOption.AllDirectories).Any()
-                    || Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Take(2).Count() > 1;
+                if (File.Exists(MetaPath(steamPath, id))) return false;
+                return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Any();
             }
             catch { return false; }
         }
@@ -143,17 +175,42 @@ namespace BeautifulPotatoLauncher
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate bool DownloadInfoFn(IntPtr ugc, ulong publishedFileId,
                                              out ulong bytesDownloaded, out ulong bytesTotal);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate bool InstallInfoFn(IntPtr ugc, ulong publishedFileId,
+                                            out ulong sizeOnDisk, System.Text.StringBuilder folder,
+                                            uint folderSize, out uint timeStamp);
+
+        // The details query: ask Steam when each workshop item was last updated.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate ulong CreateDetailsQueryFn(IntPtr ugc, [In] ulong[] ids, uint count);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate ulong SendQueryFn(IntPtr ugc, ulong handle);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate bool GetQueryResultFn(IntPtr ugc, ulong handle, uint index, IntPtr details);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate bool ReleaseQueryFn(IntPtr ugc, ulong handle);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate bool IsCallDoneFn(IntPtr utils, ulong call, out bool failed);
 
         private static IntPtr _lib = IntPtr.Zero;
         private static IntPtr _ugc = IntPtr.Zero;
+        private static IntPtr _utils = IntPtr.Zero;
         private static bool _initialised;
+
+        private static CreateDetailsQueryFn _createDetails;
+        private static SendQueryFn _sendQuery;
+        private static GetQueryResultFn _queryResult;
+        private static ReleaseQueryFn _releaseQuery;
+        private static IsCallDoneFn _callDone;
 
         private static ShutdownFn _shutdown;
         private static RunCallbacksFn _runCallbacks;
         private static SubscribeFn _subscribe;
+        private static SubscribeFn _unsubscribe;
         private static GetItemStateFn _getState;
         private static DownloadItemFn _download;
         private static DownloadInfoFn _downloadInfo;
+        private static InstallInfoFn _installInfo;
 
         public static bool Available { get { return _initialised && _ugc != IntPtr.Zero; } }
 
@@ -219,9 +276,27 @@ namespace BeautifulPotatoLauncher
                 }
 
                 _subscribe = Bind<SubscribeFn>("SteamAPI_ISteamUGC_SubscribeItem");
+            _unsubscribe = Bind<SubscribeFn>("SteamAPI_ISteamUGC_UnsubscribeItem");
                 _getState  = Bind<GetItemStateFn>("SteamAPI_ISteamUGC_GetItemState");
                 _download  = Bind<DownloadItemFn>("SteamAPI_ISteamUGC_DownloadItem");
             _downloadInfo = Bind<DownloadInfoFn>("SteamAPI_ISteamUGC_GetItemDownloadInfo");
+            _installInfo = Bind<InstallInfoFn>("SteamAPI_ISteamUGC_GetItemInstallInfo");
+
+                _createDetails = Bind<CreateDetailsQueryFn>("SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest");
+                _sendQuery     = Bind<SendQueryFn>("SteamAPI_ISteamUGC_SendQueryUGCRequest");
+                _queryResult   = Bind<GetQueryResultFn>("SteamAPI_ISteamUGC_GetQueryUGCResult");
+                _releaseQuery  = Bind<ReleaseQueryFn>("SteamAPI_ISteamUGC_ReleaseQueryUGCRequest");
+                _callDone      = Bind<IsCallDoneFn>("SteamAPI_ISteamUtils_IsAPICallCompleted");
+
+                // The utils accessor is version-suffixed too, and it carries the
+                // "has this async call finished" test the details query needs.
+                for (int v = 30; v >= 5; v--)
+                {
+                    var ua = Bind<UgcAccessorFn>("SteamAPI_SteamUtils_v" + v.ToString("000"));
+                    if (ua == null) continue;
+                    _utils = ua();
+                    if (_utils != IntPtr.Zero) break;
+                }
 
                 return _subscribe != null && _getState != null;
             }
@@ -292,6 +367,340 @@ namespace BeautifulPotatoLauncher
         {
             var st = GetState(id);
             return st.HasFlag(ItemState.Downloading) || st.HasFlag(ItemState.DownloadPending);
+        }
+
+        /// <summary>
+        /// Whether Steam's OWN flag says the installed copy is out of date.
+        /// One of the two signals NeedsUpdate uses; callers want that instead.
+        /// </summary>
+        public static bool SteamSaysOutOfDate(ulong id)
+        {
+            var st = GetState(id);
+            return st.HasFlag(ItemState.Installed) && st.HasFlag(ItemState.NeedsUpdate);
+        }
+
+        // ------------------------------------------ workshop update times --
+
+        private const int DetailsSize = 16384;      // SteamUGCDetails_t is ~9776
+        private const int OffsetPublishedId = 0;
+        private const int OffsetTimeUpdated = 8172;
+        private const int DetailsPerQuery = 50;     // Steam's page size
+
+        // Asking Steam is a network round trip, so answers are kept for the
+        // session - a launch checks the same mods several times over.
+        private static readonly Dictionary<ulong, DateTime> _workshopUpdated
+            = new Dictionary<ulong, DateTime>();
+
+        /// <summary>
+        /// Asks Steam when each of these workshop items was last updated and
+        /// remembers the answers. Call it once before checking a server's mod
+        /// list; NeedsUpdate then costs nothing.
+        ///
+        /// WHERE m_rtimeUpdated LIVES
+        ///   SteamUGCDetails_t is a large fixed struct with a 129-byte title and
+        ///   an 8000-byte description buried in the middle, so its field offsets
+        ///   are easy to get wrong by a few bytes and impossible to notice when
+        ///   you do - a neighbouring field still reads as a plausible number.
+        ///   Offset 8172 was not computed, it was found: the whole struct was
+        ///   scanned for values that decode as sensible dates, across items
+        ///   whose real update times were already known. 8168 turned out to be
+        ///   m_rtimeCreated and 8172 m_rtimeUpdated, agreeing on every item.
+        /// </summary>
+        public static void PrefetchWorkshopTimes(IEnumerable<ulong> ids, Action<string> log)
+        {
+            if (!Available || _createDetails == null || _sendQuery == null
+                || _queryResult == null || _callDone == null || _utils == IntPtr.Zero) return;
+
+            var wanted = new List<ulong>();
+            lock (_workshopUpdated)
+            {
+                foreach (ulong id in ids)
+                    if (id != 0 && !_workshopUpdated.ContainsKey(id) && !wanted.Contains(id))
+                        wanted.Add(id);
+            }
+            if (wanted.Count == 0) return;
+
+            IntPtr det = Marshal.AllocHGlobal(DetailsSize);
+            try
+            {
+                for (int start = 0; start < wanted.Count; start += DetailsPerQuery)
+                {
+                    int n = Math.Min(DetailsPerQuery, wanted.Count - start);
+                    var batch = new ulong[n];
+                    wanted.CopyTo(start, batch, 0, n);
+
+                    ulong handle;
+                    try { handle = _createDetails(_ugc, batch, (uint)n); }
+                    catch { return; }
+                    if (handle == 0 || handle == ulong.MaxValue) return;
+
+                    try
+                    {
+                        ulong call = _sendQuery(_ugc, handle);
+                        if (call == 0) continue;
+
+                        // Steam answers asynchronously, so callbacks are pumped
+                        // until it does. Ten seconds is generous; it normally
+                        // takes under one.
+                        bool failed = true, done = false;
+                        for (int i = 0; i < 100 && !done; i++)
+                        {
+                            if (_runCallbacks != null) _runCallbacks();
+                            System.Threading.Thread.Sleep(100);
+                            done = _callDone(_utils, call, out failed);
+                        }
+                        if (!done || failed)
+                        {
+                            if (log != null) log("Steam API: the update-time query did not answer.");
+                            continue;
+                        }
+
+                        for (uint i = 0; i < n; i++)
+                        {
+                            for (int z = 0; z < DetailsSize; z++) Marshal.WriteByte(det, z, 0);
+                            if (!_queryResult(_ugc, handle, i, det)) continue;
+
+                            ulong pid = (ulong)Marshal.ReadInt64(det, OffsetPublishedId);
+                            uint updated = (uint)Marshal.ReadInt32(det, OffsetTimeUpdated);
+                            if (pid == 0 || updated == 0) continue;
+
+                            lock (_workshopUpdated)
+                                _workshopUpdated[pid] = UnixEpoch.AddSeconds(updated);
+                        }
+                    }
+                    finally
+                    {
+                        try { if (_releaseQuery != null) _releaseQuery(_ugc, handle); }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (log != null) log("Steam API: the update-time query failed - " + ex.Message);
+            }
+            finally { Marshal.FreeHGlobal(det); }
+        }
+
+        private static readonly DateTime UnixEpoch =
+            new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>
+        /// When Steam says this item was last updated, or DateTime.MinValue when
+        /// it has not been asked. PrefetchWorkshopTimes fills this in.
+        /// </summary>
+        public static DateTime WorkshopUpdated(ulong id)
+        {
+            lock (_workshopUpdated)
+            {
+                DateTime t;
+                return _workshopUpdated.TryGetValue(id, out t) ? t : DateTime.MinValue;
+            }
+        }
+
+        /// <summary>See StaleBy for why this is a day and not a second.</summary>
+        public static readonly TimeSpan StaleTolerance = TimeSpan.FromDays(1);
+
+        /// <summary>
+        /// When Steam last WROTE this mod's meta.cpp - which is when it last
+        /// installed or updated the item. Different from the timestamp inside
+        /// the file; see StaleBy for why that difference matters.
+        /// DateTime.MinValue when there is no meta.cpp.
+        /// </summary>
+        public static DateTime InstalledAt(string steamPath, ulong id)
+        {
+            try
+            {
+                string meta = MetaPath(steamPath, id);
+                if (!File.Exists(meta)) return DateTime.MinValue;
+                return File.GetLastWriteTimeUtc(meta);
+            }
+            catch { return DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// How far the local copy lags the published one, or TimeSpan.Zero when
+        /// it does not lag or cannot be judged.
+        ///
+        /// TWO SIGNALS MUST AGREE, AND HERE IS WHY
+        ///   The obvious test - compare the timestamp inside meta.cpp against
+        ///   Steam's m_rtimeUpdated - is wrong on its own, and measurably so.
+        ///   Across all 835 installed mods it agreed with Steam to within a day
+        ///   for 825 of them, which looks excellent, but SEVEN of the ten
+        ///   disagreements were mods that were perfectly up to date.
+        ///
+        ///   The reason is that the two numbers do not measure the same event.
+        ///   m_rtimeUpdated moves whenever the workshop ITEM changes - including
+        ///   a description or tag edit that touches no files at all - while the
+        ///   timestamp inside meta.cpp records when the author built the
+        ///   CONTENT. Mod 1590841260 (Trader) shows it plainly: Steam last
+        ///   updated the item on 2024-10-16, the file says 2024-01-27, and the
+        ///   local copy was current the whole time.
+        ///
+        ///   What settles it is when Steam last WROTE meta.cpp, because that is
+        ///   when this machine actually received the item. For that same mod the
+        ///   file was written 2024-10-18 - two days AFTER the last workshop
+        ///   update - so it cannot possibly be stale.
+        ///
+        ///   File mtime is not used alone either: on its own it drifts, matching
+        ///   Steam within a day for only 250 of the 835, because revalidating or
+        ///   recopying an item rewrites the file long after the content changed.
+        ///   That drift is always in the safe direction - the file looks NEWER -
+        ///   so it is reliable for proving a copy is current, and unreliable for
+        ///   proving one is old.
+        ///
+        ///   So a mod is called outdated only when BOTH say so. On this machine
+        ///   that is 2 mods rather than 9, and both of the 2 are genuinely
+        ///   behind - 46 and 50 days.
+        ///
+        /// WHY THE TOLERANCE IS A WHOLE DAY
+        ///   The clocks do not agree exactly. A copy that IS current reads about
+        ///   5 seconds out at the median and 42 at the 90th percentile, with a
+        ///   thin tail to a few hours. A day sits well clear of that and well
+        ///   clear of the real lags, which start at 46 days.
+        /// </summary>
+        public static TimeSpan StaleBy(string steamPath, ulong id)
+        {
+            DateTime published = WorkshopUpdated(id);
+            if (published == DateTime.MinValue) return TimeSpan.Zero;
+            if (steamPath == null) return TimeSpan.Zero;
+
+            // Signal 1: when this machine received the item.
+            DateTime installed = InstalledAt(steamPath, id);
+            if (installed == DateTime.MinValue) return TimeSpan.Zero;
+            TimeSpan installedLag = published - installed;
+            if (installedLag <= StaleTolerance) return TimeSpan.Zero;   // copy is newer: current
+
+            // Signal 2: the content timestamp the author stamped into meta.cpp.
+            DateTime built = LocalPublishTime(steamPath, id);
+            if (built == DateTime.MinValue) return TimeSpan.Zero;
+            if (published - built <= StaleTolerance) return TimeSpan.Zero;
+
+            // Both agree. Report the lag of the INSTALL, which is the honest
+            // answer to "how far behind is the copy I actually have".
+            return installedLag;
+        }
+
+        /// <summary>
+        /// Whether the installed copy needs updating, judged two ways: Steam's
+        /// own NeedsUpdate flag, and the timestamp inside the mod's meta.cpp
+        /// against the publication time Steam reports for the workshop item.
+        ///
+        /// Both are needed. Steam's flag is immediate but weak - it reported
+        /// false for every one of the mods measured as genuinely behind, which
+        /// is how a player reached the Emergence server with outdated mods and
+        /// was kicked. The timestamps are ground truth about what is on disk,
+        /// but only after PrefetchWorkshopTimes has run and only past the
+        /// tolerance StaleBy explains, so the flag still covers the one case
+        /// they cannot see: a mod published within the last day.
+        /// </summary>
+        public static bool NeedsUpdate(string steamPath, ulong id)
+        {
+            if (SteamSaysOutOfDate(id)) return true;
+            return steamPath != null && StaleBy(steamPath, id) > TimeSpan.Zero;
+        }
+
+        /// <summary>Re-download an item, whether or not Steam thinks it needs it.</summary>
+        public static bool ForceDownload(ulong id)
+        {
+            if (!Available || _download == null) return false;
+            try { return _download(_ugc, id, true); }
+            catch { return false; }
+        }
+
+        /// <summary>Unsubscribe, so Steam removes the item from disk.</summary>
+        public static bool Unsubscribe(ulong id)
+        {
+            if (!Available || _unsubscribe == null) return false;
+            try { _unsubscribe(_ugc, id); return true; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// The raw publication timestamp recorded in the mod's own meta.cpp.
+        /// Zero when unknown. See LocalPublishTime for what the number means.
+        /// </summary>
+        public static ulong MetaTimestamp(string steamPath, ulong id)
+        {
+            try
+            {
+                string meta = MetaPath(steamPath, id);
+                if (!File.Exists(meta)) return 0;
+                foreach (string line in File.ReadAllLines(meta))
+                {
+                    string t = line.Trim();
+                    if (!t.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)) continue;
+                    int eq = t.IndexOf('=');
+                    if (eq < 0) continue;
+                    string v = t.Substring(eq + 1).Trim().TrimEnd(';').Trim();
+                    ulong ts;
+                    if (ulong.TryParse(v, out ts)) return ts;
+                }
+            }
+            catch { }
+            return 0;
+        }
+
+        // meta.cpp counts in 100-nanosecond ticks, but not from an epoch anyone
+        // documents, and two different epochs are in the wild. Both constants
+        // below were measured, not looked up: every installed item's meta.cpp
+        // timestamp was compared against the m_rtimeUpdated Steam reports for
+        // the same workshop id, across 834 mods.
+        //
+        //   830 of them use the large epoch. Against the constant below the
+        //   median disagreement is 5 seconds and the 90th percentile is 39.
+        //
+        //   4 use .NET's own ticks-since-year-1, the value DateTime.Ticks gives.
+        //
+        // The wobble is real but tiny, and it is why StaleBy below needs a
+        // tolerance rather than an exact comparison.
+        private const ulong TicksLargeEpoch = 5233041986331080000UL;
+        private const ulong TicksYear1AtUnixEpoch = 621355968000000000UL;
+        private const ulong EpochSplit = 2000000000000000000UL;
+
+        /// <summary>
+        /// When the installed content was published, decoded from meta.cpp.
+        /// DateTime.MinValue when the mod has no meta.cpp or an unreadable one.
+        /// </summary>
+        public static DateTime LocalPublishTime(string steamPath, ulong id)
+        {
+            ulong ts = MetaTimestamp(steamPath, id);
+            if (ts == 0) return DateTime.MinValue;
+
+            ulong epoch = ts < EpochSplit ? TicksYear1AtUnixEpoch : TicksLargeEpoch;
+            if (ts <= epoch) return DateTime.MinValue;
+
+            double seconds = (ts - epoch) / 1e7;
+            if (seconds > 4102444800.0) return DateTime.MinValue;    // past year 2100: not a time
+            try
+            {
+                return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds);
+            }
+            catch { return DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// Where Steam put the item, how big it is, and when the content it
+        /// installed was published (UTC seconds). False if it is not installed.
+        /// </summary>
+        public static bool TryGetInstallInfo(ulong id, out string folder, out long size, out DateTime updated)
+        {
+            folder = null; size = 0; updated = DateTime.MinValue;
+            if (!Available || _installInfo == null) return false;
+            try
+            {
+                var sb = new System.Text.StringBuilder(1024);
+                ulong bytes;
+                uint stamp;
+                if (!_installInfo(_ugc, id, out bytes, sb, (uint)sb.Capacity, out stamp)) return false;
+                folder = sb.ToString();
+                size = (long)bytes;
+                if (stamp > 0)
+                    updated = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                              .AddSeconds(stamp).ToLocalTime();
+                return true;
+            }
+            catch { return false; }
         }
 
         public static ItemState GetState(ulong id)

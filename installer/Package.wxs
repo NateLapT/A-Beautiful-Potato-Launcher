@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Beautiful Potato Launcher - MSI
+  Beautiful Potato Experimental Launcher - MSI
 
   Scope is perUser on purpose. A perMachine install writes to Program Files and
   therefore triggers a UAC elevation prompt, which is exactly the kind of thing
@@ -10,24 +10,23 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
   <Package
-      Name="Beautiful Potato Launcher"
+      Name="A Beautiful Potato Launcher"
       Manufacturer="A Beautiful Potato"
       Version="1.0.0"
-      UpgradeCode="B6077920-3D17-4AEE-9926-64EBD2AE097B"
+      UpgradeCode="CC354B22-2910-47E9-8712-366A265A4D67"
       Scope="perUser"
       Compressed="yes">
 
-    <SummaryInformation Description="Launcher for the A Beautiful Potato DayZ servers" />
+    <SummaryInformation Description="Server browser and launcher for the A Beautiful Potato DayZ servers" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Shown in Add/Remove Programs -->
     <Icon Id="PotatoIcon" SourceFile="..\assets\potato.ico" />
     <Property Id="ARPPRODUCTICON" Value="PotatoIcon" />
     <Property Id="ARPNOREPAIR" Value="1" />
 
-    <Feature Id="Main" Title="Beautiful Potato Launcher" Level="1">
+    <Feature Id="Main" Title="A Beautiful Potato Launcher" Level="1">
       <ComponentGroupRef Id="AppComponents" />
     </Feature>
   </Package>
@@ -36,7 +35,7 @@
     <!-- Per-user install location: %LOCALAPPDATA%\Programs\... -->
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="Beautiful Potato Launcher" />
+        <Directory Id="INSTALLFOLDER" Name="A Beautiful Potato Launcher" />
       </Directory>
     </StandardDirectory>
 
@@ -52,7 +51,7 @@
 
       <Component Id="LauncherExe" Directory="INSTALLFOLDER" Guid="*">
         <File Id="LauncherExeFile"
-              Source="..\bin\Release\net48\BeautifulPotatoLauncher.exe"
+              Source="..\bin\Release\net48\BeautifulPotatoExpLauncher.exe"
               KeyPath="yes" />
       </Component>
 
@@ -60,26 +59,24 @@
            file keypath, so the installer can track it without admin rights. -->
       <Component Id="StartMenuShortcut" Directory="AppShortcutFolder" Guid="*">
         <Shortcut Id="StartMenuLink"
-                  Name="Beautiful Potato Launcher"
-                  Description="Connect to the A Beautiful Potato DayZ servers"
-                  Target="[INSTALLFOLDER]BeautifulPotatoLauncher.exe"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Icon="PotatoIcon" />
-        <RemoveFolder Id="RemoveStartMenuFolder" Directory="AppShortcutFolder" On="uninstall" />
+                  Name="A Beautiful Potato Launcher"
+                  Description="Browse and join the A Beautiful Potato DayZ servers"
+                  Target="[INSTALLFOLDER]BeautifulPotatoExpLauncher.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
         <RegistryValue Root="HKCU"
-                       Key="Software\A Beautiful Potato\Launcher"
+                       Key="Software\A Beautiful Potato\Experimental Launcher"
                        Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
       <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="*">
         <Shortcut Id="DesktopLink"
-                  Name="Beautiful Potato Launcher"
-                  Description="Connect to the A Beautiful Potato DayZ servers"
-                  Target="[INSTALLFOLDER]BeautifulPotatoLauncher.exe"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Icon="PotatoIcon" />
+                  Name="A Beautiful Potato Launcher"
+                  Description="Browse and join the A Beautiful Potato DayZ servers"
+                  Target="[INSTALLFOLDER]BeautifulPotatoExpLauncher.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU"
-                       Key="Software\A Beautiful Potato\Launcher"
+                       Key="Software\A Beautiful Potato\Experimental Launcher"
                        Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
