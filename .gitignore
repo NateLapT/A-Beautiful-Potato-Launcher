@@ -1,0 +1,5 @@
+# Ignore a specific folder
+assets/
+
+# Example for nested folders
+# path/to/my_folder/
