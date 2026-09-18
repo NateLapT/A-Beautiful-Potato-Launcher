@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "mhZVNp6v2AA=",
+  "dgSpecHash": "OvkMicX7JR4=",
   "success": true,
-  "projectFilePath": "p:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
+  "projectFilePath": "P:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\digit\\.nuget\\packages\\microsoft.netframework.referenceassemblies\\1.0.3\\microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
     "C:\\Users\\digit\\.nuget\\packages\\microsoft.netframework.referenceassemblies.net48\\1.0.3\\microsoft.netframework.referenceassemblies.net48.1.0.3.nupkg.sha512"

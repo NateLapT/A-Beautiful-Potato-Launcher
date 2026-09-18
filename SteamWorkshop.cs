@@ -33,8 +33,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace BeautifulPotatoExpLauncher
 {
@@ -45,11 +47,41 @@ namespace BeautifulPotatoExpLauncher
 
         public Mod(string name, ulong workshopId)
         {
-            Name = name;
+            Name = SanitizeName(name, workshopId);
             WorkshopId = workshopId;
         }
 
-        public override string ToString() { return Name; }
+        private static string SanitizeName(string name, ulong workshopId)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return "Workshop item " + workshopId;
+
+            var sb = new StringBuilder();
+            foreach (char ch in name)
+            {
+                if (char.IsControl(ch) || char.IsSurrogate(ch)) continue;
+                if (ch >= 0xE000 && ch <= 0xF8FF) continue;
+                if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) ||
+                    char.IsPunctuation(ch) || char.IsSymbol(ch))
+                    sb.Append(ch);
+            }
+
+            string clean = sb.ToString().Trim();
+            return clean.Length > 0 ? clean : "Workshop item " + workshopId;
+        }
+
+        public string DisplayName
+        {
+            get
+            {
+                string title = SteamWorkshop.WorkshopTitle(WorkshopId);
+                if (!string.IsNullOrWhiteSpace(title)) return title;
+                if (!string.IsNullOrWhiteSpace(Name)) return Name;
+                return "Workshop item " + WorkshopId;
+            }
+        }
+
+        public override string ToString() { return DisplayName; }
     }
 
     [Flags]
@@ -484,6 +516,80 @@ namespace BeautifulPotatoExpLauncher
 
         private static readonly DateTime UnixEpoch =
             new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        private static readonly Dictionary<ulong, string> _workshopTitles =
+            new Dictionary<ulong, string>();
+
+        /// <summary>
+        /// The workshop item's public title, when Steam can resolve it.
+        /// Some servers publish arbitrary folder names, so this is a safer label
+        /// than the raw A2S mod name, while still falling back to the server's
+        /// own text when Steam is offline or the item is unavailable.
+        /// </summary>
+        public static string WorkshopTitle(ulong id)
+        {
+            if (id == 0) return "";
+
+            lock (_workshopTitles)
+            {
+                string cached;
+                if (_workshopTitles.TryGetValue(id, out cached)) return cached;
+            }
+
+            string title = "";
+            try
+            {
+                using (var client = new WebClient())
+                {
+                    client.Headers[HttpRequestHeader.UserAgent] =
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+                    string html = client.DownloadString(
+                        "https://steamcommunity.com/sharedfiles/filedetails/?id=" + id + "&l=english");
+                    title = ParseWorkshopTitle(html);
+                }
+            }
+            catch { }
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                lock (_workshopTitles)
+                {
+                    if (!_workshopTitles.ContainsKey(id)) _workshopTitles[id] = title;
+                }
+            }
+
+            return title;
+        }
+
+        private static string ParseWorkshopTitle(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return "";
+
+            foreach (Match match in Regex.Matches(html,
+                      "<meta\\s+(?:property|name)\\s*=\\s*\"(?:og:title|twitter:title)\"\\s+content=\"([^\"]+)\"",
+                      RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                string title = WebUtility.HtmlDecode(match.Groups[1].Value).Trim();
+                if (!string.IsNullOrWhiteSpace(title) &&
+                    !title.Contains("Steam Community") &&
+                    !title.Contains("Error"))
+                    return title;
+            }
+
+            Match plainTitle = Regex.Match(html, "<title>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (plainTitle.Success)
+            {
+                string title = WebUtility.HtmlDecode(plainTitle.Groups[1].Value).Trim();
+                if (!string.IsNullOrWhiteSpace(title) &&
+                    !title.Contains("Steam Community") &&
+                    !title.Contains("Error"))
+                    return title;
+            }
+
+            return "";
+        }
 
         /// <summary>
         /// When Steam says this item was last updated, or DateTime.MinValue when

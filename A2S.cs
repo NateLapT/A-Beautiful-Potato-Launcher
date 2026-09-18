@@ -365,31 +365,37 @@ namespace BeautifulPotatoExpLauncher
             var result = new ServerRules();
             if (blob == null || blob.Length < 12) return result;
 
-            // Find where the records start. The header length varies, so it is
-            // discovered - but it is always short, and that bound is what keeps
-            // the description at the END of the blob from being read as a mod on
-            // a server that has none.
-            int first = -1;
+            // The first plausible record is not authoritative: in some blobs the
+            // header or description contains random text that happens to look like
+            // a valid mod name. Only a candidate that can parse all the way to the
+            // real list end is accepted.
             int limit = Math.Min(blob.Length, MaxHeaderScan);
             for (int i = 1; i < limit; i++)
             {
                 ulong id; string name; int next;
-                if (TryRecord(blob, i, out id, out name, out next)) { first = i; break; }
-            }
-            if (first < 0)
-            {
-                // No records anywhere in the header window: this server really
-                // has no mods, and that is a complete answer, not a failure.
-                result.Complete = true;
-                return result;
+                if (!TryRecord(blob, i, out id, out name, out next)) continue;
+
+                var candidate = TryParseFrom(blob, i);
+                if (candidate != null && candidate.Complete)
+                    return candidate;
             }
 
-            int at = first;
+            // No records anywhere in the header region: this server really has no
+            // mods, and that is a complete answer, not a failure.
+            result.Complete = true;
+            return result;
+        }
+
+        private static ServerRules TryParseFrom(byte[] blob, int start)
+        {
+            var result = new ServerRules();
+            int at = start;
+
             while (at < blob.Length)
             {
                 if (result.Mods.Count > 0 && TailFits(blob, at))
                 {
-                    ReadTail(blob, at, result);        // proven end of the list
+                    ReadTail(blob, at, result);
                     result.Complete = true;
                     return result;
                 }
@@ -399,14 +405,13 @@ namespace BeautifulPotatoExpLauncher
                 {
                     result.Mods.Add(new Mod(name, id));
                     at = next;
+                    continue;
                 }
-                else
-                {
-                    at++;                              // resynchronise
-                }
+
+                return null;
             }
 
-            return result;
+            return result.Mods.Count > 0 ? result : null;
         }
 
         /// <summary>How far in the mod records may start; see ParseBlob.</summary>
@@ -432,8 +437,31 @@ namespace BeautifulPotatoExpLauncher
             try { name = Encoding.UTF8.GetString(b, i + 10, len); }
             catch { return false; }
 
+            if (!LooksLikeModName(name)) return false;
+
             next = i + 10 + len;
             return true;
+        }
+
+        private static bool LooksLikeModName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+
+            int seen = 0;
+            foreach (char ch in name)
+            {
+                if (char.IsControl(ch) || char.IsSurrogate(ch)) return false;
+                if (ch >= 0xE000 && ch <= 0xF8FF) return false;
+                if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) ||
+                    char.IsPunctuation(ch) || char.IsSymbol(ch))
+                {
+                    seen++;
+                    continue;
+                }
+                return false;
+            }
+
+            return seen > 0;
         }
 
         /// <summary>

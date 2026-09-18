@@ -2556,9 +2556,10 @@ namespace BeautifulPotatoExpLauncher
             }
             else              { status = "installed";                              colour = Good; }
 
+            string name = m.DisplayName;
             var it = new ListViewItem(new[]
             {
-                m.Name, m.WorkshopId.ToString(), status, "Repair", "Sub", "Remove", "Info"
+                name, m.WorkshopId.ToString(), status, "Repair", "Sub", "Remove", "Info"
             })
             {
                 Tag = m,
@@ -2614,25 +2615,25 @@ namespace BeautifulPotatoExpLauncher
                 // otherwise ask Steam to download an item it does not own.
                 SteamWorkshop.Subscribe(mod.WorkshopId);
                 SteamWorkshop.ForceDownload(mod.WorkshopId);
-                Log("Repairing " + mod.Name + " (" + mod.WorkshopId + ") - Steam is re-downloading it.");
+                Log("Repairing " + mod.DisplayName + " (" + mod.WorkshopId + ") - Steam is re-downloading it.");
                 hit.Item.SubItems[MColStatus].Text = "repairing...";
             }
             else if (col == MColSub)
             {
                 SteamWorkshop.Subscribe(mod.WorkshopId);
-                Log("Subscribed to " + mod.Name + " (" + mod.WorkshopId + ").");
+                Log("Subscribed to " + mod.DisplayName + " (" + mod.WorkshopId + ").");
                 hit.Item.SubItems[MColStatus].Text = "subscribing...";
             }
             else
             {
                 if (MessageBox.Show(
-                        "Unsubscribe from " + mod.Name + "?\r\n\r\nSteam will delete it from disk. " +
+                        "Unsubscribe from " + mod.DisplayName + "?\r\n\r\nSteam will delete it from disk. " +
                         "Any server that requires it will need it downloaded again.",
                         "Remove mod", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                     return;
 
                 SteamWorkshop.Unsubscribe(mod.WorkshopId);
-                Log("Unsubscribed from " + mod.Name + " (" + mod.WorkshopId + ").");
+                Log("Unsubscribed from " + mod.DisplayName + " (" + mod.WorkshopId + ").");
                 hit.Item.SubItems[MColStatus].Text = "removing...";
             }
 
@@ -2917,7 +2918,7 @@ namespace BeautifulPotatoExpLauncher
                 Log(string.Format("  {0} {1,-12} {2}",
                     broken ? "[BROKEN]  " : !have ? "[MISSING] " : stale ? "[OUTDATED]"
                            : inFlight ? "[UPDATING]" : "[ok]      ",
-                    m.WorkshopId, m.Name));
+                    m.WorkshopId, m.DisplayName));
 
                 if (broken)
                 {

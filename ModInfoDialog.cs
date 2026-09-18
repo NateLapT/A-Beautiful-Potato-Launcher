@@ -40,7 +40,7 @@ namespace BeautifulPotatoExpLauncher
 
                 f.Controls.Add(new Label
                 {
-                    Text = mod.Name,
+                    Text = mod.DisplayName,
                     Bounds = new Rectangle(16, 14, 528, 26),
                     Font = new Font("Segoe UI", 13f, FontStyle.Bold),
                     ForeColor = Color.White,

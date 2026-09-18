@@ -190,7 +190,7 @@ namespace BeautifulPotatoExpLauncher
 
             foreach (var m in _wanted)
             {
-                var row = new ListViewItem(new[] { m.Name, m.WorkshopId.ToString(), "waiting", "", "", "" })
+                var row = new ListViewItem(new[] { m.DisplayName, m.WorkshopId.ToString(), "waiting", "", "", "" })
                 { UseItemStyleForSubItems = false, ForeColor = Dim };
                 row.SubItems[ColId].ForeColor = Color.FromArgb(120, 150, 190);
                 _list.Items.Add(row);
