@@ -9,6 +9,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>BeautifulPotatoExpLauncher</AssemblyName>
     <RootNamespace>BeautifulPotatoExpLauncher</RootNamespace>
+    <ApplicationIcon>assets\potato.ico</ApplicationIcon>
     <Product>A Beautiful Potato Launcher</Product>
     <AssemblyTitle>A Beautiful Potato Launcher</AssemblyTitle>
     <Company>A Beautiful Potato</Company>
@@ -22,8 +23,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Assets are optional for this workspace build; the runtime launcher still
-         works without these local branding resources present. -->
+    <EmbeddedResource Include="assets\logo_title.png"  LogicalName="logo_title.png" />
+    <EmbeddedResource Include="assets\logo_potato.png" LogicalName="logo_potato.png" />
+    <EmbeddedResource Include="assets\DayZLogo.png"    LogicalName="dayz_logo.png" />
   </ItemGroup>
 
 </Project>

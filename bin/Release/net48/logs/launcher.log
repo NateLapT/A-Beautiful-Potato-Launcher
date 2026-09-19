@@ -1,0 +1,32 @@
+[11:32:42] Launcher started
+[11:32:42] Showing 358 remembered community servers from 11:18 while Steam is asked for the current list.
+[11:32:42] Steam API: connected (ISteamUGC v017).
+[11:32:42] Server browser: connected to Steam.
+[11:32:42] Query: Internet, app 1024020, no filters
+[11:32:50] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
+[11:32:50] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name="PotatoLauncher" "-mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools" -connect=104.218.48.62 -port=4902
+[11:32:50] SteamAppId for game process: 1024020 (Experimental)
+[11:32:50] Game process started under AppID 1024020.
+[11:32:52] Master list cached: 362 servers. Searching now filters this list instantly.
+[11:47:37] Showing 8316 remembered community servers from 10:31 while Steam is asked for the current list.
+[11:47:37] Query: Internet, app 221100, no filters
+[11:47:40] Showing 8336 remembered community servers from 11:47 while Steam is asked for the current list.
+[11:47:40] Query: Internet, app 221100, name_match=*Day*
+[11:47:42] Showing 8336 remembered community servers from 11:47 while Steam is asked for the current list.
+[11:47:42] Query: Internet, app 221100, name_match=*DayOne*
+[11:47:54]   stable: 461 servers. Now asking for Experimental...
+[11:47:58] Master list cached: 8376 servers. Searching now filters this list instantly.
+[11:48:02] Showing 8376 remembered community servers from 11:47 while Steam is asked for the current list.
+[11:48:02] Query: Internet, app 221100, name_match=*karma*
+[11:48:06] Showing 8376 remembered community servers from 11:48 while Steam is asked for the current list.
+[11:48:06] Query: Internet, app 221100, name_match=*karmakrew*
+[11:48:11]   stable: 0 servers. Now asking for Experimental...
+[11:48:16] Master list cached: 8376 servers. Searching now filters this list instantly.
+[11:48:32] Showing 8376 remembered community servers from 11:48 while Steam is asked for the current list.
+[11:48:32] Query: Internet, app 221100, name_match=*struggle*
+[11:48:38]   stable: 0 servers. Now asking for Experimental...
+[11:48:41] Master list cached: 8376 servers. Searching now filters this list instantly.
+[11:49:00] Showing 13 remembered recent servers from 17:44 while Steam is asked for the current list.
+[11:49:01] Query: Recent, app 221100, no filters
+[11:49:02]   stable: 3 servers. Now asking for Experimental...
+[11:49:03] Master list cached: 13 servers. Searching now filters this list instantly.

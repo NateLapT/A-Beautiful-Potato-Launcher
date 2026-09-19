@@ -74,17 +74,32 @@ namespace BeautifulPotatoExpLauncher
                 return "Workshop item " + workshopId;
 
             var sb = new StringBuilder();
+            bool sawLetterOrDigit = false;
             foreach (char ch in name)
             {
                 if (char.IsControl(ch) || char.IsSurrogate(ch)) continue;
                 if (ch >= 0xE000 && ch <= 0xF8FF) continue;
-                if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) ||
-                    char.IsPunctuation(ch) || char.IsSymbol(ch))
+                if (char.IsLetterOrDigit(ch))
+                {
                     sb.Append(ch);
+                    sawLetterOrDigit = true;
+                    continue;
+                }
+
+                // Accept valid punctuation and spaces, but reject names that are
+                // only punctuation or placeholder noise such as "???".
+                if (char.IsWhiteSpace(ch) || char.IsPunctuation(ch) || char.IsSymbol(ch))
+                {
+                    sb.Append(ch);
+                    continue;
+                }
             }
 
             string clean = sb.ToString().Trim();
-            return clean.Length > 0 ? clean : "Workshop item " + workshopId;
+            if (!string.IsNullOrWhiteSpace(clean) && sawLetterOrDigit)
+                return clean;
+
+            return "Workshop item " + workshopId;
         }
 
         public string DisplayName
@@ -198,6 +213,57 @@ namespace BeautifulPotatoExpLauncher
             }
 
             return Path.Combine(WorkshopRoot(steamPath), id.ToString());
+        }
+
+        public static string DayZWorkshopAliasPath(string steamPath, ulong id, string preferredName = null)
+        {
+            if (string.IsNullOrEmpty(steamPath)) return null;
+
+            string gameRoot = Path.Combine(steamPath, "steamapps", "common", "DayZ");
+            if (!Directory.Exists(gameRoot)) return ItemPath(steamPath, id);
+
+            string aliasRoot = Path.Combine(gameRoot, "!Workshop");
+            Directory.CreateDirectory(aliasRoot);
+
+            foreach (var dir in Directory.EnumerateDirectories(aliasRoot, "@*", SearchOption.TopDirectoryOnly))
+            {
+                if (MatchesPublishedId(dir, id)) return dir;
+            }
+
+            string target = ItemPath(steamPath, id);
+            if (!Directory.Exists(target)) return null;
+
+            string aliasName = preferredName;
+            if (string.IsNullOrWhiteSpace(aliasName) || aliasName.StartsWith("Workshop item ", StringComparison.OrdinalIgnoreCase))
+                aliasName = WorkshopTitle(id);
+            if (string.IsNullOrWhiteSpace(aliasName)) aliasName = id.ToString();
+
+            string safe = string.Concat(aliasName
+                .Trim()
+                .Replace("@", "")
+                .Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? ' ' : ch))
+                .Trim();
+            safe = Regex.Replace(safe, @"\s+", " ");
+            if (string.IsNullOrWhiteSpace(safe)) safe = id.ToString();
+
+            string alias = Path.Combine(aliasRoot, "@" + safe.Trim());
+            if (!Directory.Exists(alias))
+            {
+                string existing = Directory.EnumerateDirectories(aliasRoot, "@*", SearchOption.TopDirectoryOnly)
+                    .FirstOrDefault(d =>
+                    {
+                        string cleaned = Path.GetFileName(d).TrimStart('@');
+                        string normalized = Regex.Replace(cleaned, @"\s+", " ").Trim();
+                        string wanted = Regex.Replace(safe, @"\s+", " ").Trim();
+                        return string.Equals(normalized, wanted, StringComparison.OrdinalIgnoreCase);
+                    });
+                if (!string.IsNullOrEmpty(existing)) alias = existing;
+            }
+
+            if (!Directory.Exists(alias) && !Junction.TryCreate(alias, target))
+                return target;
+
+            return alias;
         }
 
         public static void CorrectInstalledIds(string steamPath, IEnumerable<Mod> mods)

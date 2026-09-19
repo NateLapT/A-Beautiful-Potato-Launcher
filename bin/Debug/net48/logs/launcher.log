@@ -1,0 +1,84 @@
+[10:29:45] Launcher started
+[10:29:45] Showing 326 remembered community servers from 10:17 while Steam is asked for the current list.
+[10:29:45] Steam API: connected (ISteamUGC v017).
+[10:29:45] Server browser: connected to Steam.
+[10:29:45] Query: Internet, app 1024020, no filters
+[10:29:55] Master list cached: 335 servers. Searching now filters this list instantly.
+[10:30:24] Showing 6736 remembered community servers from 22:45 while Steam is asked for the current list.
+[10:30:24] Query: Internet, app 221100, no filters
+[10:30:35] Master list cached: 6962 servers. Searching now filters this list instantly.
+[10:30:58] Showing 335 remembered community servers from 10:29 while Steam is asked for the current list.
+[10:30:58] Query: Internet, app 1024020, no filters
+[10:30:58] Showing 8273 remembered community servers from 09:21 while Steam is asked for the current list.
+[10:30:58] Query: Internet, app 221100, no filters
+[10:31:07]   stable: 4998 servers. Now asking for Experimental...
+[10:31:16] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -connect=104.218.48.62 -port=4902 -name="PotatoLauncher"
+[10:31:17] Master list cached: 8316 servers. Searching now filters this list instantly.
+[10:42:56] Launcher started
+[10:42:56] Showing 8316 remembered community servers from 10:31 while Steam is asked for the current list.
+[10:42:57] Steam API: connected (ISteamUGC v017).
+[10:42:57] Server browser: connected to Steam.
+[10:42:57] Query: Internet, app 221100, no filters
+[10:43:00] Showing 335 remembered community servers from 10:29 while Steam is asked for the current list.
+[10:43:00] Query: Internet, app 1024020, no filters
+[10:43:07] Final launch mod list: c:/program files (x86)/steam\steamapps\workshop\content\221100\3803129582; c:/program files (x86)/steam\steamapps\workshop\content\221100\3800710051; c:/program files (x86)/steam\steamapps\workshop\content\221100\1564026768; c:/program files (x86)/steam\steamapps\workshop\content\221100\1625463737
+[10:43:07] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name="PotatoLauncher" -mod="c:/program files (x86)/steam\steamapps\workshop\content\221100\3803129582;c:/program files (x86)/steam\steamapps\workshop\content\221100\3800710051;c:/program files (x86)/steam\steamapps\workshop\content\221100\1564026768;c:/program files (x86)/steam\steamapps\workshop\content\221100\1625463737" -connect=104.218.48.62 -port=4902
+[10:43:10] Master list cached: 337 servers. Searching now filters this list instantly.
+[10:48:49] Launcher started
+[10:48:49] Showing 337 remembered community servers from 10:43 while Steam is asked for the current list.
+[10:48:49] Steam API: connected (ISteamUGC v017).
+[10:48:49] Server browser: connected to Steam.
+[10:48:49] Query: Internet, app 1024020, no filters
+[10:48:55] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test
+[10:48:55] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name="PotatoLauncher" -mod="c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test" -connect=104.218.48.62 -port=4902
+[10:48:59] Master list cached: 339 servers. Searching now filters this list instantly.
+[10:52:31] Launcher started
+[10:52:31] Showing 339 remembered community servers from 10:48 while Steam is asked for the current list.
+[10:52:31] Steam API: connected (ISteamUGC v017).
+[10:52:31] Server browser: connected to Steam.
+[10:52:31] Query: Internet, app 1024020, no filters
+[10:52:36] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test
+[10:52:36] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name="PotatoLauncher" -mod="c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test" -connect=104.218.48.62:4902:4903
+[10:52:41] Master list cached: 344 servers. Searching now filters this list instantly.
+[10:55:41] Launcher started
+[10:55:41] Showing 344 remembered community servers from 10:52 while Steam is asked for the current list.
+[10:55:42] Steam API: connected (ISteamUGC v017).
+[10:55:42] Server browser: connected to Steam.
+[10:55:42] Query: Internet, app 1024020, no filters
+[10:55:50] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test
+[10:55:50] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name="PotatoLauncher" -mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test -connect=104.218.48.62:4902:4903
+[10:55:51] Master list cached: 344 servers. Searching now filters this list instantly.
+[10:59:34] Launcher started
+[10:59:34] Showing 344 remembered community servers from 10:55 while Steam is asked for the current list.
+[10:59:34] Steam API: connected (ISteamUGC v017).
+[10:59:34] Server browser: connected to Steam.
+[10:59:34] Query: Internet, app 1024020, no filters
+[10:59:39] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test
+[10:59:39] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher -mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test -connect=104.218.48.62:4902:4903
+[10:59:44] Master list cached: 346 servers. Searching now filters this list instantly.
+[11:08:12] Launcher started
+[11:08:12] Showing 347 remembered community servers from 11:02 while Steam is asked for the current list.
+[11:08:12] Steam API: connected (ISteamUGC v017).
+[11:08:12] Server browser: connected to Steam.
+[11:08:12] Query: Internet, app 1024020, no filters
+[11:08:18] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
+[11:08:18] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher -mod="c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools" -connect=104.218.48.62:4902:4903
+[11:08:22] Master list cached: 353 servers. Searching now filters this list instantly.
+[11:10:46] Launcher started
+[11:10:47] Showing 353 remembered community servers from 11:08 while Steam is asked for the current list.
+[11:10:47] Steam API: connected (ISteamUGC v017).
+[11:10:47] Server browser: connected to Steam.
+[11:10:47] Query: Internet, app 1024020, no filters
+[11:10:53] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
+[11:10:53] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher -mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools -connect=104.218.48.62:4902:4903
+[11:10:56] Master list cached: 353 servers. Searching now filters this list instantly.
+[11:18:24] Launcher started
+[11:18:24] Showing 353 remembered community servers from 11:10 while Steam is asked for the current list.
+[11:18:24] Steam API: connected (ISteamUGC v017).
+[11:18:24] Server browser: connected to Steam.
+[11:18:24] Query: Internet, app 1024020, no filters
+[11:18:29] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
+[11:18:29] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher "-mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools" -connect=104.218.48.62:4902:4903
+[11:18:34] Master list cached: 358 servers. Searching now filters this list instantly.
+[11:19:38] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
+[11:19:38] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher "-mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools" -connect=104.218.48.62:4902:4903

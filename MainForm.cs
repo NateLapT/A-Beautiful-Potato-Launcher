@@ -40,6 +40,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -48,9 +49,22 @@ namespace BeautifulPotatoExpLauncher
 {
     internal static class Program
     {
+        internal static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+        internal static readonly string LogFile = Path.Combine(LogDirectory, "launcher.log");
+
         [STAThread]
         private static void Main()
         {
+            try { Directory.CreateDirectory(LogDirectory); }
+            catch { }
+
+            try
+            {
+                File.AppendAllText(LogFile,
+                    "[" + DateTime.Now.ToString("HH:mm:ss") + "] Launcher started" + Environment.NewLine);
+            }
+            catch { }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
@@ -572,7 +586,7 @@ namespace BeautifulPotatoExpLauncher
 
             _searchClear = new Label
             {
-                Text = "Ã¢Å“â€¢",
+                Text = "✕",
                 Bounds = new Rectangle(0, 6, 18, 19),
                 ForeColor = Color.FromArgb(150, 150, 158),
                 BackColor = Panel2,
@@ -616,7 +630,8 @@ namespace BeautifulPotatoExpLauncher
 
             EventHandler layoutSearch = (s, e) =>
             {
-                int w = Math.Max(60, searchArea.ClientSize.Width - 20);
+                const int MaxSearchWidth = 420;
+                int w = Math.Min(Math.Max(60, searchArea.ClientSize.Width - 20), MaxSearchWidth);
                 _search.Bounds = new Rectangle(10, 4, w, 23);
                 _searchHint.Bounds = new Rectangle(11, 5, w - 2, 21);
                 _searchClear.Bounds = new Rectangle(10 + w - 22, 6, 18, 19);
@@ -2104,56 +2119,20 @@ namespace BeautifulPotatoExpLauncher
 
         private void OnDirectConnect(object sender, EventArgs e)
         {
-            string input = PromptInput("Enter IP:Port or Hostname:", "Direct Connect");
-            if (string.IsNullOrWhiteSpace(input)) return;
-            input = input.Trim();
-            int c = input.LastIndexOf(':');
-            string host = c > 0 ? input.Substring(0, c) : input;
-            int port = 2302;
-            if (c > 0) int.TryParse(input.Substring(c + 1), out port);
+            string host;
+            int port;
+            bool save;
+            if (!DirectConnectDialog.Show(this, out host, out port, out save)) return;
 
             var r = new Row { Host = host, Port = port, Name = host + ":" + port };
-            LaunchGame(r);
-        }
-
-        private static string PromptInput(string prompt, string title)
-        {
-            using (var input = new TextBox
+            if (save)
             {
-                BorderStyle = BorderStyle.FixedSingle,
-                Width = 220,
-                Text = ""
-            })
-            {
-                var dlg = new Form
-                {
-                    Text = title,
-                    Width = 300,
-                    Height = 160,
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    StartPosition = FormStartPosition.CenterParent,
-                    ShowInTaskbar = false,
-                    MinimizeBox = false,
-                    MaximizeBox = false
-                };
-                var lbl = new Label
-                {
-                    Text = prompt,
-                    AutoSize = true,
-                    Location = new Point(12, 16)
-                };
-                input.Location = new Point(12, 40);
-                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(120, 76), Width = 70 };
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(200, 76), Width = 70 };
-                dlg.Controls.Add(lbl);
-                dlg.Controls.Add(input);
-                dlg.Controls.Add(ok);
-                dlg.Controls.Add(cancel);
-                dlg.AcceptButton = ok;
-                dlg.CancelButton = cancel;
-                if (dlg.ShowDialog() == DialogResult.OK) return input.Text;
-                return "";
+                _favourites.Add(r.Endpoint);
+                ServerStore.RememberName(r.Endpoint, r.Name);
+                ServerStore.SaveFavourites(_favourites);
+                Log("Saved " + r.Endpoint + " to Favourites.");
             }
+            LaunchGame(r);
         }
 
         private void LaunchGame(Row row)
@@ -2169,11 +2148,44 @@ namespace BeautifulPotatoExpLauncher
                 return;
             }
 
-            uint appId = row.AppId != 0 ? (uint)row.AppId : (uint)A2S.StableAppId;
+            ulong appId = row.AppId;
+            if (appId != A2S.StableAppId && appId != A2S.ExperimentalAppId)
+            {
+                int queryPort = row.EffectiveQueryPort > 0 ? row.EffectiveQueryPort : A2S.QueryPort(row.Port);
+                try
+                {
+                    Log("Querying server on port " + queryPort + " for AppID...");
+                    var live = A2S.GetInfoAt(row.Host, queryPort, 2000);
+                    if (live != null && (live.AppId == A2S.StableAppId || live.AppId == A2S.ExperimentalAppId))
+                    {
+                        appId = live.AppId;
+                        row.AppId = appId;
+                    }
+                }
+                catch { }
+
+                if (appId != A2S.StableAppId && appId != A2S.ExperimentalAppId)
+                {
+                    appId = (EffectiveBrowseMode == "exp") ? A2S.ExperimentalAppId : A2S.StableAppId;
+                }
+            }
+
             string gameDir = FindGameDir(steam, appId);
+            if (string.IsNullOrEmpty(gameDir) && row.AppId != A2S.StableAppId && row.AppId != A2S.ExperimentalAppId)
+            {
+                ulong fallbackId = (appId == A2S.StableAppId) ? A2S.ExperimentalAppId : A2S.StableAppId;
+                string fallbackDir = FindGameDir(steam, fallbackId);
+                if (!string.IsNullOrEmpty(fallbackDir))
+                {
+                    appId = fallbackId;
+                    gameDir = fallbackDir;
+                }
+            }
+
             if (string.IsNullOrEmpty(gameDir))
             {
-                MessageBox.Show("DayZ directory not found for AppID " + appId + ".", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                string gameName = (appId == A2S.ExperimentalAppId) ? "DayZ Experimental" : "DayZ";
+                MessageBox.Show(gameName + " directory not found for AppID " + appId + ".\nPlease ensure the game is installed in Steam.", "Game Not Found", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
@@ -2184,24 +2196,139 @@ namespace BeautifulPotatoExpLauncher
                 return;
             }
 
-            string args = string.Format("{0} -connect={1} -port={2}", BeArgs, row.Host, row.Port);
-            if (!string.IsNullOrEmpty(playerName)) args += " -name=\"" + playerName + "\"";
-
-            Log("Launching: " + bePath + " " + args);
             try
             {
-                Process.Start(new ProcessStartInfo
+                string txtPath = Path.Combine(gameDir, "steam_appid.txt");
+                if (!File.Exists(txtPath) || File.ReadAllText(txtPath).Trim() != appId.ToString())
                 {
-                    FileName = bePath,
-                    Arguments = args,
-                    WorkingDirectory = gameDir,
-                    UseShellExecute = true
-                });
+                    File.WriteAllText(txtPath, appId.ToString());
+                }
+            }
+            catch { }
+
+            var launchMods = BuildLaunchModList(row, steam);
+            string args = BeArgs + " -exe " + GameExe;
+            if (!string.IsNullOrEmpty(playerName)) args += " -name=\"" + playerName + "\"";
+
+            if (launchMods != null && launchMods.Count > 0)
+            {
+                launchMods = OrderLaunchMods(launchMods);
+                string modArg = "\"-mod=" + string.Join(";", launchMods) + "\"";
+                args += " " + modArg;
+                Log("Final launch mod list: " + string.Join("; ", launchMods));
+            }
+            else
+            {
+                Log("Final launch mod list: <none>");
+            }
+
+            args += " -connect=" + row.Host + " -port=" + row.Port;
+            Log("Launching: " + bePath + " " + args);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = bePath,
+                Arguments = args,
+                WorkingDirectory = gameDir,
+                UseShellExecute = false
+            };
+
+            // THE GAME MUST START UNDER ITS OWN APP ID, NOT THE LAUNCHER'S.
+            // Stable = 221100, Experimental = 1024020.
+            // Because this launcher initialises SteamWorkshop under 221100, SteamAppId=221100
+            // is set in the launcher's environment. Without setting it here, child processes
+            // inherit 221100, causing DayZ Experimental to fail auth tickets against Experimental servers.
+            psi.EnvironmentVariables["SteamAppId"] = appId.ToString();
+            psi.EnvironmentVariables["SteamGameId"] = appId.ToString();
+
+            // Also keep launcher process environment in sync
+            Environment.SetEnvironmentVariable("SteamAppId", appId.ToString());
+            Environment.SetEnvironmentVariable("SteamGameId", appId.ToString());
+
+            Log("SteamAppId for game process: " + appId + " (" + (appId == A2S.ExperimentalAppId ? "Experimental" : "Stable") + ")");
+
+            try
+            {
+                Process.Start(psi);
+                Log("Game process started under AppID " + appId + ".");
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Failed to start game:\n" + ex.Message, "Launch Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private List<string> BuildLaunchModList(Row row, string steam)
+        {
+            if (string.IsNullOrEmpty(steam) || row == null) return null;
+
+            try
+            {
+                var ports = new List<int>();
+                if (row.QueryPort > 0 && row.QueryPort < 65535) ports.Add(row.QueryPort);
+                int effective = row.EffectiveQueryPort;
+                if (!ports.Contains(effective)) ports.Add(effective);
+                int fallback = A2S.QueryPort(row.Port);
+                if (!ports.Contains(fallback)) ports.Add(fallback);
+
+                ServerRules rules = null;
+                foreach (int port in ports)
+                {
+                    var candidate = A2S.GetRulesAt(row.Host, port);
+                    if (candidate != null && candidate.Mods.Count > 0)
+                    {
+                        rules = candidate;
+                        break;
+                    }
+                    if (rules == null) rules = candidate;
+                }
+
+                if (rules == null || rules.Mods == null || rules.Mods.Count == 0)
+                    return null;
+
+                SteamWorkshop.CorrectInstalledIds(steam, rules.Mods);
+                var results = new List<string>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var mod in rules.Mods.Where(m => m != null))
+                {
+                    if (mod.WorkshopId == 0) continue;
+                    string dir = SteamWorkshop.DayZWorkshopAliasPath(steam, mod.WorkshopId, mod.Name);
+                    if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+                    if (seen.Add(dir)) results.Add(dir);
+                }
+
+                return OrderLaunchMods(results);
+            }
+            catch (Exception ex)
+            {
+                Log("Could not build launch mod list for " + row.Endpoint + ": " + ex.Message);
+                return null;
+            }
+        }
+
+        private static List<string> OrderLaunchMods(IEnumerable<string> mods)
+        {
+            var ordered = (mods ?? Enumerable.Empty<string>()).ToList();
+            if (ordered.Count < 2) return ordered;
+
+            int cfIndex = -1;
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                string name = Path.GetFileName(ordered[i]).TrimStart('@');
+                if (name.StartsWith("CF", StringComparison.OrdinalIgnoreCase) ||
+                    name.IndexOf("Community Framework", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    cfIndex = i;
+                    break;
+                }
+            }
+
+            if (cfIndex <= 0) return ordered;
+
+            string cfPath = ordered[cfIndex];
+            ordered.RemoveAt(cfIndex);
+            ordered.Insert(0, cfPath);
+            return ordered;
         }
 
         // ------------------------------------------------ favourites & mods ----
@@ -2554,12 +2681,20 @@ namespace BeautifulPotatoExpLauncher
             catch { }
         }
 
-        private static Image LoadImage(string name)
+        private static Image LoadImage(string resourceName)
         {
             try
             {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", name);
-                if (File.Exists(path)) return Image.FromFile(path);
+                using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
+                {
+                    if (s == null) return null;
+                    using (var ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        ms.Position = 0;
+                        return Image.FromStream(ms);
+                    }
+                }
             }
             catch { }
             return null;
@@ -2572,7 +2707,16 @@ namespace BeautifulPotatoExpLauncher
                 BeginInvoke((Action)(() => Log(msg)));
                 return;
             }
-            _log.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + msg + Environment.NewLine);
+
+            string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + msg;
+            try
+            {
+                Directory.CreateDirectory(Program.LogDirectory);
+                File.AppendAllText(Program.LogFile, line + Environment.NewLine);
+            }
+            catch { }
+
+            _log.AppendText(line + Environment.NewLine);
         }
 
         private void RestoreWindow()
@@ -2610,12 +2754,39 @@ namespace BeautifulPotatoExpLauncher
             if (string.IsNullOrEmpty(steamPath)) return null;
 
             string[] folders = appId == A2S.ExperimentalAppId ? ExpFolders : StableFolders;
-            string defaultCommon = Path.Combine(steamPath, "steamapps", "common");
+            var searchRoots = new List<string>();
 
-            foreach (var folder in folders)
+            string defaultCommon = Path.Combine(steamPath, "steamapps", "common");
+            if (Directory.Exists(defaultCommon)) searchRoots.Add(defaultCommon);
+
+            try
             {
-                string candidate = Path.Combine(defaultCommon, folder);
-                if (Directory.Exists(candidate)) return candidate;
+                string vdf = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
+                if (File.Exists(vdf))
+                {
+                    string text = File.ReadAllText(vdf);
+                    foreach (Match m in Regex.Matches(text, @"""path""\s+""([^""]+)"""))
+                    {
+                        string p = m.Groups[1].Value.Replace(@"\\", @"\");
+                        string common = Path.Combine(p, "steamapps", "common");
+                        if (Directory.Exists(common) && !searchRoots.Contains(common, StringComparer.OrdinalIgnoreCase))
+                            searchRoots.Add(common);
+                    }
+                }
+            }
+            catch { }
+
+            foreach (var root in searchRoots)
+            {
+                foreach (var folder in folders)
+                {
+                    string candidate = Path.Combine(root, folder);
+                    if (Directory.Exists(candidate) &&
+                        (File.Exists(Path.Combine(candidate, GameExe)) || File.Exists(Path.Combine(candidate, BeExe))))
+                    {
+                        return candidate;
+                    }
+                }
             }
             return null;
         }

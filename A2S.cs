@@ -454,9 +454,12 @@ namespace BeautifulPotatoExpLauncher
                 ulong id; string name; int next;
                 if (TryRecord(blob, at, out id, out name, out next))
                 {
-                    result.Mods.Add(new Mod(name, id));
-                    at = next;
-                    continue;
+                    if (!string.IsNullOrWhiteSpace(name) && LooksLikeModName(name))
+                    {
+                        result.Mods.Add(new Mod(name, id));
+                        at = next;
+                        continue;
+                    }
                 }
 
                 return null;
@@ -516,6 +519,12 @@ namespace BeautifulPotatoExpLauncher
             try { name = Encoding.UTF8.GetString(b, textAt, len); }
             catch { return false; }
 
+            // A malformed packet can still contain a byte sequence that is
+            // mostly punctuation, e.g. "???". That is never a real workshop
+            // item and must be rejected before it reaches the connection/auth
+            // mod list. A valid mod name may contain spaces or punctuation, so
+            // the test is: it must contain at least one letter or digit and not
+            // be made up entirely of punctuation/symbols.
             if (!LooksLikeModName(name)) return false;
 
             next = textAt + len;
@@ -526,21 +535,35 @@ namespace BeautifulPotatoExpLauncher
         {
             if (string.IsNullOrWhiteSpace(name)) return false;
 
-            int seen = 0;
+            bool sawLetterOrDigit = false;
+            bool sawVisibleText = false;
             foreach (char ch in name)
             {
                 if (char.IsControl(ch) || char.IsSurrogate(ch)) return false;
                 if (ch >= 0xE000 && ch <= 0xF8FF) return false;
-                if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) ||
-                    char.IsPunctuation(ch) || char.IsSymbol(ch))
+
+                if (char.IsLetterOrDigit(ch))
                 {
-                    seen++;
+                    sawLetterOrDigit = true;
+                    sawVisibleText = true;
                     continue;
                 }
+
+                if (char.IsWhiteSpace(ch)) continue;
+
+                // A placeholder such as "???" or any punctuation-only record is
+                // not a real workshop mod name. Valid names may still contain
+                // spaces or punctuation, so only reject the all-symbol case.
+                if (char.IsPunctuation(ch) || char.IsSymbol(ch))
+                {
+                    sawVisibleText = true;
+                    continue;
+                }
+
                 return false;
             }
 
-            return seen > 0;
+            return sawLetterOrDigit && sawVisibleText;
         }
 
         /// <summary>
