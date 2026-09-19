@@ -145,26 +145,77 @@ namespace BeautifulPotatoExpLauncher
 
                 var sw = Stopwatch.StartNew();
                 udp.Send(payload, payload.Length, host, port);
-                byte[] data = udp.Receive(ref ep);
-                pingMs = (int)sw.ElapsedMilliseconds;
 
-                // Valve servers answer 'A' with a challenge that has to be
-                // echoed back before they will part with the real reply.
-                if (data.Length >= 9 && data[4] == (byte)'A')
+                var splitChunks = new SortedDictionary<int, byte[]>();
+                int totalPackets = 0;
+                while (true)
                 {
-                    var challenge = new byte[4];
-                    Array.Copy(data, 5, challenge, 0, 4);
+                    byte[] data;
+                    try { data = udp.Receive(ref ep); }
+                    catch (SocketException) { break; }
 
-                    byte[] second;
-                    if (payload.Length >= 4 && payload.Skip(payload.Length - 4).All(b => b == 0xFF))
-                        second = payload.Take(payload.Length - 4).Concat(challenge).ToArray();
-                    else
-                        second = payload.Concat(challenge).ToArray();
+                    pingMs = (int)sw.ElapsedMilliseconds;
 
-                    udp.Send(second, second.Length, host, port);
-                    data = udp.Receive(ref ep);
+                    // Valve split packets arrive as: FF FF FF FE [packetIndex] [packetCount] ...
+                    // The reply can be much larger than the usual short "official" server packet,
+                    // so we need to reassemble every fragment and not assume the response fits in one datagram.
+                    if (data.Length >= 6 && data[0] == 0xFF && data[1] == 0xFF &&
+                        data[2] == 0xFF && data[3] == 0xFE)
+                    {
+                        int packetIndex = data[4];
+                        int packetCount = data[5];
+                        if (packetCount > 0) totalPackets = Math.Max(totalPackets, packetCount);
+
+                        byte[] body = data.Length > 6 ? data.Skip(6).ToArray() : Array.Empty<byte>();
+                        splitChunks[packetIndex] = body;
+
+                        if (totalPackets > 0 && splitChunks.Count >= totalPackets)
+                            break;
+                        continue;
+                    }
+
+                    // Valve servers answer 'A' with a challenge that has to be
+                    // echoed back before they will part with the real reply.
+                    if (data.Length >= 9 && data[4] == (byte)'A')
+                    {
+                        var challenge = new byte[4];
+                        Array.Copy(data, 5, challenge, 0, 4);
+
+                        byte[] second;
+                        if (payload.Length >= 4 && payload.Skip(payload.Length - 4).All(b => b == 0xFF))
+                            second = payload.Take(payload.Length - 4).Concat(challenge).ToArray();
+                        else
+                            second = payload.Concat(challenge).ToArray();
+
+                        udp.Send(second, second.Length, host, port);
+                        data = udp.Receive(ref ep);
+                        pingMs = (int)sw.ElapsedMilliseconds;
+                    }
+
+                    return data;
                 }
-                return data;
+
+                if (splitChunks.Count == 0) return null;
+                if (totalPackets <= 0) totalPackets = splitChunks.Keys.Max() + 1;
+
+                int totalLength = 0;
+                for (int i = 0; i < totalPackets; i++)
+                {
+                    byte[] chunk;
+                    if (!splitChunks.TryGetValue(i, out chunk)) break;
+                    totalLength += chunk.Length;
+                }
+
+                var combined = new byte[totalLength];
+                int offset = 0;
+                for (int i = 0; i < totalPackets; i++)
+                {
+                    byte[] chunk;
+                    if (!splitChunks.TryGetValue(i, out chunk)) break;
+                    Buffer.BlockCopy(chunk, 0, combined, offset, chunk.Length);
+                    offset += chunk.Length;
+                }
+                return combined;
             }
         }
 
@@ -415,31 +466,59 @@ namespace BeautifulPotatoExpLauncher
         }
 
         /// <summary>How far in the mod records may start; see ParseBlob.</summary>
-        private const int MaxHeaderScan = 14;
+        /// <remarks>
+        /// Some heavily modded servers pad the binary blob with extra bytes
+        /// before the first real record, so a hard 14-byte window is too small.
+        /// A 64-byte scan still stays tight while covering the real-world cases.
+        /// </remarks>
+        private const int MaxHeaderScan = 64;
 
         /// <summary>Tests one position against the record shape.</summary>
         private static bool TryRecord(byte[] b, int i, out ulong id, out string name, out int next)
         {
             id = 0; name = null; next = i;
             if (i + 10 > b.Length) return false;
-            if (b[i + 4] != 0x04) return false;        // the marker before the id
 
-            id = BitConverter.ToUInt32(b, i + 5);
+            if (TryRecordAtMarker(b, i + 4, out id, out name, out next)) return true;
+
+            // Some DayOne records carry one small discriminator byte before the
+            // marker; others carry it after. Try both shapes and let the exact
+            // tail proof decide whether the full candidate is real.
+            return TryRecordAtMarker(b, i + 5, out id, out name, out next);
+        }
+
+        private static bool TryRecordAtMarker(byte[] b, int markerAt, out ulong id, out string name, out int next)
+        {
+            id = 0; name = null; next = markerAt;
+            if (markerAt < 0 || markerAt >= b.Length || b[markerAt] != 0x04) return false;
+
+            if (TryRecordBody(b, markerAt + 1, out id, out name, out next)) return true;
+            return TryRecordBody(b, markerAt + 2, out id, out name, out next);
+        }
+
+        private static bool TryRecordBody(byte[] b, int idAt, out ulong id, out string name, out int next)
+        {
+            id = 0; name = null; next = idAt;
+            if (idAt + 5 > b.Length) return false;
+
+            id = BitConverter.ToUInt32(b, idAt);
             if (id < 100000 || id > 4000000000) return false;
 
-            int len = b[i + 9];
+            int lenAt = idAt + 4;
+            int textAt = idAt + 5;
+            int len = b[lenAt];
             if (len < 2 || len > 64) return false;
-            if (i + 10 + len > b.Length) return false;
+            if (textAt + len > b.Length) return false;
 
-            for (int k = i + 10; k < i + 10 + len; k++)
+            for (int k = textAt; k < textAt + len; k++)
                 if (b[k] < 32 || b[k] == 127) return false;   // names are printable
 
-            try { name = Encoding.UTF8.GetString(b, i + 10, len); }
+            try { name = Encoding.UTF8.GetString(b, textAt, len); }
             catch { return false; }
 
             if (!LooksLikeModName(name)) return false;
 
-            next = i + 10 + len;
+            next = textAt + len;
             return true;
         }
 
@@ -466,8 +545,9 @@ namespace BeautifulPotatoExpLauncher
 
         /// <summary>
         /// Does everything from here parse as the signature list plus the
-        /// description, finishing exactly on the last byte? That exactness is
-        /// the proof that the mod list ended here and nothing was lost.
+        /// trailing length-prefixed strings, finishing exactly on the last byte?
+        /// That exactness is the proof that the mod list ended here and nothing
+        /// was lost.
         ///
         /// Entry CONTENT is deliberately not policed - some signature entries
         /// carry bytes that are not text, and rejecting those made whole servers
@@ -488,7 +568,7 @@ namespace BeautifulPotatoExpLauncher
                 i += len;
             }
 
-            if (i < b.Length)
+            while (i < b.Length)
             {
                 int len = b[i]; i++;
                 if (i + len > b.Length) return false;
@@ -515,8 +595,14 @@ namespace BeautifulPotatoExpLauncher
                 {
                     int len = b[i]; i++;
                     if (len > 0 && i + len <= b.Length)
+                    {
                         result.Description = Encoding.UTF8.GetString(b, i, len);
+                        i += len;
+                    }
                 }
+
+                // Extra trailing strings (for example verify metadata) are allowed
+                // by TailFits, but only the first human description is shown.
             }
             catch { /* the tail is a bonus, never worth losing the mods over */ }
         }

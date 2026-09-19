@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -149,6 +150,25 @@ namespace BeautifulPotatoExpLauncher
                 File.WriteAllLines(FavouritesFile, lines.ToArray());
             }
             catch { }
+        }
+
+        public static void SaveNameFor(string endpoint, string name)
+        {
+            RememberName(endpoint, name);
+            SaveFavourites(Names.Keys);
+        }
+
+        public static Rectangle? LoadWindowBounds()
+        {
+            int x, y, w, h;
+            bool maximised;
+            if (!LoadWindow(out x, out y, out w, out h, out maximised)) return null;
+            return new Rectangle(x, y, w, h);
+        }
+
+        public static void SaveWindowBounds(Rectangle bounds)
+        {
+            SaveWindow(bounds.X, bounds.Y, bounds.Width, bounds.Height, false);
         }
 
         // ---- last tab used, so the launcher reopens where you left it ----

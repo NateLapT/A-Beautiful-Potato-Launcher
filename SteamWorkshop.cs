@@ -43,12 +43,29 @@ namespace BeautifulPotatoExpLauncher
     internal sealed class Mod
     {
         public readonly string Name;
-        public readonly ulong WorkshopId;
+        public ulong WorkshopId;
 
         public Mod(string name, ulong workshopId)
         {
-            Name = SanitizeName(name, workshopId);
-            WorkshopId = workshopId;
+            WorkshopId = NormalizeWorkshopId(workshopId);
+            Name = SanitizeName(name, WorkshopId);
+        }
+
+        private static ulong NormalizeWorkshopId(ulong workshopId)
+        {
+            if (workshopId == 0) return 0;
+
+            // DayZ sometimes emits a stray low-byte tag in the packed mod-record
+            // that shifts the published workshop id by +2. The raw packet can
+            // therefore contain values like 1797720066 instead of the real
+            // published id 1797720064. Normalize only the unmistakable drift.
+            if ((workshopId & 0xFF) == 0x02 && workshopId >= 100000)
+            {
+                ulong corrected = workshopId - 2;
+                if (corrected >= 100000 && corrected <= 4000000000UL)
+                    return corrected;
+            }
+            return workshopId;
         }
 
         private static string SanitizeName(string name, ulong workshopId)
@@ -74,6 +91,15 @@ namespace BeautifulPotatoExpLauncher
         {
             get
             {
+                // Prefer the label the server actually advertised for the required
+                // mod. That is the authoritative answer for the current session,
+                // even when the Steam page metadata is stale or points at a
+                // different item. Only fall back to the workshop title when the
+                // canonical server name is missing or generic.
+                if (!string.IsNullOrWhiteSpace(Name) &&
+                    !Name.StartsWith("Workshop item ", StringComparison.OrdinalIgnoreCase))
+                    return Name;
+
                 string title = SteamWorkshop.WorkshopTitle(WorkshopId);
                 if (!string.IsNullOrWhiteSpace(title)) return title;
                 if (!string.IsNullOrWhiteSpace(Name)) return Name;
@@ -109,9 +135,154 @@ namespace BeautifulPotatoExpLauncher
             return Path.Combine(steamPath, "steamapps", "workshop", "content", DayZAppId.ToString());
         }
 
+        private static IEnumerable<string> WorkshopRoots(string steamPath)
+        {
+            if (string.IsNullOrEmpty(steamPath)) yield break;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            string std = WorkshopRoot(steamPath);
+            if (seen.Add(std)) yield return std;
+
+            string direct = Path.Combine(steamPath, "!Workshop");
+            if (seen.Add(direct) && Directory.Exists(direct)) yield return direct;
+
+            string common = Path.Combine(steamPath, "steamapps", "common");
+            if (Directory.Exists(common))
+            {
+                foreach (var dir in Directory.EnumerateDirectories(common, "*", SearchOption.TopDirectoryOnly))
+                {
+                    string alt = Path.Combine(dir, "!Workshop");
+                    if (seen.Add(alt) && Directory.Exists(alt)) yield return alt;
+                }
+            }
+        }
+
+        private static bool MatchesPublishedId(string folder, ulong id)
+        {
+            foreach (var file in new[] { "meta.cpp", "mod.cpp" })
+            {
+                string path = Path.Combine(folder, file);
+                if (!File.Exists(path)) continue;
+
+                try
+                {
+                    string text = File.ReadAllText(path);
+                    foreach (Match match in Regex.Matches(text, @"(?:publishedid|publishedId|id)\s*[:=]\s*['""]?(\d{5,})", RegexOptions.IgnoreCase))
+                    {
+                        ulong found;
+                        if (ulong.TryParse(match.Groups[1].Value, out found) && found == id)
+                            return true;
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+
         public static string ItemPath(string steamPath, ulong id)
         {
+            foreach (var root in WorkshopRoots(steamPath))
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
+                {
+                    if (MatchesPublishedId(dir, id)) return dir;
+                }
+            }
+
+            foreach (var root in WorkshopRoots(steamPath))
+            {
+                string idDir = Path.Combine(root, id.ToString());
+                if (Directory.Exists(idDir)) return idDir;
+            }
+
             return Path.Combine(WorkshopRoot(steamPath), id.ToString());
+        }
+
+        public static void CorrectInstalledIds(string steamPath, IEnumerable<Mod> mods)
+        {
+            if (string.IsNullOrEmpty(steamPath) || mods == null) return;
+
+            foreach (var mod in mods)
+            {
+                if (mod == null) continue;
+
+                ulong corrected = ResolveInstalledWorkshopId(steamPath, mod.Name, mod.WorkshopId);
+                if (corrected != 0 && corrected != mod.WorkshopId)
+                    mod.WorkshopId = corrected;
+                else if ((mod.WorkshopId & 0xFF) == 0x02 && mod.WorkshopId >= 100000)
+                {
+                    ulong driftFix = mod.WorkshopId - 2;
+                    if (driftFix >= 100000 && driftFix <= 4000000000UL)
+                        mod.WorkshopId = driftFix;
+                }
+            }
+        }
+
+        private static ulong ResolveInstalledWorkshopId(string steamPath, string modName, ulong candidateId)
+        {
+            if (string.IsNullOrEmpty(steamPath)) return 0;
+
+            // Prefer the installed folder whose published ID is known from the
+            // mod's own meta.cpp / mod.cpp. This keeps the launcher anchored to
+            // the actual DayZ item even when the server packet arrives with a
+            // shifted or stale workshop id.
+            foreach (var root in WorkshopRoots(steamPath))
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
+                {
+                    try
+                    {
+                        ulong published = PublishedId(dir);
+                        if (published == 0) continue;
+
+                        string cleanDir = NormalizeName(Path.GetFileName(dir));
+                        string cleanMod = NormalizeName(modName);
+                        bool nameMatch = cleanDir.Length > 0 && cleanMod.Length > 0 &&
+                            (cleanDir == cleanMod || cleanDir.Contains(cleanMod) || cleanMod.Contains(cleanDir));
+                        bool idMatch = candidateId != 0 && published == candidateId;
+                        if (published != 0 && (nameMatch || idMatch))
+                            return published;
+                    }
+                    catch { }
+                }
+            }
+
+            return 0;
+        }
+
+        private static ulong PublishedId(string folder)
+        {
+            foreach (var file in new[] { "meta.cpp", "mod.cpp" })
+            {
+                string path = Path.Combine(folder, file);
+                if (!File.Exists(path)) continue;
+                try
+                {
+                    string text = File.ReadAllText(path);
+                    foreach (Match match in Regex.Matches(text, @"(?:publishedid|publishedId|id)\s*[:=]\s*['""]?(\d{5,})", RegexOptions.IgnoreCase))
+                    {
+                        ulong id;
+                        if (ulong.TryParse(match.Groups[1].Value, out id)) return id;
+                    }
+                }
+                catch { }
+            }
+            return 0;
+        }
+
+        private static string NormalizeName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder();
+            foreach (char ch in s)
+            {
+                if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+                else if (ch == '@') continue;
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -526,6 +697,14 @@ namespace BeautifulPotatoExpLauncher
         /// than the raw A2S mod name, while still falling back to the server's
         /// own text when Steam is offline or the item is unavailable.
         /// </summary>
+        private static string WorkshopDetailsUrl(ulong id, bool english = true)
+        {
+            string url = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + id
+                       + "&appid=" + DayZAppId;
+            if (english) url += "&l=english";
+            return url;
+        }
+
         public static string WorkshopTitle(ulong id)
         {
             if (id == 0) return "";
@@ -545,8 +724,7 @@ namespace BeautifulPotatoExpLauncher
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
-                    string html = client.DownloadString(
-                        "https://steamcommunity.com/sharedfiles/filedetails/?id=" + id + "&l=english");
+                    string html = client.DownloadString(WorkshopDetailsUrl(id));
                     title = ParseWorkshopTitle(html);
                 }
             }
@@ -840,7 +1018,10 @@ namespace BeautifulPotatoExpLauncher
             try { Process.Start("steam://url/CommunityFilePage/" + id); }
             catch
             {
-                try { Process.Start("https://steamcommunity.com/sharedfiles/filedetails/?id=" + id); }
+                try
+                {
+                    Process.Start(WorkshopDetailsUrl(id, english: false));
+                }
                 catch { }
             }
         }

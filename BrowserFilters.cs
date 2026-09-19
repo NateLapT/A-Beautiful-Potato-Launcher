@@ -30,11 +30,32 @@ namespace BeautifulPotatoExpLauncher
         public string Name = "";
         public string Address = "";
         public string Map = "";
+        public string Search = "";
         public int MaxPing;                    // 0 = any
         public PlayersMode Players = PlayersMode.Any;
+        public PlayersMode PlayersMode
+        {
+            get { return Players; }
+            set { Players = value; }
+        }
         public TimeMode GameTime = TimeMode.Any;
+        public TimeMode TimeMode
+        {
+            get { return GameTime; }
+            set { GameTime = value; }
+        }
         public TriState ThirdPerson = TriState.Any;
+        public TriState ThirdPersonMode
+        {
+            get { return ThirdPerson; }
+            set { ThirdPerson = value; }
+        }
         public TriState Mods = TriState.Any;
+        public TriState ModsMode
+        {
+            get { return Mods; }
+            set { Mods = value; }
+        }
         public TriState Official = TriState.Any;
         public bool NoPassword;
         public bool HideFull;
@@ -105,6 +126,14 @@ namespace BeautifulPotatoExpLauncher
                 f.Add(new KeyValuePair<string, string>("name_match", pattern));
             }
 
+            string endpoint;
+            if (TryExactEndpoint(Address, out endpoint))
+            {
+                // Steam can resolve an exact game address without the 10,000-row
+                // cap hiding it, and it returns the server's real query port.
+                f.Add(new KeyValuePair<string, string>("gameaddr", endpoint));
+            }
+
             if (!string.IsNullOrEmpty(Map.Trim()))
                 f.Add(new KeyValuePair<string, string>("map", Map.Trim()));
 
@@ -141,6 +170,33 @@ namespace BeautifulPotatoExpLauncher
                 f.Add(new KeyValuePair<string, string>("gametagsnor", "privHive"));
 
             return f;
+        }
+
+        public static bool LooksLikeAddressSearch(string value)
+        {
+            string s = (value ?? "").Trim();
+            string endpoint;
+            if (TryExactEndpoint(s, out endpoint)) return true;
+            if (s.Length == 0 || s.Contains(" ")) return false;
+            return s.Contains(".") || s.Contains(":");
+        }
+
+        private static bool TryExactEndpoint(string value, out string endpoint)
+        {
+            endpoint = null;
+            string s = (value ?? "").Trim();
+            int c = s.LastIndexOf(':');
+            if (c <= 0 || c == s.Length - 1) return false;
+
+            int port;
+            if (!int.TryParse(s.Substring(c + 1), out port)) return false;
+            if (port <= 0 || port >= 65535) return false;
+
+            string host = s.Substring(0, c).Trim();
+            if (host.Length == 0 || host.Contains(" ")) return false;
+
+            endpoint = host + ":" + port;
+            return true;
         }
 
         /// <summary>The rest, applied to each row after it arrives.</summary>

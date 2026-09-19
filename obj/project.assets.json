@@ -434,11 +434,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "p:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
+      "projectUniqueName": "P:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
       "projectName": "BeautifulPotatoExpLauncher",
-      "projectPath": "p:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
+      "projectPath": "P:\\A Beautiful Potato Launcher\\BeautifulPotatoExpLauncher.csproj",
       "packagesPath": "C:\\Users\\digit\\.nuget\\packages\\",
-      "outputPath": "p:\\A Beautiful Potato Launcher\\obj\\",
+      "outputPath": "P:\\A Beautiful Potato Launcher\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\digit\\AppData\\Roaming\\NuGet\\NuGet.Config"

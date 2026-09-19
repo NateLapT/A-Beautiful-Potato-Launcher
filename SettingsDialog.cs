@@ -51,6 +51,17 @@ namespace BeautifulPotatoExpLauncher
                 var flaggedPage = new TabPage("Flagged servers") { BackColor = Panel };
                 tabs.TabPages.Add(flaggedPage);
 
+                var searchBox = new TextBox
+                {
+                    Dock = DockStyle.Top,
+                    Height = 24,
+                    Margin = new Padding(8, 8, 8, 0),
+                    BackColor = Panel2,
+                    ForeColor = Color.Gainsboro,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                flaggedPage.Controls.Add(searchBox);
+
                 var list = new ListView
                 {
                     Dock = DockStyle.Fill,
@@ -59,15 +70,30 @@ namespace BeautifulPotatoExpLauncher
                     MultiSelect = true,
                     BackColor = Panel,
                     ForeColor = Color.Gainsboro,
-                    BorderStyle = BorderStyle.FixedSingle
+                    BorderStyle = BorderStyle.FixedSingle,
+                    Margin = new Padding(8, 8, 8, 8)
                 };
                 list.Columns.Add("Server", 300);
                 list.Columns.Add("Address", 160);
                 list.Columns.Add("Why it was flagged", 400);
 
-                foreach (var x in flagged.OrderBy(x => x.Host))
-                    list.Items.Add(new ListViewItem(new[] { x.Name, x.Endpoint, x.Reason })
-                    { Tag = x, ForeColor = Color.FromArgb(205, 150, 150) });
+                var allFlagged = flagged.OrderBy(x => x.Host).ToList();
+                Action refreshFlagList = () =>
+                {
+                    string q = searchBox.Text.Trim();
+                    list.Items.Clear();
+                    foreach (var x in allFlagged.Where(x =>
+                        string.IsNullOrEmpty(q)
+                        || x.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || x.Host.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                        || x.Reason.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        list.Items.Add(new ListViewItem(new[] { x.Name, x.Endpoint, x.Reason })
+                        { Tag = x, ForeColor = Color.FromArgb(205, 150, 150) });
+                    }
+                };
+                searchBox.TextChanged += (s, e) => refreshFlagList();
+                refreshFlagList();
 
                 flaggedPage.Controls.Add(list);
 

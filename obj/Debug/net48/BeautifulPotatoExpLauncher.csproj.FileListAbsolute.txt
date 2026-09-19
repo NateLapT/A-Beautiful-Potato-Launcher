@@ -6,3 +6,11 @@ P:\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.Assemb
 P:\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.AssemblyInfo.cs
 P:\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.csproj.CoreCompileInputs.cache
 P:\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.exe
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\bin\Debug\net48\BeautifulPotatoExpLauncher.exe.config
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\bin\Debug\net48\BeautifulPotatoExpLauncher.exe
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.csproj.AssemblyReference.cache
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.GeneratedMSBuildEditorConfig.editorconfig
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.AssemblyInfoInputs.cache
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.AssemblyInfo.cs
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.csproj.CoreCompileInputs.cache
+F:\DayZ_Project_129.75\A Beautiful Potato Launcher\obj\Debug\net48\BeautifulPotatoExpLauncher.exe
