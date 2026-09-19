@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyCopyrightAttribute("A Beautiful Potato")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+fd71045d78ad7ee434fa51606ce08bbb5c3195f4")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e348faec2c14d5d4349b2d20e856ecbad60476e4")]
 [assembly: System.Reflection.AssemblyProductAttribute("A Beautiful Potato Launcher")]
 [assembly: System.Reflection.AssemblyTitleAttribute("A Beautiful Potato Launcher")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -341,6 +341,11 @@ namespace BeautifulPotatoExpLauncher
         internal readonly List<FlaggedServer> Flagged = new List<FlaggedServer>();
 
         private readonly HashSet<string> _asked = new HashSet<string>();
+        private readonly object _modLock = new object();
+        private readonly Dictionary<string, ServerRules> _modCache =
+            new Dictionary<string, ServerRules>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _modLoading =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, ServerInfo> _live =
             new Dictionary<string, ServerInfo>(StringComparer.OrdinalIgnoreCase);
 
@@ -1955,11 +1960,24 @@ namespace BeautifulPotatoExpLauncher
             else RefreshMine();
         }
 
+        private void ClearModCache(Row row)
+        {
+            if (row == null) return;
+            lock (_modLock)
+            {
+                _modCache.Remove(row.Endpoint);
+                _modLoading.Remove(row.Endpoint);
+            }
+        }
+
         private void RefreshOneRow(Row row)
         {
             if (row == null) return;
+            ClearModCache(row);
             lock (_pingLock) { _asked.Remove(row.Endpoint); }
             Enqueue(new[] { row }, true);
+            if (SelectedRow != null && SelectedRow.Endpoint == row.Endpoint)
+                ShowMods(true);
             _status.Text = "Re-checking " + row.Endpoint + "...";
         }
 
@@ -2223,14 +2241,27 @@ namespace BeautifulPotatoExpLauncher
                          ? "REMOVE FAVOURITE" : "ADD TO FAVOURITES";
         }
 
-        private void ShowMods()
+        private void ShowMods(bool force = false)
         {
             UpdateFavButton();
-            _mods.Items.Clear();
             var row = SelectedRow;
             if (row == null) return;
 
-            _modsHeader.Text = "Content required by server  -  " + row.Endpoint;
+            var endpoint = row.Endpoint;
+            ServerRules cached;
+            lock (_modLock)
+            {
+                if (!force && _modCache.TryGetValue(endpoint, out cached))
+                {
+                    FillMods(row, cached, FindSteam());
+                    return;
+                }
+                if (_modLoading.Contains(endpoint)) return;
+                _modLoading.Add(endpoint);
+            }
+
+            _mods.Items.Clear();
+            _modsHeader.Text = "Content required by server  -  " + endpoint;
             _mods.Items.Add(new ListViewItem(new[] { "querying server...", "", "" }));
 
             _desc.Text = "";
@@ -2239,9 +2270,15 @@ namespace BeautifulPotatoExpLauncher
             var captured = row;
             new Thread(() =>
             {
-                var rules = QueryModsChecked(captured);
-                string steam = FindSteam();
+                ServerRules rules = null;
+                try { rules = QueryModsChecked(captured); }
+                catch (Exception ex)
+                {
+                    Log("Mod query failed for " + captured.Endpoint + ": " + ex.Message);
+                    rules = null;
+                }
 
+                string steam = FindSteam();
                 if (rules != null && rules.Mods.Count > 0)
                 {
                     try { SteamWorkshop.CorrectInstalledIds(steam, rules.Mods); }
@@ -2250,7 +2287,24 @@ namespace BeautifulPotatoExpLauncher
                     catch { }
                 }
 
-                try { BeginInvoke((Action)(() => FillMods(captured, rules, steam))); }
+                lock (_modLock)
+                {
+                    _modLoading.Remove(captured.Endpoint);
+                    if (rules != null)
+                        _modCache[captured.Endpoint] = rules;
+                    else
+                        _modCache.Remove(captured.Endpoint);
+                }
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (SelectedRow == null || SelectedRow.Endpoint != captured.Endpoint)
+                            return;
+                        FillMods(captured, rules, steam);
+                    }));
+                }
                 catch (InvalidOperationException) { }
             })
             { IsBackground = true }.Start();
