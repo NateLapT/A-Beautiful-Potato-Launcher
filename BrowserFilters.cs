@@ -89,21 +89,45 @@ namespace BeautifulPotatoExpLauncher
         public const int MaxRealSlots = 127;
 
         /// <summary>An address running at least this many servers is suspect...</summary>
-        public const int FarmServersPerIp = 30;
+        ///
+        /// The original thresholds were tuned to the kinds of farms that were
+        /// obvious in the mid-2020s master list, but the more recent redirect
+        /// farms are denser and more spread out; they still show as the same
+        /// repeated cluster pattern, just below the old cut-off.
+        public const int FarmServersPerIp = 15;
 
         /// <summary>...but only if it is also wearing this many different names.</summary>
-        public const int FarmNamesPerIp = 20;
+        public const int FarmNamesPerIp = 10;
+
+        /// <summary>
+        /// How many servers may share ONE name on ONE address before the group
+        /// is a redirect farm.
+        ///
+        /// This was the blind spot in every other rule. They all key on an
+        /// address running many DIFFERENT names, because that is what the loud
+        /// farms look like - and the name sets are held in a HashSet, so twenty
+        /// servers called the same thing collapse to a single entry and look
+        /// like the quietest host on the list.
+        ///
+        /// Measured against the live master list: six addresses were each
+        /// running exactly 20 servers under one identical name with one shared
+        /// mod set - 120 servers, invisible to every existing rule. The largest
+        /// same-name group anywhere else was 6, so eight sits in the gap.
+        ///
+        /// It cannot touch a real community, which names its servers apart: A
+        /// Beautiful Potato runs 14 on one address and no name repeats twice.
+        /// </summary>
+        public const int FarmSameNamePerIp = 8;
 
         // A farm can dodge a per-address rule by spreading over a /24, which is
         // exactly what 91.196.33.x does: 320 servers over 16 addresses under 299
         // names. So subnets are judged too - but on DENSITY, because a genuine
-        // hosting provider also has a busy /24. Measured on the live list:
-        //      farms            20 to 200 servers per address
-        //      real providers   1.1 to 2.5 servers per address
-        // Nothing sits in between, so the threshold is not delicate.
-        public const int FarmServersPerSubnet = 40;
-        public const int FarmNamesPerSubnet = 25;
-        public const double FarmServersPerAddress = 8.0;
+        // hosting provider also has a busy /24. The newer redirect farms are
+        // clustered enough to show up at the lower end of that density curve,
+        // so the limits are intentionally kept conservative.
+        public const int FarmServersPerSubnet = 20;
+        public const int FarmNamesPerSubnet = 12;
+        public const double FarmServersPerAddress = 3.0;
 
         /// <summary>The /24 an address belongs to, e.g. 91.196.33.79 -> 91.196.33</summary>
         public static string Subnet24(string host)

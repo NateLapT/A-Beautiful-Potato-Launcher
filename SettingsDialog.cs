@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -29,7 +30,8 @@ namespace BeautifulPotatoExpLauncher
                                 List<FlaggedServer> flagged,
                                 HashSet<string> allowed,
                                 bool hideFakes,
-                                out bool newHideFakes)
+                                out bool newHideFakes,
+                                string steam = null)
         {
             bool changed = false;
             newHideFakes = hideFakes;
@@ -150,6 +152,98 @@ namespace BeautifulPotatoExpLauncher
                 };
 
                 // ------------------------------------------------- the rules --
+                // ---- Mods ----
+                var modsPage = new TabPage("Mods") { BackColor = Panel };
+                tabs.TabPages.Add(modsPage);
+
+                modsPage.Controls.Add(new Label
+                {
+                    Text = "DayZ workshop folder",
+                    Bounds = new Rectangle(14, 16, 300, 18),
+                    ForeColor = Color.Gainsboro,
+                    Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+                });
+
+                string steamPath = steam;
+                string workshop = string.IsNullOrEmpty(steamPath)
+                    ? "(Steam not found)"
+                    : SteamWorkshop.WorkshopRoot(steamPath);
+
+                var workshopBox = new TextBox
+                {
+                    Text = workshop,
+                    Bounds = new Rectangle(14, 38, 560, 23),
+                    ReadOnly = true,                 // Steam decides this one, not us
+                    BackColor = Panel2,
+                    ForeColor = Dim,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                modsPage.Controls.Add(workshopBox);
+
+                modsPage.Controls.Add(new Label
+                {
+                    Text = "Set by Steam - shown so you can see where mods are being read from.",
+                    Bounds = new Rectangle(14, 64, 560, 18),
+                    ForeColor = Dim
+                });
+
+                modsPage.Controls.Add(new Label
+                {
+                    Text = "Additional mods folder",
+                    Bounds = new Rectangle(14, 98, 300, 18),
+                    ForeColor = Color.Gainsboro,
+                    Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+                });
+
+                var extraBox = new TextBox
+                {
+                    Text = ServerStore.LoadExtraModPath(),
+                    Bounds = new Rectangle(14, 120, 470, 23),
+                    BackColor = Panel2,
+                    ForeColor = Color.Gainsboro,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                modsPage.Controls.Add(extraBox);
+
+                var browse = new Button
+                {
+                    Text = "Browse",
+                    Bounds = new Rectangle(492, 119, 82, 25),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = Panel2,
+                    ForeColor = Color.White
+                };
+                browse.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
+                browse.Click += (s2, e2) =>
+                {
+                    using (var fb = new FolderBrowserDialog
+                    {
+                        Description = "Pick a folder that holds extra mods",
+                        ShowNewFolderButton = false
+                    })
+                    {
+                        if (Directory.Exists(extraBox.Text)) fb.SelectedPath = extraBox.Text;
+                        if (fb.ShowDialog(f) == DialogResult.OK) extraBox.Text = fb.SelectedPath;
+                    }
+                };
+                modsPage.Controls.Add(browse);
+
+                modsPage.Controls.Add(new Label
+                {
+                    Text = "A second place to look for mods - useful for hand-installed ones that "
+                         + "Steam does not manage.\r\nLeave it empty if you keep everything in the "
+                         + "workshop folder.",
+                    Bounds = new Rectangle(14, 148, 560, 40),
+                    ForeColor = Dim
+                });
+
+                // Saved when the dialog is accepted, alongside everything else.
+                f.FormClosing += (s2, e2) =>
+                {
+                    if (f.DialogResult == DialogResult.OK)
+                        ServerStore.SaveExtraModPath(extraBox.Text.Trim());
+                };
+
                 var rulesPage = new TabPage("Fake server rules") { BackColor = Panel };
                 tabs.TabPages.Add(rulesPage);
 

@@ -104,6 +104,31 @@ namespace BeautifulPotatoExpLauncher
         public int QueryPort;
         public int EffectiveQueryPort { get { return A2S.Effective(Port, QueryPort); } }
         public int Players, MaxPlayers, Ping = -1;
+
+        /// <summary>The server asks for a password before it will let you in.</summary>
+        public bool Password;
+
+        /// <summary>
+        /// Players waiting to join. Read from this row's OWN tags rather than
+        /// stored, so it stays right when a live query refreshes them.
+        /// See BrowserServer.Queue for where DayZ hides it.
+        /// </summary>
+        public int Queue
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(Tags)) return 0;
+                foreach (var part in Tags.Split(','))
+                {
+                    string t = part.Trim();
+                    if (t.Length <= 3) continue;
+                    if (!t.StartsWith("lqs", StringComparison.OrdinalIgnoreCase)) continue;
+                    int v;
+                    if (int.TryParse(t.Substring(3), out v) && v >= 0) return v;
+                }
+                return 0;
+            }
+        }
         // ulong to match ServerInfo/A2S; BrowserServer's uint widens into it.
         public ulong AppId;
         public string Tags = "";
@@ -248,7 +273,7 @@ namespace BeautifulPotatoExpLauncher
         // ListView cannot host real buttons, so the cell is hit-tested instead.
         private const int ColRefresh = 0, ColStar = 1, ColName = 2, ColGame = 3,
                           ColStatus = 4, ColMap = 5, ColPlayers = 6, ColTime = 7,
-                          ColPing = 8, ColMods = 9, ColAddress = 10;
+                          ColPing = 8, ColMods = 9, ColPassword = 10, ColAddress = 11;
 
         // Row colours, kept in one place so the list reads consistently:
         //   normal   - listed, and either answered or not yet asked
@@ -291,6 +316,9 @@ namespace BeautifulPotatoExpLauncher
         private static readonly Color Accent = Color.FromArgb(178, 34, 34);
         private static readonly Color Dim    = Color.FromArgb(150, 150, 155);
         private static readonly Color Good   = Color.FromArgb(140, 200, 140);
+
+        // Max player threshold; DayZ rarely exceeds 120 slots without severe degradation.
+        private const int MaxRealisticSlots = 120;
 
         // ---- state ----
         private Tab _tab = Tab.Community;
@@ -356,6 +384,46 @@ namespace BeautifulPotatoExpLauncher
 
         private readonly HashSet<string> _asked = new HashSet<string>();
         private readonly object _modLock = new object();
+        /// <summary>
+        /// Which server the mod panel is currently displaying, and when that
+        /// data was gathered.
+        ///
+        /// These exist to stop the panel rebuilding itself over and over. The
+        /// server list re-renders constantly - every ping that comes back
+        /// updates a row - and each render re-applies the selection, which
+        /// raises SelectedIndexChanged, which used to rebuild the mod list from
+        /// scratch. The rules were cached so nothing was re-queried, but the
+        /// ListView was still cleared and refilled each time, which is exactly
+        /// what the flicker was.
+        /// </summary>
+        /// <summary>
+        /// True while SetRows is swapping the list contents.
+        ///
+        /// Rebuilding a virtual ListView means clearing the selection and
+        /// re-applying it, which raises SelectedIndexChanged TWICE - once with
+        /// nothing selected. Acting on that first event tore the mod panel down
+        /// (and forgot which server it was showing), and the second rebuilt it,
+        /// so the panel visibly cleared and refilled every time a ping came
+        /// back. The selection did not actually change; only the list object
+        /// underneath it did.
+        /// </summary>
+        private bool _rebuildingList;
+
+        /// <summary>
+        /// While a fetch is running the list APPENDS rather than re-sorts.
+        ///
+        /// Sorting on every batch is what made the list impossible to read
+        /// while it filled: a row the player was reaching for kept moving as
+        /// servers arrived and the order was recomputed underneath them. New
+        /// arrivals now go on the end, so everything already on screen keeps
+        /// its position, and the player re-sorts when they are ready with
+        /// RESORT LIST or a column header.
+        /// </summary>
+        private bool _appendWhileLoading;
+
+        private string _modsShownFor;
+        private DateTime _modsShownAt;
+
         private readonly Dictionary<string, ServerRules> _modCache =
             new Dictionary<string, ServerRules>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _modLoading =
@@ -454,6 +522,9 @@ namespace BeautifulPotatoExpLauncher
 
             BuildUi();
 
+            // Every clickable thing gets the hand cursor; see UiCursors.
+            UiCursors.ApplyTo(this);
+
             _pollTimer.Interval = InternetPollMs;
             _pollTimer.Tick += OnPoll;
 
@@ -463,8 +534,22 @@ namespace BeautifulPotatoExpLauncher
             _typeTimer.Interval = 220;
             _typeTimer.Tick += (s, e) => { _typeTimer.Stop(); ApplyFilters(); };
 
+            _autoSearchTimer.Interval = AutoSearchAfterMs;
+            _autoSearchTimer.Tick += (s, e) => { _autoSearchTimer.Stop(); RunSteamSearch(false); };
+
+            // Selecting a row asks the SERVER for its mod list, which is a
+            // network round trip. While a player is typing the selection moves
+            // with every redraw, so firing that immediately meant a query per
+            // keystroke and an input box that lagged behind the keyboard. The
+            // mod panel now waits until typing has stopped.
+            _modsDelay.Interval = ModsAfterTypingMs;
+            _modsDelay.Tick += (s, e) => { _modsDelay.Stop(); _typing = false; ShowMods(); };
+
             _modRecheck.Interval = 2500;
-            _modRecheck.Tick += (s, e) => { _modRecheck.Stop(); ShowMods(); };
+            // After Repair / Sub / Remove the STATUS of each mod has changed on
+            // disk, but the server's list has not - so the rows are rebuilt from
+            // what was already fetched rather than querying the server again.
+            _modRecheck.Tick += (s, e) => { _modRecheck.Stop(); RepopulateModsFromCache(); };
 
             _resortTimer.Interval = 1800;
             _resortTimer.Tick += (s, e) =>
@@ -503,7 +588,7 @@ namespace BeautifulPotatoExpLauncher
 
             var donate = new Button
             {
-                Text = "Ã¢â„¢Â¥  Donate",
+                Text = "♥ Donate",
                 Dock = DockStyle.Right,
                 Width = 110,
                 FlatStyle = FlatStyle.Flat,
@@ -545,7 +630,7 @@ namespace BeautifulPotatoExpLauncher
             top.Controls.SetChildIndex(searchRow, 0);
             top.Controls.SetChildIndex(tabBar, 1);
 
-            var topRight = new Panel { Dock = DockStyle.Right, Width = 200, BackColor = Ink };
+            var topRight = new Panel { Dock = DockStyle.Right, Width = 0, BackColor = Ink };
             searchRow.Controls.Add(topRight);
 
             var searchArea = new Panel { Dock = DockStyle.Fill, BackColor = Ink };
@@ -592,6 +677,7 @@ namespace BeautifulPotatoExpLauncher
                 BackColor = Panel2,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
+                Tag = "clickable",
                 Visible = false
             };
             _searchClear.Click += (s, e) =>
@@ -628,29 +714,39 @@ namespace BeautifulPotatoExpLauncher
             searchArea.Controls.Add(_searchHint);
             _searchHint.BringToFront();
 
-            EventHandler layoutSearch = (s, e) =>
-            {
-                const int MaxSearchWidth = 420;
-                int w = Math.Min(Math.Max(60, searchArea.ClientSize.Width - 20), MaxSearchWidth);
-                _search.Bounds = new Rectangle(10, 4, w, 23);
-                _searchHint.Bounds = new Rectangle(11, 5, w - 2, 21);
-                _searchClear.Bounds = new Rectangle(10 + w - 22, 6, 18, 19);
-                _searchClear.BringToFront();
-            };
-            searchArea.Resize += layoutSearch;
-            searchArea.HandleCreated += layoutSearch;
-
             _filterToggle = MakeBtn("FILTERS", new Rectangle(4, 4, 92, 25), Panel2);
             _filterToggle.Click += (s, e) =>
             {
                 _filterPanel.Visible = !_filterPanel.Visible;
                 Log("Filter panel " + (_filterPanel.Visible ? "shown." : "hidden."));
             };
-            topRight.Controls.Add(_filterToggle);
+            searchArea.Controls.Add(_filterToggle);
 
             var apply = MakeBtn("SEARCH", new Rectangle(102, 4, 92, 25), Color.FromArgb(60, 95, 60));
-            apply.Click += (s, e) => ApplyFilters();
-            topRight.Controls.Add(apply);
+            apply.Click += (s, e) => RunSteamSearch(true);
+            searchArea.Controls.Add(apply);
+
+            EventHandler layoutSearch = (s, e) =>
+            {
+                const int MaxSearchWidth = 470;
+                const int ButtonGroupWidth = 200;
+                const int Gap = 10;
+                int textWidth = Math.Min(Math.Max(240, searchArea.ClientSize.Width - ButtonGroupWidth - Gap - 20), MaxSearchWidth);
+                int startX = 10;
+                int buttonX = startX + textWidth + Gap;
+
+                _search.Bounds = new Rectangle(startX, 4, textWidth, 23);
+                _searchHint.Bounds = new Rectangle(startX + 1, 5, textWidth - 2, 21);
+                _searchClear.Bounds = new Rectangle(startX + textWidth - 22, 6, 18, 19);
+                _filterToggle.Bounds = new Rectangle(buttonX, 4, 92, 25);
+                apply.Bounds = new Rectangle(buttonX + 92 + 8, 4, 92, 25);
+                _searchClear.BringToFront();
+                _searchHint.BringToFront();
+                _filterToggle.BringToFront();
+                apply.BringToFront();
+            };
+            searchArea.Resize += layoutSearch;
+            searchArea.HandleCreated += layoutSearch;
 
             _filterPanel = BuildFilterPanel();
             main.Controls.Add(_filterPanel);
@@ -671,8 +767,19 @@ namespace BeautifulPotatoExpLauncher
             _list.ColumnClick += OnColumnClick;
             _list.SelectedIndexChanged += (s, e) =>
             {
+                // Selection churn from rebuilding the list is not the player
+                // choosing a different server; SetRows settles it afterwards.
+                if (_rebuildingList) return;
+
                 var r = SelectedRow;
                 _selectedEndpoint = r != null ? r.Endpoint : null;
+
+                // Filtering rebuilds the list, which moves the selection, which
+                // lands here - so while the player is typing this fires on every
+                // keystroke, and each call queries a server over the network.
+                // That is what made the search box lag behind the keyboard. Hold
+                // the mod panel until typing has stopped.
+                if (_typing) { _modsDelay.Stop(); _modsDelay.Start(); return; }
                 ShowMods();
             };
             _list.Columns.Add("", 26, HorizontalAlignment.Center);
@@ -685,6 +792,7 @@ namespace BeautifulPotatoExpLauncher
             _list.Columns.Add("Time", 54, HorizontalAlignment.Center);
             _list.Columns.Add("Ping", 56, HorizontalAlignment.Center);
             _list.Columns.Add("Mods", 48, HorizontalAlignment.Center);
+            _list.Columns.Add("Password", 66, HorizontalAlignment.Center);
             _list.Columns.Add("Address", 132);
             _list.DoubleClick += OnConnect;
             _list.MouseClick += OnListClick;
@@ -869,10 +977,22 @@ namespace BeautifulPotatoExpLauncher
             rail.Controls.Add(_refresh);
             ry += 34;
 
-            _favBtn = MakeBtn("ADD TO FAVOURITES", new Rectangle(20, ry, 170, 26), Panel2);
+            var resort = MakeBtn("RESORT LIST", new Rectangle(20, ry, 170, 26), Panel2);
+            resort.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+            resort.Click += (s, e) => ResortNow();
+            rail.Controls.Add(resort);
+            ry += 30;
+
+            _favBtn = MakeBtn("ADD TO FAVORITES", new Rectangle(20, ry, 170, 26), Panel2);
             _favBtn.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
             _favBtn.Click += OnToggleFavourite;
             rail.Controls.Add(_favBtn);
+            ry += 30;
+
+            var modMgr = MakeBtn("MOD MANAGER", new Rectangle(20, ry, 170, 26), Panel2);
+            modMgr.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+            modMgr.Click += OnModManager;
+            rail.Controls.Add(modMgr);
             ry += 30;
 
             var direct = MakeBtn("DIRECT CONNECT", new Rectangle(20, ry, 170, 28),
@@ -926,6 +1046,7 @@ namespace BeautifulPotatoExpLauncher
                     ForeColor = Color.FromArgb(150, 150, 158),
                     TextAlign = ContentAlignment.MiddleCenter,
                     Cursor = Cursors.Hand,
+                Tag = "clickable",
                     Visible = false
                 };
                 clear.Click += (s2, e2) => { b.Text = ""; b.Focus(); QueueFilter(); };
@@ -980,10 +1101,10 @@ namespace BeautifulPotatoExpLauncher
 
             var tipFake = new ToolTip();
             tipFake.SetToolTip(_chkHideFakes,
-                "Hides servers claiming more than " + BrowserFilters.MaxRealSlots +
-                " slots (DayZ cannot do that), and addresses running " +
+                "Hides servers claiming more than " + MaxRealisticSlots +
+                " slots (DayZ limits effective capacity to ~120), and addresses running " +
                 BrowserFilters.FarmServersPerIp + "+ servers under " +
-                BrowserFilters.FarmNamesPerIp + "+ different names - redirect farms.");
+                BrowserFilters.FarmNamesPerIp + "+ different names or identical mod arrays - redirect farms.");
 
             _chkNoPass.CheckedChanged    += (s2, e2) => QueueFilter();
             _chkHideFull.CheckedChanged  += (s2, e2) => QueueFilter();
@@ -1149,7 +1270,7 @@ namespace BeautifulPotatoExpLauncher
                 case Tab.Recent: return "RECENT";
                 case Tab.Friends: return "FRIENDS";
                 case Tab.Lan: return "LAN";
-                case Tab.Favourites: return "FAVOURITES";
+                case Tab.Favourites: return "FAVORITES";
                 case Tab.Official: return "OFFICIAL";
                 default: return "COMMUNITY";
             }
@@ -1288,6 +1409,7 @@ namespace BeautifulPotatoExpLauncher
                 row.Ping = info.PingMs;
                 row.AppId = info.AppId;
                 row.Tags = info.Keywords;
+                row.Password = info.Password;
             }
             else
             {
@@ -1297,6 +1419,9 @@ namespace BeautifulPotatoExpLauncher
 
         private void OnColumnClick(object sender, ColumnClickEventArgs e)
         {
+            // Asking for a sort turns off append mode: the player has said what
+            // order they want, so arrivals stop being pinned to the end.
+            _appendWhileLoading = false;
             if (e.Column == ColRefresh || e.Column == ColStar) return;
 
             if (_sortColumn == e.Column) _sortAscending = !_sortAscending;
@@ -1320,6 +1445,69 @@ namespace BeautifulPotatoExpLauncher
             }
         }
 
+        /// <summary>
+        /// The Players cell: "40 / 40" normally, "40 / 40 (8)" when eight are
+        /// queued. The queue is only shown when there IS one - a "(0)" on every
+        /// row would be noise on a column players scan quickly.
+        /// </summary>
+        private static string PlayersCell(Row row)
+        {
+            if (row.MaxPlayers <= 0) return "";
+            string cell = row.Players + " / " + row.MaxPlayers;
+            int q = row.Queue;
+            return q > 0 ? cell + " (" + q + ")" : cell;
+        }
+
+        /// <summary>
+        /// Returns the rows in the order they are ALREADY displayed, with any
+        /// server not previously shown appended in the order it arrived.
+        /// </summary>
+        /// <summary>
+        /// A server left on its out-of-the-box name. DayZ ships "EXAMPLE NAME"
+        /// and hosting panels leave their own placeholders behind, so a few
+        /// obvious ones are treated the same way.
+        /// </summary>
+        private static bool Unconfigured(Row r)
+        {
+            if (r == null || string.IsNullOrWhiteSpace(r.Name)) return true;
+            string n = r.Name.Trim();
+            return n.Equals("EXAMPLE NAME", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("DayZ", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("nitrado.net gameserver", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("Server Name", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private List<Row> KeepOrderThenAppend(List<Row> rows)
+        {
+            var byEndpoint = new Dictionary<string, Row>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in rows) byEndpoint[r.Endpoint] = r;
+
+            var ordered = new List<Row>(rows.Count);
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var existing in _rows)
+            {
+                Row fresh;
+                if (!byEndpoint.TryGetValue(existing.Endpoint, out fresh)) continue;  // filtered out now
+                ordered.Add(fresh);
+                used.Add(existing.Endpoint);
+            }
+            foreach (var r in rows)
+                if (!used.Contains(r.Endpoint)) ordered.Add(r);
+
+            return ordered;
+        }
+
+        /// <summary>Re-sorts what is on screen using the last chosen column.</summary>
+        private void ResortNow()
+        {
+            if (_rows == null || _rows.Count == 0) return;
+            var rows = new List<Row>(_rows);
+            SortRows(rows);
+            SetRows(rows, _selectedEndpoint);
+            _status.Text = string.Format("Re-sorted {0} servers.", rows.Count);
+        }
+
         private void SortRows(List<Row> rows)
         {
             Comparison<Row> byColumn;
@@ -1338,7 +1526,13 @@ namespace BeautifulPotatoExpLauncher
                     byColumn = (a, b) => string.Compare(a.Map, b.Map, StringComparison.OrdinalIgnoreCase);
                     break;
                 case ColPlayers:
-                    byColumn = (a, b) => a.Players.CompareTo(b.Players);
+                    // A queue means the server is full and MORE people want in,
+                    // so it sorts above an equally full server with none.
+                    byColumn = (a, b) =>
+                    {
+                        int c = a.Players.CompareTo(b.Players);
+                        return c != 0 ? c : a.Queue.CompareTo(b.Queue);
+                    };
                     break;
                 case ColTime:
                     byColumn = (a, b) => string.Compare(TagTime(a.Tags), TagTime(b.Tags), StringComparison.Ordinal);
@@ -1348,6 +1542,9 @@ namespace BeautifulPotatoExpLauncher
                     break;
                 case ColMods:
                     byColumn = (a, b) => HasTag(a.Tags, "mod").CompareTo(HasTag(b.Tags, "mod"));
+                    break;
+                case ColPassword:
+                    byColumn = (a, b) => a.Password.CompareTo(b.Password);
                     break;
                 case ColAddress:
                     byColumn = (a, b) => string.Compare(a.Endpoint, b.Endpoint, StringComparison.OrdinalIgnoreCase);
@@ -1359,6 +1556,12 @@ namespace BeautifulPotatoExpLauncher
 
             rows.Sort((x, y) =>
             {
+                // Servers still carrying the stock name have never been
+                // configured - nobody is looking for one, so they go last
+                // whatever else the sort says.
+                int unconfigured = (Unconfigured(x) ? 1 : 0) - (Unconfigured(y) ? 1 : 0);
+                if (unconfigured != 0) return unconfigured;
+
                 int fav = (y.Favourite ? 1 : 0) - (x.Favourite ? 1 : 0);
                 if (fav != 0) return fav;
 
@@ -1419,15 +1622,16 @@ namespace BeautifulPotatoExpLauncher
                 row.GameLabel,
                 row.StatusText,
                 row.Map,
-                row.MaxPlayers > 0 ? row.Players + " / " + row.MaxPlayers : "",
+                PlayersCell(row),
                 TagTime(row.Tags),
                 row.Ping > 0 ? row.Ping + " ms" : (row.Offline ? "-" : ""),
                 HasTag(row.Tags, "mod") ? "yes" : "",
+                row.Password ? "Yes" : "No",
                 row.Endpoint
             })
             {
                 UseItemStyleForSubItems = false,
-                ToolTipText = "Arrow re-checks this server; star saves it to Favourites"
+                ToolTipText = "Arrow re-checks this server; star saves it to Favorites"
             };
 
             Color body = row.Offline ? RowOffline : RowNormal;
@@ -1440,6 +1644,8 @@ namespace BeautifulPotatoExpLauncher
                 row.AppId == A2S.ExperimentalAppId ? Color.FromArgb(255, 170, 80)
                 : row.AppId == A2S.StableAppId ? Color.FromArgb(110, 220, 140)
                 : body;
+            it.SubItems[ColPassword].ForeColor = row.Password
+                ? Color.FromArgb(225, 175, 90) : Color.FromArgb(110, 110, 118);
             it.SubItems[ColStatus].ForeColor =
                 !row.Online.HasValue ? Color.FromArgb(120, 120, 128)
                 : row.Online.Value ? StatusOn : StatusOff;
@@ -1455,6 +1661,7 @@ namespace BeautifulPotatoExpLauncher
             _rowIndex.Clear();
             for (int i = 0; i < rows.Count; i++) _rowIndex[rows[i].Endpoint] = i;
 
+            _rebuildingList = true;
             _list.BeginUpdate();
             try
             {
@@ -1473,7 +1680,18 @@ namespace BeautifulPotatoExpLauncher
                 }
             }
             catch { }
-            finally { _list.EndUpdate(); }
+            finally
+            {
+                _list.EndUpdate();
+                _rebuildingList = false;
+            }
+
+            // Now decide ONCE whether anything really changed. If the same
+            // server is still selected, the mod panel is already correct and is
+            // left completely alone - no clear, no re-query, no flicker.
+            var current = SelectedRow;
+            _selectedEndpoint = current != null ? current.Endpoint : null;
+            if (_selectedEndpoint != _modsShownFor) ShowMods();
 
             _lastTopIndex = -1;
             _visTimer.Start();
@@ -1563,6 +1781,7 @@ namespace BeautifulPotatoExpLauncher
                 _status.Text = "Steam refused the server list request.";
                 return;
             }
+            _appendWhileLoading = true;
             _pollApp = app;
             _pollTicks = 0;
             _stableTicks = 0;
@@ -1659,6 +1878,7 @@ namespace BeautifulPotatoExpLauncher
             }
 
             _pollTimer.Stop();
+            _appendWhileLoading = false;
             Log("Master list cached: " + combined.Count
                 + " servers. Searching now filters this list instantly.");
 
@@ -1708,7 +1928,7 @@ namespace BeautifulPotatoExpLauncher
                     Name = srv.Name, Map = srv.Map, Host = srv.Host, Port = srv.Port,
                     QueryPort = srv.QueryPort,
                     Players = srv.Players, MaxPlayers = srv.MaxPlayers, Ping = srv.Ping,
-                    AppId = srv.AppId, Tags = srv.Tags,
+                    AppId = srv.AppId, Tags = srv.Tags, Password = srv.Password,
                     Favourite = _favourites.Contains(srv.Endpoint)
                 };
 
@@ -1722,14 +1942,110 @@ namespace BeautifulPotatoExpLauncher
             return rows.Count;
         }
 
+        private static string ModSignature(ServerRules rules)
+        {
+            if (rules == null || rules.Mods == null || rules.Mods.Count == 0) return null;
+
+            var ids = rules.Mods
+                .Where(m => m != null && m.WorkshopId != 0)
+                .Select(m => m.WorkshopId.ToString())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return ids.Length == 0 ? null : string.Join("|", ids);
+        }
+
+        private static bool LooksBranded(IEnumerable<string> names)
+        {
+            var entries = (names ?? Enumerable.Empty<string>())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Select(n => Regex.Replace(n, @"[^A-Za-z0-9]+", " ").Trim())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Select(n => Regex.Replace(n, @"\s+", " ").Trim())
+                .ToList();
+
+            if (entries.Count < 2) return false;
+
+            var exactCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
+                exactCounts[entry] = exactCounts.TryGetValue(entry, out var count) ? count + 1 : 1;
+
+            foreach (var kv in exactCounts)
+            {
+                if (kv.Value >= 2)
+                    return true;
+            }
+
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
+            {
+                foreach (var part in entry.Split((char[])null, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string token = part.Trim();
+                    if (token.Length < 4) continue;
+                    if (token.Equals("server", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("servers", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("chernarus", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("dayz", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("pvp", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("pve", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("vanilla", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("mod", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("mods", StringComparison.OrdinalIgnoreCase) ||
+                        token.Equals("bases", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    counts[token] = counts.TryGetValue(token, out var count) ? count + 1 : 1;
+                }
+            }
+
+            foreach (var kv in counts)
+            {
+                if (kv.Value >= Math.Max(2, entries.Count / 2)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The (address, name) pairs where one address runs the same name too
+        /// many times over. Keyed host + NUL + name so the two cannot run
+        /// together into a false match.
+        /// </summary>
+        private readonly HashSet<string> _farmGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static string GroupKey(string host, string name)
+        {
+            return (host ?? "") + "\u0000" + (name ?? "").Trim();
+        }
+
         private void RecomputeFarms(List<BrowserServer> cache)
         {
             _farmIps.Clear();
+            _farmGroups.Clear();
+
+            // One address, the same name over and over. Counted FIRST, because
+            // every rule below collapses names into a set and therefore cannot
+            // see a repeat at all - twenty identical names look like one.
+            var sameName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var srv in cache)
+            {
+                if (srv == null || string.IsNullOrEmpty(srv.Host) || string.IsNullOrWhiteSpace(srv.Name))
+                    continue;
+                string gk = GroupKey(srv.Host, srv.Name);
+                int c;
+                sameName.TryGetValue(gk, out c);
+                sameName[gk] = c + 1;
+            }
+            foreach (var kv in sameName)
+                if (kv.Value >= BrowserFilters.FarmSameNamePerIp) _farmGroups.Add(kv.Key);
             _farmSubnets.Clear();
             if (cache.Count == 0) return;
 
             var names = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var ipsNearFull = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var ipsModSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var s in cache)
             {
@@ -1746,18 +2062,62 @@ namespace BeautifulPotatoExpLauncher
                     names[s.Host] = set;
                 }
                 if (!string.IsNullOrEmpty(s.Name)) set.Add(s.Name);
+
+                ServerRules rules;
+                lock (_modLock)
+                {
+                    _modCache.TryGetValue(s.Endpoint, out rules);
+                }
+
+                if (rules != null)
+                {
+                    string sig = ModSignature(rules);
+                    if (!string.IsNullOrEmpty(sig))
+                    {
+                        HashSet<string> mods;
+                        if (!ipsModSets.TryGetValue(s.Host, out mods))
+                        {
+                            mods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            ipsModSets[s.Host] = mods;
+                        }
+                        mods.Add(sig);
+                    }
+                }
+
+                if (s.MaxPlayers > MaxRealisticSlots)
+                {
+                    int nearFull;
+                    ipsNearFull.TryGetValue(s.Host, out nearFull);
+                    ipsNearFull[s.Host] = nearFull + 1;
+                }
             }
 
             foreach (var kv in counts)
             {
-                if (kv.Value < BrowserFilters.FarmServersPerIp) continue;
-                if (names[kv.Key].Count < BrowserFilters.FarmNamesPerIp) continue;
-                _farmIps.Add(kv.Key);
+                bool branded = LooksBranded(names[kv.Key]);
+                bool sameModSet = ipsModSets.TryGetValue(kv.Key, out var mods) && mods.Count >= 2 && names[kv.Key].Count >= 4 && kv.Value >= 4;
+
+                if (!branded && sameModSet)
+                {
+                    _farmIps.Add(kv.Key);
+                    continue;
+                }
+
+                if (!branded && kv.Value >= BrowserFilters.FarmServersPerIp && names[kv.Key].Count >= BrowserFilters.FarmNamesPerIp)
+                {
+                    _farmIps.Add(kv.Key);
+                    continue;
+                }
+
+                if (!branded && ipsNearFull.TryGetValue(kv.Key, out var nearFull) && nearFull >= 4 && names[kv.Key].Count >= 4)
+                    _farmIps.Add(kv.Key);
             }
 
             var netCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var netAddrs = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             var netNames = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var netNearFull = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var netModSets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var s in cache)
             {
@@ -1783,23 +2143,70 @@ namespace BeautifulPotatoExpLauncher
                     netNames[net] = nm;
                 }
                 if (!string.IsNullOrEmpty(s.Name)) nm.Add(s.Name);
+
+                ServerRules rules;
+                lock (_modLock)
+                {
+                    _modCache.TryGetValue(s.Endpoint, out rules);
+                }
+
+                if (rules != null)
+                {
+                    string sig = ModSignature(rules);
+                    if (!string.IsNullOrEmpty(sig))
+                    {
+                        HashSet<string> mods;
+                        if (!netModSets.TryGetValue(net, out mods))
+                        {
+                            mods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            netModSets[net] = mods;
+                        }
+                        mods.Add(sig);
+                    }
+                }
+
+                if (s.MaxPlayers > MaxRealisticSlots)
+                {
+                    int nearFull;
+                    netNearFull.TryGetValue(net, out nearFull);
+                    netNearFull[net] = nearFull + 1;
+                }
             }
 
             foreach (var kv in netCount)
             {
-                if (kv.Value < BrowserFilters.FarmServersPerSubnet) continue;
-                if (netNames[kv.Key].Count < BrowserFilters.FarmNamesPerSubnet) continue;
+                bool branded = LooksBranded(netNames[kv.Key]);
+                bool sameModSet = netModSets.TryGetValue(kv.Key, out var mods) && mods.Count >= 2 && netNames[kv.Key].Count >= 6 && kv.Value >= 12;
 
-                double perAddress = kv.Value / (double)Math.Max(1, netAddrs[kv.Key].Count);
-                if (perAddress < BrowserFilters.FarmServersPerAddress) continue;
+                if (!branded && sameModSet)
+                {
+                    _farmSubnets.Add(kv.Key);
+                    continue;
+                }
 
-                _farmSubnets.Add(kv.Key);
+                if (!branded && kv.Value >= BrowserFilters.FarmServersPerSubnet &&
+                    netNames[kv.Key].Count >= BrowserFilters.FarmNamesPerSubnet)
+                {
+                    double perAddress = kv.Value / (double)Math.Max(1, netAddrs[kv.Key].Count);
+                    if (perAddress >= BrowserFilters.FarmServersPerAddress)
+                    {
+                        _farmSubnets.Add(kv.Key);
+                        continue;
+                    }
+                }
+
+                if (!branded && netNearFull.TryGetValue(kv.Key, out var nearFull) && nearFull >= 5 &&
+                    netNames[kv.Key].Count >= 6 && kv.Value >= 12)
+                {
+                    _farmSubnets.Add(kv.Key);
+                }
             }
 
             foreach (string ok in _allowed)
             {
                 _farmIps.Remove(ok);
                 _farmSubnets.Remove(ok);
+                _farmGroups.RemoveWhere(g => g.StartsWith(ok + "\u0000", StringComparison.OrdinalIgnoreCase));
             }
         }
 
@@ -1812,12 +2219,16 @@ namespace BeautifulPotatoExpLauncher
             if (_allowed.Contains(s.Host) ||
                 _allowed.Contains(BrowserFilters.Subnet24(s.Host))) return null;
 
-            if (s.MaxPlayers > BrowserFilters.MaxRealSlots)
-                return "claims " + s.MaxPlayers + " slots (DayZ maximum is "
-                     + BrowserFilters.MaxRealSlots + ")";
+            if (s.MaxPlayers > MaxRealisticSlots)
+                return "claims " + s.MaxPlayers + " slots (DayZ maximum realistic capacity is "
+                     + MaxRealisticSlots + ")";
+
+            if (_farmGroups.Contains(GroupKey(s.Host, s.Name)))
+                return "address " + s.Host + " runs " + BrowserFilters.FarmSameNamePerIp
+                     + "+ servers under this exact name";
 
             if (_farmIps.Contains(s.Host))
-                return "address " + s.Host + " runs many servers under many names";
+                return "address " + s.Host + " runs many servers under many names or identical mod arrays";
 
             string net = BrowserFilters.Subnet24(s.Host);
             if (_farmSubnets.Contains(net))
@@ -1965,7 +2376,7 @@ namespace BeautifulPotatoExpLauncher
         private void OnSettings(object sender, EventArgs e)
         {
             bool hide;
-            bool changed = SettingsDialog.Show(this, Flagged, _allowed, _filters.HideFakes, out hide);
+            bool changed = SettingsDialog.Show(this, Flagged, _allowed, _filters.HideFakes, out hide, FindSteam());
             if (!changed) return;
 
             _filters.HideFakes = hide;
@@ -2031,9 +2442,6 @@ namespace BeautifulPotatoExpLauncher
         {
             string search = _search != null ? _search.Text.Trim() : "";
 
-            // The top search box normally searches server names, but pasted
-            // endpoints are address filters so Steam can be asked for that exact
-            // game address instead of searching a capped local cache.
             if (BrowserFilters.LooksLikeAddressSearch(search))
             {
                 _filters.Name = _fName != null ? _fName.Text.Trim() : "";
@@ -2083,414 +2491,294 @@ namespace BeautifulPotatoExpLauncher
             _typeTimer.Start();
         }
 
+        /// <summary>How long after the last keystroke the one-shot search runs.</summary>
+        private const int AutoSearchAfterMs = 5000;
+
+        /// <summary>
+        /// How long after the last keystroke the mod panel is allowed to
+        /// refresh. Selecting a row queries the server for its mods, so doing it
+        /// per keystroke is what made typing feel heavy.
+        /// </summary>
+        private const int ModsAfterTypingMs = 2000;
+
+        private readonly System.Windows.Forms.Timer _modsDelay = new System.Windows.Forms.Timer();
+
+        /// <summary>True while the player is still typing in the search box.</summary>
+        private bool _typing;
+
+        private readonly System.Windows.Forms.Timer _autoSearchTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>The last text actually sent to Steam, so it is never sent twice.</summary>
+        private string _lastSteamSearch = "\u0000";
+
+        /// <summary>
+        /// Draws the current filters over the CACHED list. No network, ever.
+        ///
+        /// This used to compare the Steam filter key and force a full master
+        /// list re-fetch whenever it changed. The search box feeds name_match
+        /// into that key, so every single keystroke started another download of
+        /// ten thousand servers - which is what made the app feel like it was
+        /// dragging, and is a fine way to get rate limited. Searching now reads
+        /// the cache and nothing else; RunSteamSearch is the only way to the
+        /// network, and it runs once.
+        /// </summary>
         private void ApplyFilters()
         {
+            _typeTimer.Stop();
             ReadFilterUi();
-            if (IsSteamTab(_tab))
-            {
-                var nextFilters = KindFor(_tab) == ListKind.Internet
-                                ? _filters.ToSteamFilters()
-                                : new List<KeyValuePair<string, string>>();
-                string nextKey = SteamFilterKey(nextFilters);
-                if (nextKey != _lastSteamFilterKey)
-                {
-                    RefreshCurrent(true);
-                    return;
-                }
 
-                RenderFromCache();
-            }
+            if (IsSteamTab(_tab)) RenderFromCache();
             else RefreshMine();
         }
 
-        private static string SteamFilterKey(IEnumerable<KeyValuePair<string, string>> filters)
+        /// <summary>
+        /// Runs ONE narrowed query against Steam for whatever is in the search
+        /// box, and folds the result into the cached list.
+        ///
+        /// It exists because Steam caps a list at 10,000 servers and DayZ has
+        /// more than that - measured: the raw count reaches exactly 10,000 in
+        /// about a second and never moves again, however long it is polled. A
+        /// server the player is hunting for may simply not be in the copy on
+        /// hand. Sending the name as a filter asks Steam a NARROWER question,
+        /// and that answer can contain servers the cap left out.
+        ///
+        /// <paramref name="fromButton"/> only changes what the log says.
+        /// </summary>
+        private void RunSteamSearch(bool fromButton)
         {
-            return string.Join("\u001F", (filters ?? new KeyValuePair<string, string>[0])
-                .Select(f => f.Key + "=" + f.Value).ToArray());
-        }
+            _autoSearchTimer.Stop();
+            ReadFilterUi();
 
-        // ---------------------------------------------- connection & launch ----
-        private void OnConnect(object sender, EventArgs e)
-        {
-            var r = SelectedRow;
-            if (r == null) return;
-            LaunchGame(r);
-        }
+            if (!IsSteamTab(_tab)) { RefreshMine(); return; }
 
-        private void OnDirectConnect(object sender, EventArgs e)
-        {
-            string host;
-            int port;
-            bool save;
-            if (!DirectConnectDialog.Show(this, out host, out port, out save)) return;
+            // Show what the cache already has, immediately.
+            RenderFromCache();
 
-            var r = new Row { Host = host, Port = port, Name = host + ":" + port };
-            if (save)
+            string text = _search.Text.Trim();
+            if (text.Length == 0) return;
+
+            if (string.Equals(text, _lastSteamSearch, StringComparison.OrdinalIgnoreCase))
             {
-                _favourites.Add(r.Endpoint);
-                ServerStore.RememberName(r.Endpoint, r.Name);
-                ServerStore.SaveFavourites(_favourites);
-                Log("Saved " + r.Endpoint + " to Favourites.");
-            }
-            LaunchGame(r);
-        }
-
-        private void LaunchGame(Row row)
-        {
-            if (row == null) return;
-            string playerName = _name.Text.Trim();
-            if (!string.IsNullOrEmpty(playerName)) ServerStore.SaveName(playerName);
-
-            string steam = FindSteam();
-            if (string.IsNullOrEmpty(steam))
-            {
-                MessageBox.Show("Steam installation directory could not be located.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (fromButton) Log("Already searched Steam for \"" + text + "\".");
                 return;
             }
 
-            ulong appId = row.AppId;
-            if (appId != A2S.StableAppId && appId != A2S.ExperimentalAppId)
+            if (_pollTimer.Enabled)
             {
-                int queryPort = row.EffectiveQueryPort > 0 ? row.EffectiveQueryPort : A2S.QueryPort(row.Port);
-                try
-                {
-                    Log("Querying server on port " + queryPort + " for AppID...");
-                    var live = A2S.GetInfoAt(row.Host, queryPort, 2000);
-                    if (live != null && (live.AppId == A2S.StableAppId || live.AppId == A2S.ExperimentalAppId))
-                    {
-                        appId = live.AppId;
-                        row.AppId = appId;
-                    }
-                }
-                catch { }
-
-                if (appId != A2S.StableAppId && appId != A2S.ExperimentalAppId)
-                {
-                    appId = (EffectiveBrowseMode == "exp") ? A2S.ExperimentalAppId : A2S.StableAppId;
-                }
-            }
-
-            string gameDir = FindGameDir(steam, appId);
-            if (string.IsNullOrEmpty(gameDir) && row.AppId != A2S.StableAppId && row.AppId != A2S.ExperimentalAppId)
-            {
-                ulong fallbackId = (appId == A2S.StableAppId) ? A2S.ExperimentalAppId : A2S.StableAppId;
-                string fallbackDir = FindGameDir(steam, fallbackId);
-                if (!string.IsNullOrEmpty(fallbackDir))
-                {
-                    appId = fallbackId;
-                    gameDir = fallbackDir;
-                }
-            }
-
-            if (string.IsNullOrEmpty(gameDir))
-            {
-                string gameName = (appId == A2S.ExperimentalAppId) ? "DayZ Experimental" : "DayZ";
-                MessageBox.Show(gameName + " directory not found for AppID " + appId + ".\nPlease ensure the game is installed in Steam.", "Game Not Found", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Log("A server query is already running - not starting another.");
                 return;
             }
 
-            string bePath = Path.Combine(gameDir, BeExe);
-            if (!File.Exists(bePath))
-            {
-                MessageBox.Show("BattlEye launcher (" + BeExe + ") not found in:\n" + gameDir, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            try
-            {
-                string txtPath = Path.Combine(gameDir, "steam_appid.txt");
-                if (!File.Exists(txtPath) || File.ReadAllText(txtPath).Trim() != appId.ToString())
-                {
-                    File.WriteAllText(txtPath, appId.ToString());
-                }
-            }
-            catch { }
-
-            var launchMods = BuildLaunchModList(row, steam);
-            string args = BeArgs + " -exe " + GameExe;
-            if (!string.IsNullOrEmpty(playerName)) args += " -name=\"" + playerName + "\"";
-
-            if (launchMods != null && launchMods.Count > 0)
-            {
-                launchMods = OrderLaunchMods(launchMods);
-                string modArg = "\"-mod=" + string.Join(";", launchMods) + "\"";
-                args += " " + modArg;
-                Log("Final launch mod list: " + string.Join("; ", launchMods));
-            }
-            else
-            {
-                Log("Final launch mod list: <none>");
-            }
-
-            args += " -connect=" + row.Host + " -port=" + row.Port;
-            Log("Launching: " + bePath + " " + args);
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = bePath,
-                Arguments = args,
-                WorkingDirectory = gameDir,
-                UseShellExecute = false
-            };
-
-            // THE GAME MUST START UNDER ITS OWN APP ID, NOT THE LAUNCHER'S.
-            // Stable = 221100, Experimental = 1024020.
-            // Because this launcher initialises SteamWorkshop under 221100, SteamAppId=221100
-            // is set in the launcher's environment. Without setting it here, child processes
-            // inherit 221100, causing DayZ Experimental to fail auth tickets against Experimental servers.
-            psi.EnvironmentVariables["SteamAppId"] = appId.ToString();
-            psi.EnvironmentVariables["SteamGameId"] = appId.ToString();
-
-            // Also keep launcher process environment in sync
-            Environment.SetEnvironmentVariable("SteamAppId", appId.ToString());
-            Environment.SetEnvironmentVariable("SteamGameId", appId.ToString());
-
-            Log("SteamAppId for game process: " + appId + " (" + (appId == A2S.ExperimentalAppId ? "Experimental" : "Stable") + ")");
-
-            try
-            {
-                Process.Start(psi);
-                Log("Game process started under AppID " + appId + ".");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Failed to start game:\n" + ex.Message, "Launch Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            _lastSteamSearch = text;
+            Log(fromButton
+                ? "SEARCH pressed - asking Steam for servers matching \"" + text + "\"."
+                : "No SEARCH pressed within " + (AutoSearchAfterMs / 1000)
+                  + "s - asking Steam once for \"" + text + "\".");
+            RefreshCurrent(true);
         }
 
-        private List<string> BuildLaunchModList(Row row, string steam)
+        private static string SteamFilterKey(List<KeyValuePair<string, string>> filters)
         {
-            if (string.IsNullOrEmpty(steam) || row == null) return null;
-
-            try
-            {
-                var ports = new List<int>();
-                if (row.QueryPort > 0 && row.QueryPort < 65535) ports.Add(row.QueryPort);
-                int effective = row.EffectiveQueryPort;
-                if (!ports.Contains(effective)) ports.Add(effective);
-                int fallback = A2S.QueryPort(row.Port);
-                if (!ports.Contains(fallback)) ports.Add(fallback);
-
-                ServerRules rules = null;
-                foreach (int port in ports)
-                {
-                    var candidate = A2S.GetRulesAt(row.Host, port);
-                    if (candidate != null && candidate.Mods.Count > 0)
-                    {
-                        rules = candidate;
-                        break;
-                    }
-                    if (rules == null) rules = candidate;
-                }
-
-                if (rules == null || rules.Mods == null || rules.Mods.Count == 0)
-                    return null;
-
-                SteamWorkshop.CorrectInstalledIds(steam, rules.Mods);
-                var results = new List<string>();
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var mod in rules.Mods.Where(m => m != null))
-                {
-                    if (mod.WorkshopId == 0) continue;
-                    string dir = SteamWorkshop.DayZWorkshopAliasPath(steam, mod.WorkshopId, mod.Name);
-                    if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
-                    if (seen.Add(dir)) results.Add(dir);
-                }
-
-                return OrderLaunchMods(results);
-            }
-            catch (Exception ex)
-            {
-                Log("Could not build launch mod list for " + row.Endpoint + ": " + ex.Message);
-                return null;
-            }
+            if (filters == null || filters.Count == 0) return "";
+            return string.Join("&", filters.Select(f => f.Key + "=" + f.Value).ToArray());
         }
 
-        private static List<string> OrderLaunchMods(IEnumerable<string> mods)
-        {
-            var ordered = (mods ?? Enumerable.Empty<string>()).ToList();
-            if (ordered.Count < 2) return ordered;
-
-            int cfIndex = -1;
-            for (int i = 0; i < ordered.Count; i++)
-            {
-                string name = Path.GetFileName(ordered[i]).TrimStart('@');
-                if (name.StartsWith("CF", StringComparison.OrdinalIgnoreCase) ||
-                    name.IndexOf("Community Framework", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    cfIndex = i;
-                    break;
-                }
-            }
-
-            if (cfIndex <= 0) return ordered;
-
-            string cfPath = ordered[cfIndex];
-            ordered.RemoveAt(cfIndex);
-            ordered.Insert(0, cfPath);
-            return ordered;
-        }
-
-        // ------------------------------------------------ favourites & mods ----
-        private void OnToggleFavourite(object sender, EventArgs e)
-        {
-            ToggleFavourite(SelectedRow);
-        }
-
-        private void ToggleFavourite(Row row)
-        {
-            if (row == null) return;
-
-            if (_favourites.Contains(row.Endpoint))
-            {
-                _favourites.Remove(row.Endpoint);
-                ServerStore.SaveFavourites(_favourites);
-                UpdateFavButton();
-
-                if (_tab == Tab.Favourites) { RefreshMine(); return; }
-            }
-            else
-            {
-                _favourites.Add(row.Endpoint);
-                ServerStore.RememberName(row.Endpoint, row.Name);
-                ServerStore.SaveFavourites(_favourites);
-                UpdateFavButton();
-            }
-
-            if (IsSteamTab(_tab)) { RenderFromCache(); return; }
-            Redraw(row.Endpoint);
-        }
-
-        private void UpdateFavButton()
+        // -------------------------------------------------------- details ----
+        /// <summary>
+        /// Shows the mod list for the selected server.
+        ///
+        /// A server is asked ONCE, when it is first selected. After that the
+        /// panel is left completely alone unless the player picks a different
+        /// server or asks for a refresh - <paramref name="force"/> is the only
+        /// way to make it query again.
+        ///
+        /// The early return below is the important part. Without it, every
+        /// re-render of the server list rebuilt this panel, so the mods
+        /// visibly cleared and reappeared several times a second while pings
+        /// came in.
+        /// </summary>
+        /// <summary>
+        /// Redraws the mod rows from the rules already held, recomputing each
+        /// mod's installed / missing / outdated state. No network.
+        /// </summary>
+        private void RepopulateModsFromCache()
         {
             var row = SelectedRow;
-            _favBtn.Text = row != null && _favourites.Contains(row.Endpoint)
-                         ? "REMOVE FAVOURITE" : "ADD TO FAVOURITES";
+            if (row == null || row.Endpoint != _modsShownFor) return;
+
+            ServerRules rules;
+            lock (_modLock) { _modCache.TryGetValue(row.Endpoint, out rules); }
+            if (rules != null) PopulateMods(row, rules);
         }
 
         private void ShowMods(bool force = false)
         {
-            UpdateFavButton();
             var row = SelectedRow;
-            if (row == null) return;
+            if (row == null)
+            {
+                _modsShownFor = null;
+                _modsHeader.Text = "No server selected";
+                _mods.Items.Clear();
+                _desc.Clear();
+                return;
+            }
 
-            var endpoint = row.Endpoint;
-            ServerRules cached;
+            // Already showing this server, and not being asked to re-check it:
+            // touch nothing at all.
+            if (!force && row.Endpoint == _modsShownFor && _mods.Items.Count > 0)
+                return;
+
+            ServerRules rules;
+            bool loading;
             lock (_modLock)
             {
-                if (!force && _modCache.TryGetValue(endpoint, out cached))
-                {
-                    FillMods(row, cached, FindSteam());
-                    return;
-                }
-                if (_modLoading.Contains(endpoint)) return;
-                _modLoading.Add(endpoint);
+                if (force) _modCache.Remove(row.Endpoint);
+                _modCache.TryGetValue(row.Endpoint, out rules);
+                loading = _modLoading.Contains(row.Endpoint);
             }
 
-            _mods.Items.Clear();
-            _modsHeader.Text = "Content required by server  -  " + endpoint;
-            _mods.Items.Add(new ListViewItem(new[] { "querying server...", "", "" }));
-
-            _desc.Text = "";
-            _descHeader.Text = "  Description";
-
-            var captured = row;
-            new Thread(() =>
+            if (rules != null)
             {
-                ServerRules rules = null;
-                try { rules = QueryModsChecked(captured); }
-                catch (Exception ex)
-                {
-                    Log("Mod query failed for " + captured.Endpoint + ": " + ex.Message);
-                    rules = null;
-                }
+                PopulateMods(row, rules);
+                return;
+            }
 
-                string steam = FindSteam();
-                if (rules != null && rules.Mods.Count > 0)
-                {
-                    try { SteamWorkshop.CorrectInstalledIds(steam, rules.Mods); }
-                    catch { }
-                    try { SteamWorkshop.PrefetchWorkshopTimes(rules.Mods.Select(m => m.WorkshopId), null); }
-                    catch { }
-                }
+            if (!loading)
+            {
+                lock (_modLock) { _modLoading.Add(row.Endpoint); }
+                _modsShownFor = null;
+                _modsHeader.Text = "Querying server rules (" + row.Endpoint + ")...";
+                _mods.Items.Clear();
+                _desc.Clear();
 
-                lock (_modLock)
-                {
-                    _modLoading.Remove(captured.Endpoint);
-                    if (rules != null)
-                        _modCache[captured.Endpoint] = rules;
-                    else
-                        _modCache.Remove(captured.Endpoint);
-                }
-
-                try
-                {
-                    BeginInvoke((Action)(() =>
-                    {
-                        if (SelectedRow == null || SelectedRow.Endpoint != captured.Endpoint)
-                            return;
-                        FillMods(captured, rules, steam);
-                    }));
-                }
-                catch (InvalidOperationException) { }
-            })
-            { IsBackground = true }.Start();
+                ThreadPool.QueueUserWorkItem(_ => FetchRules(row));
+            }
         }
 
-        private void FillMods(Row row, ServerRules rules, string steam)
+        private void FetchRules(Row row)
         {
-            var sel = SelectedRow;
-            if (sel == null || sel.Endpoint != row.Endpoint) return;
-            _mods.Items.Clear();
-
-            ShowDescription(row, rules);
-            var mods = rules == null ? null : rules.Mods;
-
-            if (mods == null)
+            ServerRules rules = null;
+            try
             {
-                _mods.Items.Add(new ListViewItem(new[]
-                { "Could not read the mod list.", "", "server offline or not answering queries" })
-                { ForeColor = Color.FromArgb(200, 150, 150) });
-                return;
+                rules = A2S.GetRulesAt(row.Host, row.EffectiveQueryPort, 1800);
             }
-            if (mods.Count == 0)
+            catch { }
+
+            lock (_modLock)
             {
-                bool tagged = HasTag(row.Tags, "mod");
-                _mods.Items.Add(tagged
-                    ? new ListViewItem(new[]
-                      {
-                          "Could not read this server's mod list",
-                          "",
-                          "the server reports that it IS modded - try Refresh"
-                      })
-                      { ForeColor = Color.FromArgb(220, 150, 150) }
-                    : new ListViewItem(new[] { "No mods required", "", "ready to connect" })
-                      { ForeColor = Good });
-                return;
+                _modLoading.Remove(row.Endpoint);
+                if (rules != null) _modCache[row.Endpoint] = rules;
             }
 
-            if (!rules.Complete)
-                _mods.Items.Add(new ListViewItem(new[]
+            try
+            {
+                BeginInvoke((Action)(() =>
                 {
-                    "(the mod list may be incomplete)", "",
-                    "the server's reply did not end cleanly"
-                })
-                { ForeColor = Color.FromArgb(220, 190, 120) });
-
-            foreach (var m in mods)
-                _mods.Items.Add(MakeModRow(m, steam));
+                    if (SelectedRow != null && SelectedRow.Endpoint == row.Endpoint)
+                        ShowMods();
+                }));
+            }
+            catch { }
         }
 
+        private void PopulateMods(Row row, ServerRules rules)
+        {
+            _mods.BeginUpdate();
+            _mods.Items.Clear();
+            try
+            {
+                int modCount = rules.Mods != null ? rules.Mods.Count : 0;
+                _modsShownFor = row.Endpoint;
+                _modsShownAt = DateTime.Now;
+
+                // Say WHEN this was read. The panel no longer updates itself, so
+                // without a time the player cannot tell whether they are looking
+                // at something current or something from ten minutes ago.
+                _modsHeader.Text = string.Format("Content required by {0} ({1} mods)  -  checked {2:HH:mm:ss}",
+                                                 row.Name, modCount, _modsShownAt);
+
+                if (rules.Mods != null)
+                {
+                    string steamPath = FindSteam();
+                    foreach (var mod in rules.Mods)
+                        _mods.Items.Add(MakeModRow(mod, steamPath));
+                }
+
+                _desc.Clear();
+                if (!string.IsNullOrEmpty(rules.Description))
+                {
+                    _desc.Text = rules.Description;
+                }
+            }
+            finally
+            {
+                _mods.EndUpdate();
+            }
+        }
+
+        /// <summary>A time span in the largest unit that still reads naturally.</summary>
         private static string Age(TimeSpan t)
         {
             if (t.TotalDays >= 365) return string.Format("{0:F1} years", t.TotalDays / 365.0);
-            if (t.TotalDays >= 1) return string.Format("{0:F0} days", t.TotalDays);
-            if (t.TotalHours >= 1) return string.Format("{0:F0} hours", t.TotalHours);
+            if (t.TotalDays >= 1)   return string.Format("{0:F0} days", t.TotalDays);
+            if (t.TotalHours >= 1)  return string.Format("{0:F0} hours", t.TotalHours);
             return string.Format("{0:F0} minutes", t.TotalMinutes);
         }
 
+        /// <summary>
+        /// One mod row: what state it is actually in, plus the four actions.
+        ///
+        /// WHY EVERY SUB-ITEM IS COLOURED SEPARATELY
+        ///   A ListView ignores per-sub-item colours unless
+        ///   UseItemStyleForSubItems is false. Leave it at its default and every
+        ///   ForeColor set below is silently discarded - the rows render in one
+        ///   flat colour and the panel loses every state it was trying to show.
+        ///   That is exactly what happened here: the row builder was replaced by
+        ///   one that set no colours and never cleared the flag, so "installed",
+        ///   "MISSING" and "OUT OF DATE" all looked identical.
+        ///
+        ///   The status is also computed, not taken from a fixed string. Whether
+        ///   a mod is present, broken or behind the workshop is the entire point
+        ///   of the panel.
+        /// </summary>
         private ListViewItem MakeModRow(Mod m, string steam)
         {
+            // A mod the server loaded from its own disk has no workshop id, so
+            // it is matched against the player's library by name. There is
+            // nothing to download and nothing to be out of date against.
+            if (m.IsLocal)
+            {
+                var found = ModIndex.FindLocalByName(m.BareName, steam);
+                var localRow = new ListViewItem(new[]
+                {
+                    m.Name,
+                    "Local",
+                    found != null ? "installed (local)" : "NOT FOUND in your mod folders",
+                    "Repair", "Sub", "Remove", "Info"
+                })
+                {
+                    Tag = m,
+                    UseItemStyleForSubItems = false,
+                    ToolTipText = found != null
+                        ? "Loaded from " + found.Folder
+                        : "This server loads a mod from its own disk. You need a folder called @"
+                          + m.BareName + " in your mod folders."
+                };
+
+                Color lc = found != null ? Good : Color.FromArgb(230, 130, 130);
+                localRow.SubItems[MColName].ForeColor = lc;
+                localRow.SubItems[MColId].ForeColor = Color.FromArgb(150, 150, 158);
+                localRow.SubItems[MColStatus].ForeColor = lc;
+
+                // Repair and Sub mean nothing without a workshop item.
+                var off = Color.FromArgb(90, 90, 96);
+                localRow.SubItems[MColRepair].ForeColor = off;
+                localRow.SubItems[MColSub].ForeColor = off;
+                localRow.SubItems[MColRemove].ForeColor = off;
+                localRow.SubItems[MColInfo].ForeColor = Color.FromArgb(120, 150, 190);
+                return localRow;
+            }
+
             bool have = steam != null && SteamWorkshop.IsInstalled(steam, m.WorkshopId);
             bool broken = !have && steam != null && SteamWorkshop.IsBrokenInstall(steam, m.WorkshopId);
             bool stale = have && SteamWorkshop.NeedsUpdate(steam, m.WorkshopId);
@@ -2502,7 +2790,9 @@ namespace BeautifulPotatoExpLauncher
             else if (stale)
             {
                 TimeSpan behind = steam == null ? TimeSpan.Zero : SteamWorkshop.StaleBy(steam, m.WorkshopId);
-                status = behind > TimeSpan.Zero ? "OUT OF DATE by " + Age(behind) + " - will update" : "OUT OF DATE - will update";
+                status = behind > TimeSpan.Zero
+                    ? "OUT OF DATE by " + Age(behind) + " - will update"
+                    : "OUT OF DATE - will update";
                 colour = Color.FromArgb(225, 175, 90);
             }
             else { status = "installed"; colour = Good; }
@@ -2524,7 +2814,8 @@ namespace BeautifulPotatoExpLauncher
             var link = Color.FromArgb(120, 150, 190);
             it.SubItems[MColRepair].ForeColor = link;
             it.SubItems[MColSub].ForeColor = have ? Color.FromArgb(90, 90, 96) : link;
-            it.SubItems[MColRemove].ForeColor = have ? Color.FromArgb(190, 130, 130) : Color.FromArgb(90, 90, 96);
+            it.SubItems[MColRemove].ForeColor = have ? Color.FromArgb(190, 130, 130)
+                                                     : Color.FromArgb(90, 90, 96);
             it.SubItems[MColInfo].ForeColor = link;
             return it;
         }
@@ -2534,12 +2825,16 @@ namespace BeautifulPotatoExpLauncher
             var hit = _mods.HitTest(e.Location);
             if (hit.Item == null || hit.SubItem == null) return;
 
+            // Mod, NOT ServerMod. ServerRules.Mods is a List<Mod>, so the tag
+            // holds a base Mod - casting to the subclass returned null on every
+            // single click and the whole panel silently did nothing.
             var mod = hit.Item.Tag as Mod;
             if (mod == null) return;
             int col = hit.Item.SubItems.IndexOf(hit.SubItem);
 
             if (col == MColInfo)
             {
+                // Reads local files, so it works even with Steam shut.
                 ModInfoDialog.Show(this, mod, FindSteam());
                 return;
             }
@@ -2558,6 +2853,8 @@ namespace BeautifulPotatoExpLauncher
 
             if (col == MColRepair)
             {
+                // Subscribe first: repairing something unsubscribed would
+                // otherwise ask Steam to download an item it does not own.
                 SteamWorkshop.Subscribe(mod.WorkshopId);
                 SteamWorkshop.ForceDownload(mod.WorkshopId);
                 Log("Repairing " + mod.Name + " (" + mod.WorkshopId + ") - Steam is re-downloading it.");
@@ -2587,7 +2884,374 @@ namespace BeautifulPotatoExpLauncher
             _modRecheck.Start();
         }
 
-        private static ServerRules QueryModsChecked(Row row)
+        // ---------------------------------------------------- connections ----
+        private void OnConnect(object sender, EventArgs e)
+        {
+            var row = SelectedRow;
+            if (row == null) { MessageBox.Show("Pick a server first."); return; }
+
+            _connect.Enabled = false;
+            Cursor = Cursors.WaitCursor;
+            try { Launch(row); }
+            catch (Exception ex)
+            {
+                Log("ERROR: " + ex.Message);
+                MessageBox.Show(ex.Message, "A Beautiful Potato Launcher",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _connect.Enabled = true;
+                Cursor = Cursors.Default;
+            }
+        }
+
+private void Launch(Row srv)
+        {
+            ServerStore.SaveName(_name.Text.Trim());
+
+            if (IsRunning(GameExe))
+            {
+                MessageBox.Show(
+                    "DayZ is already running.\r\n\r\nClose it completely - check Task Manager for " +
+                    "DayZ_x64.exe and DayZ_BE.exe - then try again.\r\n\r\nLaunching on top of a " +
+                    "running game is itself a cause of \"Game restart required\".",
+                    "Close DayZ first", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string steam = FindSteam();
+            if (steam == null) throw new Exception("Could not find Steam.");
+            Log("Steam : " + steam);
+
+            // Ask the server what it runs before choosing an exe. Getting this
+            // wrong means launching Experimental against a stable server, which
+            // simply will not connect.
+            Log("");
+            Log("Asking " + srv.Endpoint + " what it is running...");
+            var live = A2S.GetInfoAt(srv.Host, srv.EffectiveQueryPort, 3000);
+            if (!live.Online)
+                throw new Exception("The server did not answer on query port " +
+                                    A2S.QueryPort(srv.Port) + ".\r\n\r\n" + live.Error);
+            Log("Server: " + live.Name);
+            Log("Build : " + live.GameLabel + " (app " + live.AppId + ")  version " + live.Version);
+
+            string gameDir = FindGameDir(steam, live.AppId);
+            if (gameDir == null)
+            {
+                string[] wanted = live.AppId == A2S.StableAppId ? StableFolders : ExpFolders;
+                throw new Exception("This server runs " + live.GameLabel +
+                                    ", but that build is not installed.\r\n\r\nLooked for: " +
+                                    string.Join(", ", wanted) + "\r\nunder " +
+                                    Path.Combine(steam, "steamapps", "common"));
+            }
+            Log("Game  : " + gameDir);
+
+            Log("");
+            Log("Asking which mods it requires...");
+            // Same re-check as the panel: joining with an unread mod list is a
+            // kick, so a contradicted "no mods" is retried before trusting it.
+            var rulesForLaunch = QueryModsChecked(srv);
+            var mods = rulesForLaunch == null ? null : rulesForLaunch.Mods;
+
+            if (mods != null && mods.Count == 0 && HasTag(srv.Tags, "mod"))
+                throw new Exception(
+                    "This server reports that it is modded, but its mod list could not be read."
+                    + Environment.NewLine + Environment.NewLine
+                    + "Joining now would very likely end in a \"missing mod\" kick. "
+                    + "Press REFRESH on the server and try again.");
+            if (mods == null)
+                throw new Exception("The server did not answer the mod query on port " +
+                                    A2S.QueryPort(srv.Port) + ".");
+            Log("Server publishes " + mods.Count + " mod(s).");
+            Log("Note: a server only advertises as many mods as its steamProtocolMaxDataSize");
+            Log("      allows. If it kicks you for a mod not listed above, that setting is");
+            Log("      too small on the server and no launcher can see the rest.");
+
+            // Only warn when the reply could not be proven whole.
+            if (!rulesForLaunch.Complete)
+            {
+                Log("WARNING: this server's mod list did not end cleanly, so it may be");
+                Log("         incomplete. If it kicks you for a missing mod, that is why.");
+            }
+
+            // Ask Steam, once, when each of these items was last published, so
+            // the per-mod check below can compare that against the timestamp in
+            // each local meta.cpp. Without this the only staleness signal is
+            // Steam's own flag, which is what let a player onto Emergence with
+            // outdated mods and got them kicked.
+            Log("Checking published versions with Steam...");
+            SteamWorkshop.PrefetchWorkshopTimes(mods.Select(m => m.WorkshopId), Log);
+
+            // Anything missing OR out of date gets fetched before launching -
+            // joining with a stale mod is a kick waiting to happen.
+            var missing = new List<Mod>();
+            foreach (var m in mods)
+            {
+                // No point fetching something that has been turned off, or that
+                // will be loaded from a folder of the player's choosing.
+                // A mod the server loaded from its own disk cannot be fetched
+                // from the workshop at all - there is nothing to fetch. It is
+                // matched against the player's own library by name instead.
+                if (m.IsLocal)
+                {
+                    var localHave = ModIndex.FindLocalByName(m.BareName, steam);
+                    Log(string.Format("  {0} {1,-12} {2}",
+                        localHave != null ? "[local]   " : "[NOT HERE]", "local", m.Name));
+                    if (localHave == null)
+                        Log("            no folder called @" + m.BareName + " in your mod folders");
+                    continue;
+                }
+
+                var choice = ModOverrides.For(m.WorkshopId);
+                if (choice != null && (!choice.Enabled || !string.IsNullOrEmpty(choice.Folder)))
+                {
+                    Log(string.Format("  {0} {1,-12} {2}",
+                        choice.Enabled ? "[CUSTOM]  " : "[SKIPPED] ", m.WorkshopId, m.Name));
+                    continue;
+                }
+
+                SteamWorkshop.RunCallbacks();           // read a fresh state, not a cached one
+
+                bool have = SteamWorkshop.IsInstalled(steam, m.WorkshopId);
+                bool broken = !have && SteamWorkshop.IsBrokenInstall(steam, m.WorkshopId);
+                bool stale = have && SteamWorkshop.NeedsUpdate(steam, m.WorkshopId);
+
+                // Steam may already be part-way through fetching this one.
+                // Launching now would load a half-written mod, so it has to be
+                // waited for just like a missing one.
+                bool inFlight = SteamWorkshop.IsBusy(m.WorkshopId);
+
+                Log(string.Format("  {0} {1,-12} {2}",
+                    broken ? "[BROKEN]  " : !have ? "[MISSING] " : stale ? "[OUTDATED]"
+                           : inFlight ? "[UPDATING]" : "[ok]      ",
+                    m.WorkshopId, m.Name));
+
+                if (broken)
+                {
+                    // Steam believes this is installed, so a plain download is a
+                    // no-op; it has to be forced.
+                    Log("            files are present but there is no meta.cpp - forcing a re-download");
+                    SteamWorkshop.Subscribe(m.WorkshopId);
+                    SteamWorkshop.ForceDownload(m.WorkshopId);
+                    missing.Add(m);
+                }
+                else if (!have) missing.Add(m);
+                else if (stale)
+                {
+                    TimeSpan behind = SteamWorkshop.StaleBy(steam, m.WorkshopId);
+                    if (behind > TimeSpan.Zero)
+                        Log("            local copy is " + Age(behind) + " behind the workshop");
+                    SteamWorkshop.Subscribe(m.WorkshopId);
+                    SteamWorkshop.ForceDownload(m.WorkshopId);
+                    missing.Add(m);
+                }
+                else if (inFlight) missing.Add(m);       // wait, do not re-request
+            }
+
+            if (missing.Count > 0)
+            {
+                Log("");
+                Log("Fetching " + missing.Count + " mod(s) that are missing, out of date, or still downloading...");
+                using (var dl = new ModDownloadForm(steam, gameDir, missing.ToArray()))
+                {
+                    if (dl.ShowDialog(this) != DialogResult.OK)
+                    {
+                        Log("Download cancelled - not launching.");
+                        return;
+                    }
+                }
+                Log("All mods are present now.");
+            }
+
+            // Short mod paths. Absolute !Workshop paths run ~90 characters each;
+            // junctions named by workshop id inside the game folder let the
+            // argument be relative and tiny, and the working directory below is
+            // the game folder so they resolve. Verified in a real launch.
+            var modArgs = new List<string>();
+            string shortRoot = Path.Combine(gameDir, "!m");
+            foreach (var m in mods)
+            {
+                // The player may have turned this mod off, or pointed it at a
+                // different copy on disk. See ModOverrides.
+                var choice = ModOverrides.For(m);
+                if (choice != null && !choice.Enabled)
+                {
+                    Log("  [SKIPPED] " + m.Name + " - you chose not to load this one.");
+                    continue;
+                }
+
+                string source;
+                if (choice != null && !string.IsNullOrEmpty(choice.Folder)
+                    && Directory.Exists(choice.Folder))
+                {
+                    source = choice.Folder;
+                    Log("  [CUSTOM]  " + m.Name + " -> " + source);
+                }
+                else if (m.IsLocal)
+                {
+                    // No workshop id to look up - find the folder by name.
+                    var found = ModIndex.FindLocalByName(m.BareName, steam);
+                    if (found == null)
+                    {
+                        Log("  [MISSING] " + m.Name + " - not in your mod folders, skipping.");
+                        continue;
+                    }
+                    source = found.Folder;
+                    Log("  [local]   " + m.Name + " -> " + source);
+                }
+                else
+                {
+                    source = SteamWorkshop.ItemPath(steam, m.WorkshopId);
+                }
+
+                // Local mods have no id to name a link after, so the mod's own
+                // name is used - it is unique within a server's list.
+                string linkName = m.IsLocal ? SafeLinkName(m.BareName) : m.WorkshopId.ToString();
+                string link = Path.Combine(shortRoot, linkName);
+                try { Directory.CreateDirectory(shortRoot); } catch { }
+
+                if (Junction.TryCreate(link, source)) modArgs.Add("!m\\" + linkName);
+                else modArgs.Add(source);            // long, but it still works
+            }
+
+            var args = new List<string>();
+            if (modArgs.Count > 0)
+            {
+                string joined = string.Join(";", modArgs.ToArray());
+                Log("Mod argument: " + joined.Length + " characters.");
+                args.Add("\"-mod=" + joined + "\"");
+            }
+
+            args.Add("-connect=" + srv.Host);
+            args.Add("-port=" + srv.Port);
+
+            // A locked server needs the password on the command line, and there
+            // is no way to supply it afterwards - DayZ simply bounces off. Ask
+            // now, and take a cancel as "do not launch" rather than launching
+            // into a refusal the player cannot read.
+            if (live.Password || srv.Password)
+            {
+                string pw = PasswordDialog.Ask(this, srv.Name);
+                if (pw == null)
+                {
+                    Log("Password required, and none was given - not launching.");
+                    return;
+                }
+                args.Add("\"-password=" + pw + "\"");
+                Log("Password supplied.");
+            }
+
+            string playerName = _name.Text.Trim();
+            if (playerName.Length > 0) args.Add("\"-name=" + playerName + "\"");
+
+            args.Add("-nolauncher");
+            args.Add("-world=empty");
+
+            string bePath = Path.Combine(gameDir, BeExe);
+            if (!File.Exists(bePath))
+                throw new Exception(BeExe + " not found in:\r\n" + gameDir +
+                                    "\r\n\r\nWithout it BattlEye cannot attach and the server will kick you.");
+
+            string full = BeArgs + " -exe " + GameExe + " " + string.Join(" ", args.ToArray());
+            Log("");
+            Log("Launching through " + BeExe + " so BattlEye attaches:");
+            Log("  " + BeExe + " " + full);
+
+            // THE GAME MUST START UNDER ITS OWN APP ID, NOT THE LAUNCHER'S.
+            //
+            // Stable DayZ and Experimental are separate Steam applications -
+            // 221100 and 1024020 - and a server checks the auth ticket against
+            // the one it runs. A ticket issued for the wrong app is refused
+            // with "Steam authentication failed: Ticket is not for this game."
+            //
+            // This launcher has to claim 221100 for itself, because that is
+            // where workshop content lives and there is no other way to
+            // subscribe (see SteamWorkshop). Doing so puts SteamAppId and
+            // SteamGameId into ITS OWN environment - and a child process
+            // inherits its parent's environment, so the game was being started
+            // as app 221100 whichever build was actually launched. Both game
+            // folders ship a correct steam_appid.txt, but the environment
+            // variables take precedence over that file, so it could not help.
+            //
+            // That is also why Steam showed the wrong game as running: the id
+            // the process announces is the one Steam displays.
+            //
+            // So the child is given the id of the build being launched,
+            // explicitly. That requires UseShellExecute = false, because the
+            // environment block can only be set when .NET creates the process
+            // itself rather than handing it to the shell.
+            var psi = new ProcessStartInfo
+            {
+                FileName = bePath,
+                Arguments = full,
+                WorkingDirectory = gameDir,
+                UseShellExecute = false
+            };
+            // Only ever set a value that is actually one of DayZ's two apps.
+            // live.AppId is decoded from the server's reply, and a server that
+            // answered oddly must not lead to inventing an app id - clearing the
+            // variables instead lets the game fall back to the steam_appid.txt
+            // sitting in its own folder, which is correct for both builds.
+            if (live.AppId == A2S.StableAppId || live.AppId == A2S.ExperimentalAppId)
+            {
+                psi.EnvironmentVariables["SteamAppId"] = live.AppId.ToString();
+                psi.EnvironmentVariables["SteamGameId"] = live.AppId.ToString();
+                Log("  SteamAppId for the game process: " + live.AppId
+                    + " (" + live.GameLabel + ")");
+            }
+            else
+            {
+                psi.EnvironmentVariables.Remove("SteamAppId");
+                psi.EnvironmentVariables.Remove("SteamGameId");
+                Log("  The server reported app " + live.AppId + ", which is neither DayZ");
+                Log("  build - letting the game read its own steam_appid.txt instead.");
+            }
+
+            // The launcher's own Steam session is deliberately LEFT OPEN.
+            //
+            // An earlier version shut it down here, to stop Steam reporting the
+            // wrong game as running. That was a bad trade: the same session
+            // backs the server browser, so closing it would have killed live
+            // player counts and refreshing the list for anyone who keeps the
+            // launcher open beside the game - which is most of the point of
+            // having one.
+            Process.Start(psi);
+
+            // Remember which mods this server actually used, so the Mod
+            // Manager can show when each was last needed. Written now rather
+            // than on exit: the launcher is often closed while the game runs.
+            try { ModIndex.MarkLoaded(mods.Select(m => m.WorkshopId)); }
+            catch { }
+
+            Log("");
+            Log("Started. DayZ takes a minute or two to appear - be patient.");
+            _status.Text = "Launched " + srv.Endpoint;
+        }
+
+        /// <summary>
+        /// A mod name reduced to something usable as a folder name.
+        ///
+        /// Local mods have no workshop id to name their junction after, so the
+        /// mod's own name is used - and mod names carry brackets, slashes and
+        /// exclamation marks that a directory cannot.
+        /// </summary>
+        private static string SafeLinkName(string name)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in name ?? "")
+                sb.Append(char.IsLetterOrDigit(c) || c == '_' || c == '-' ? c : '_');
+            string trimmed = sb.ToString().Trim('_');
+            return trimmed.Length == 0 ? "local" : trimmed;
+        }
+
+private static bool IsRunning(string exeName)
+        {
+            try { return Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exeName)).Length > 0; }
+            catch { return false; }
+        }
+
+private static ServerRules QueryModsChecked(Row row)
         {
             bool tagged = HasTag(row.Tags, "mod");
 
@@ -2619,216 +3283,268 @@ namespace BeautifulPotatoExpLauncher
             return rules;
         }
 
-        private void ShowDescription(Row row, ServerRules rules)
+        private void OnDirectConnect(object sender, EventArgs e)
         {
-            if (rules == null)
+            Log("Direct connect requested.");
+            SavePlayerName();
+        }
+
+        /// <summary>Opens the mod library window.</summary>
+        private void OnModManager(object sender, EventArgs e)
+        {
+            string steam = FindSteam();
+            if (steam == null)
             {
-                _descHeader.Text = "  Description";
-                _desc.Text = "The server did not answer the query.";
+                MessageBox.Show("Could not find Steam, so the mod folder cannot be located.",
+                                "Steam not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            string gameDir = FindGameDir(steam, A2S.ExperimentalAppId)
+                          ?? FindGameDir(steam, A2S.StableAppId);
+
+            // MODELESS on purpose. ShowDialog would freeze the server list
+            // behind it, and the mod library is exactly the thing a player
+            // wants open BESIDE the browser - checking what a server needs
+            // while looking at what they have. Show() keeps both alive.
+            if (_modManager != null && !_modManager.IsDisposed)
+            {
+                // Already open - bring it forward rather than opening a second.
+                if (_modManager.WindowState == FormWindowState.Minimized)
+                    _modManager.WindowState = FormWindowState.Normal;
+                _modManager.BringToFront();
+                _modManager.Activate();
                 return;
             }
 
-            var bits = new List<string>();
-            string version = rules.RequiredVersion;
-            if (version.Length > 0) bits.Add("Requires " + version);
-            if (HasTag(row.Tags, "privHive")) bits.Add("Private hive");
-            bits.Add(HasTag(row.Tags, "no3rd") ? "1st person only" : "3rd and 1st person");
-
-            string day = Accel(row.Tags, "etm");
-            string night = Accel(row.Tags, "entm");
-            if (day.Length > 0) bits.Add("Day " + day);
-            if (night.Length > 0) bits.Add("Night " + night);
-
-            _modsHeader.Text = "  " + row.Endpoint + "   |   " + string.Join("   |   ", bits.ToArray());
-
-            string text = (rules.Description ?? "").Replace("\r\n", "\n")
-                                                   .Replace("\r", "\n")
-                                                   .Replace("\n", Environment.NewLine)
-                                                   .Trim();
-            _desc.Text = text.Length > 0 ? text : "(this server publishes no description)";
+            _modManager = new ModManagerForm(steam, gameDir);
+            _modManager.FormClosed += (s2, e2) => _modManager = null;
+            _modManager.Show(this);
         }
 
-        private static string Accel(string tags, string prefix)
+        /// <summary>The mod library window, while it is open.</summary>
+        private ModManagerForm _modManager;
+
+        private void OnToggleFavourite(object sender, EventArgs e)
         {
-            if (string.IsNullOrEmpty(tags)) return "";
-            foreach (var raw in tags.Split(','))
-            {
-                string t = raw.Trim();
-                if (!t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-
-                string rest = t.Substring(prefix.Length);
-                double v;
-                if (!double.TryParse(rest, System.Globalization.NumberStyles.Float,
-                                     System.Globalization.CultureInfo.InvariantCulture, out v))
-                    continue;
-                return v.ToString("0.##") + "x";
-            }
-            return "";
+            var row = SelectedRow;
+            if (row != null) ToggleFavourite(row);
         }
 
-        // ---------------------------------------------------- system helpers ----
-        private static void OpenLink(string url)
+        private void ToggleFavourite(Row row)
         {
-            if (string.IsNullOrWhiteSpace(url)) return;
-            try
+            if (row == null) return;
+            if (_favourites.Contains(row.Endpoint))
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
+                _favourites.Remove(row.Endpoint);
+                row.Favourite = false;
+                Log("Removed " + row.Name + " from favourites.");
             }
-            catch { }
+            else
+            {
+                _favourites.Add(row.Endpoint);
+                row.Favourite = true;
+                ServerStore.SetName(row.Endpoint, row.Name);
+                Log("Added " + row.Name + " to favourites.");
+            }
+            ServerStore.SaveFavourites(_favourites);
+            Redraw(row.Endpoint);
         }
 
-        private static Image LoadImage(string resourceName)
-        {
-            try
-            {
-                using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
-                {
-                    if (s == null) return null;
-                    using (var ms = new MemoryStream())
-                    {
-                        s.CopyTo(ms);
-                        ms.Position = 0;
-                        return Image.FromStream(ms);
-                    }
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        private void Log(string msg)
-        {
-            if (InvokeRequired)
-            {
-                BeginInvoke((Action)(() => Log(msg)));
-                return;
-            }
-
-            string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + msg;
-            try
-            {
-                Directory.CreateDirectory(Program.LogDirectory);
-                File.AppendAllText(Program.LogFile, line + Environment.NewLine);
-            }
-            catch { }
-
-            _log.AppendText(line + Environment.NewLine);
-        }
-
-        private void RestoreWindow()
-        {
-            var bounds = ServerStore.LoadWindowBounds();
-            if (bounds.HasValue && bounds.Value.Width > 200 && bounds.Value.Height > 200)
-            {
-                StartPosition = FormStartPosition.Manual;
-                Bounds = bounds.Value;
-            }
-        }
-
-        private void RememberWindow()
-        {
-            if (WindowState == FormWindowState.Normal)
-            {
-                ServerStore.SaveWindowBounds(Bounds);
-            }
-        }
-
-        private static string FindSteam()
-        {
-            try
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
-                {
-                    return key?.GetValue("SteamPath") as string;
-                }
-            }
-            catch { return null; }
-        }
-
-        private static string FindGameDir(string steamPath, ulong appId)
-        {
-            if (string.IsNullOrEmpty(steamPath)) return null;
-
-            string[] folders = appId == A2S.ExperimentalAppId ? ExpFolders : StableFolders;
-            var searchRoots = new List<string>();
-
-            string defaultCommon = Path.Combine(steamPath, "steamapps", "common");
-            if (Directory.Exists(defaultCommon)) searchRoots.Add(defaultCommon);
-
-            try
-            {
-                string vdf = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
-                if (File.Exists(vdf))
-                {
-                    string text = File.ReadAllText(vdf);
-                    foreach (Match m in Regex.Matches(text, @"""path""\s+""([^""]+)"""))
-                    {
-                        string p = m.Groups[1].Value.Replace(@"\\", @"\");
-                        string common = Path.Combine(p, "steamapps", "common");
-                        if (Directory.Exists(common) && !searchRoots.Contains(common, StringComparer.OrdinalIgnoreCase))
-                            searchRoots.Add(common);
-                    }
-                }
-            }
-            catch { }
-
-            foreach (var root in searchRoots)
-            {
-                foreach (var folder in folders)
-                {
-                    string candidate = Path.Combine(root, folder);
-                    if (Directory.Exists(candidate) &&
-                        (File.Exists(Path.Combine(candidate, GameExe)) || File.Exists(Path.Combine(candidate, BeExe))))
-                    {
-                        return candidate;
-                    }
-                }
-            }
-            return null;
-        }
-
+        /// <summary>
+        /// The right-click menu.
+        ///
+        /// WHY THE COLOURS ARE SET IN TWO PLACES
+        ///   DarkMenu is a ProfessionalColorTable, and a colour table only
+        ///   describes BACKGROUNDS - it has no say over text. Setting the
+        ///   renderer alone therefore produces a dark menu painted with the
+        ///   default near-black text, which is unreadable on it. ForeColor has
+        ///   to be set as well, on the strip AND on each item, because an item
+        ///   does not inherit it once a custom renderer is in play.
+        /// </summary>
         private ContextMenuStrip BuildServerMenu()
         {
             var menu = new ContextMenuStrip
             {
                 BackColor = Panel2,
                 ForeColor = Color.Gainsboro,
-                ShowImageMargin = false
+                ShowImageMargin = false,
+                Renderer = new ToolStripProfessionalRenderer(new DarkMenu())
             };
 
-            menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenu());
-
-            var copyAll = new ToolStripMenuItem("Copy server info");
-            copyAll.Click += (s, e) =>
+            Action<string, EventHandler> add = (text, handler) =>
             {
-                var r = SelectedRow;
-                if (r != null) Clipboard.SetText(r.Name + " - " + r.Endpoint);
+                var item = new ToolStripMenuItem(text)
+                {
+                    ForeColor = Color.Gainsboro,
+                    BackColor = Panel2
+                };
+                item.Click += handler;
+                menu.Items.Add(item);
             };
-            menu.Items.Add(copyAll);
 
-            var copyIp = new ToolStripMenuItem("Copy IP:Port");
-            copyIp.Click += (s, e) =>
-            {
-                var r = SelectedRow;
-                if (r != null) Clipboard.SetText(r.Endpoint);
-            };
-            menu.Items.Add(copyIp);
-
+            add("Copy server info", (s, e) => CopyServerInfo(false));
+            add("Copy address only", (s, e) => CopyServerInfo(true));
             menu.Items.Add(new ToolStripSeparator());
+            add("Add to / remove from Favorites", (s, e) => ToggleFavourite(SelectedRow));
+            add("Refresh this server", (s, e) => RefreshOneRow(SelectedRow));
+            menu.Items.Add(new ToolStripSeparator());
+            add("Connect", OnConnect);
 
-            var fav = new ToolStripMenuItem("Toggle Favourite");
-            fav.Click += OnToggleFavourite;
-            menu.Items.Add(fav);
-
-            var connect = new ToolStripMenuItem("Connect");
-            connect.Click += OnConnect;
-            menu.Items.Add(connect);
-
+            // Nothing sensible to act on with no row selected.
+            menu.Opening += (s, e) => { if (SelectedRow == null) e.Cancel = true; };
             return menu;
+        }
+
+        /// <summary>Puts the selected server on the clipboard.</summary>
+        private void CopyServerInfo(bool addressOnly)
+        {
+            var row = SelectedRow;
+            if (row == null) return;
+
+            string text;
+            if (addressOnly) text = row.Endpoint;
+            else
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine(row.Name);
+                sb.AppendLine("IP: " + row.Host);
+                sb.AppendLine("Port: " + row.Port);
+                text = sb.ToString().TrimEnd();
+            }
+
+            try
+            {
+                // An empty string throws, and the clipboard can be locked by
+                // another application - neither deserves an error dialog.
+                if (text.Length > 0) Clipboard.SetText(text);
+                _status.Text = addressOnly
+                    ? "Copied " + row.Endpoint + " to the clipboard."
+                    : "Copied server info for " + row.Name + " to the clipboard.";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "Could not copy: " + ex.Message;
+            }
+        }
+
+        private void SavePlayerName()
+        {
+            if (_name != null && !string.IsNullOrWhiteSpace(_name.Text))
+                ServerStore.SaveName(_name.Text.Trim());
+        }
+
+        /// <summary>
+        /// Where Steam is installed, ALWAYS in normal Windows form.
+        ///
+        /// The registry hands this back with forward slashes - "c:/program
+        /// files (x86)/steam" - and everything built from it inherits them, so
+        /// a mod folder ends up as
+        ///
+        ///     c:/program files (x86)/steam\steamapps\workshop\content\...
+        ///
+        /// .NET does not care: Directory.Exists happily returns true. But
+        /// explorer.exe cannot parse a path like that, and when it fails it
+        /// silently opens Documents instead - which is exactly what "Open
+        /// folder" was doing. Normalising here fixes it for every caller
+        /// rather than at each place a path is used.
+        /// </summary>
+        private static string FindSteam()
+        {
+            string found = FindSteamRaw();
+            if (string.IsNullOrEmpty(found)) return found;
+            try { return System.IO.Path.GetFullPath(found); }
+            catch { return found; }
+        }
+
+        private static string FindSteamRaw()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
+                {
+                    if (key != null) return key.GetValue("SteamPath") as string;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static string FindGameDir(string steamPath, ulong appId)
+        {
+            if (string.IsNullOrEmpty(steamPath)) return null;
+            string apps = Path.Combine(steamPath, "steamapps", "common");
+            string[] targets = appId == A2S.ExperimentalAppId ? ExpFolders : StableFolders;
+
+            foreach (var t in targets)
+            {
+                string candidate = Path.Combine(apps, t);
+                if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, GameExe)))
+                    return candidate;
+            }
+            return null;
+        }
+
+        private static void OpenLink(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch { }
+        }
+
+        private void Log(string msg)
+        {
+            if (_log == null) return;
+            string time = DateTime.Now.ToString("HH:mm:ss");
+            _log.AppendText("[" + time + "] " + msg + Environment.NewLine);
+
+            try
+            {
+                File.AppendAllText(Program.LogFile, "[" + time + "] " + msg + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        private static Image LoadImage(string file)
+        {
+            try
+            {
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", file);
+                if (File.Exists(path)) return Image.FromFile(path);
+            }
+            catch { }
+            return new Bitmap(1, 1);
+        }
+
+        private void RememberWindow()
+        {
+            if (WindowState == FormWindowState.Normal)
+                ServerStore.SaveWindow(Location, Size);
+        }
+
+        private void RestoreWindow()
+        {
+            Point loc; Size sz;
+            if (ServerStore.LoadWindow(out loc, out sz))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Location = loc;
+                Size = sz;
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            _closing = true;
+            _pollTimer.Stop();
+            _visTimer.Stop();
+            _typeTimer.Stop();
+            _modRecheck.Stop();
+            _resortTimer.Stop();
+
+            RememberWindow();
+            RememberAllSplits();
+
+            SteamServerList.Stop();
+            base.OnFormClosing(e);
         }
     }
 }

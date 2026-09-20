@@ -82,3 +82,408 @@
 [11:18:34] Master list cached: 358 servers. Searching now filters this list instantly.
 [11:19:38] Final launch mod list: c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX; c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools
 [11:19:38] Launching: c:/program files (x86)/steam\steamapps\common\DayZ Exp\DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe -name=PotatoLauncher "-mod=c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@CF-Test;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@BikeWheelies;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@MotoX;c:/program files (x86)/steam\steamapps\common\DayZ\!Workshop\@Community-Online-Tools" -connect=104.218.48.62:4902:4903
+[11:52:28] Launcher started
+[11:52:28] Showing 13 remembered recent servers from 11:49 while Steam is asked for the current list.
+[11:52:28] Steam API: connected (ISteamUGC v017).
+[11:52:28] Server browser: connected to Steam.
+[11:52:28] Query: Recent, app 221100, no filters
+[11:52:31]   stable: 1 servers. Now asking for Experimental...
+[11:52:33] Master list cached: 13 servers. Searching now filters this list instantly.
+[11:54:31] Launcher started
+[11:54:31] Showing 13 remembered recent servers from 11:52 while Steam is asked for the current list.
+[11:54:31] Steam API: connected (ISteamUGC v017).
+[11:54:31] Server browser: connected to Steam.
+[11:54:31] Query: Recent, app 221100, no filters
+[11:54:34]   stable: 8 servers. Now asking for Experimental...
+[11:54:36] Master list cached: 14 servers. Searching now filters this list instantly.
+[11:54:50] Showing 181 remembered official servers from 17:14 while Steam is asked for the current list.
+[11:54:50] Query: Internet, app 221100, no filters
+[11:54:52] Query: Internet, app 1024020, no filters
+[11:54:53] Query: Internet, app 221100, no filters
+[11:54:56] Showing 6962 remembered community servers from 10:30 while Steam is asked for the current list.
+[11:54:56] Query: Internet, app 221100, no filters
+[11:55:06] Master list cached: 7097 servers. Searching now filters this list instantly.
+[11:55:11] Showing 7097 remembered community servers from 11:55 while Steam is asked for the current list.
+[11:55:11] Query: Internet, app 221100, name_match=*z*
+[11:55:11] Showing 7097 remembered community servers from 11:55 while Steam is asked for the current list.
+[11:55:11] Query: Internet, app 221100, name_match=*zero*
+[11:55:15] Showing 7097 remembered community servers from 11:55 while Steam is asked for the current list.
+[11:55:15] Query: Internet, app 221100, name_match=*zero cherna*
+[11:55:16] Showing 7097 remembered community servers from 11:55 while Steam is asked for the current list.
+[11:55:16] Query: Internet, app 221100, name_match=*zero chernarus*
+[11:55:20] Master list cached: 7097 servers. Searching now filters this list instantly.
+[12:00:15] Launcher started
+[12:00:15] Showing 7097 remembered community servers from 11:55 while Steam is asked for the current list.
+[12:00:15] Steam API: connected (ISteamUGC v017).
+[12:00:15] Server browser: connected to Steam.
+[12:00:15] Query: Internet, app 221100, no filters
+[12:00:27] Master list cached: 7166 servers. Searching now filters this list instantly.
+[12:00:28] Showing 7166 remembered community servers from 12:00 while Steam is asked for the current list.
+[12:00:28] Query: Internet, app 221100, name_match=*z*
+[12:00:30] Showing 7166 remembered community servers from 12:00 while Steam is asked for the current list.
+[12:00:30] Query: Internet, app 221100, name_match=*zero cher*
+[12:00:31] Showing 7166 remembered community servers from 12:00 while Steam is asked for the current list.
+[12:00:31] Query: Internet, app 221100, name_match=*zero chernarus*
+[12:00:35] Master list cached: 7166 servers. Searching now filters this list instantly.
+[12:02:37] Launcher started
+[12:02:38] Showing 7166 remembered community servers from 12:00 while Steam is asked for the current list.
+[12:02:38] Steam API: connected (ISteamUGC v017).
+[12:02:38] Server browser: connected to Steam.
+[12:02:38] Query: Internet, app 221100, no filters
+[12:02:44] Showing 7218 remembered community servers from 12:02 while Steam is asked for the current list.
+[12:02:44] Query: Internet, app 221100, name_match=*z*
+[12:02:44] Showing 7218 remembered community servers from 12:02 while Steam is asked for the current list.
+[12:02:44] Query: Internet, app 221100, name_match=*zer*
+[12:02:45] Showing 7218 remembered community servers from 12:02 while Steam is asked for the current list.
+[12:02:45] Query: Internet, app 221100, name_match=*zero cher*
+[12:02:48] Showing 7218 remembered community servers from 12:02 while Steam is asked for the current list.
+[12:02:48] Query: Internet, app 221100, name_match=*zero chernarus*
+[12:02:53] Master list cached: 7218 servers. Searching now filters this list instantly.
+[12:28:56] Launcher started
+[12:28:56] Showing 7218 remembered community servers from 12:02 while Steam is asked for the current list.
+[12:28:56] Steam API: connected (ISteamUGC v017).
+[12:28:56] Server browser: connected to Steam.
+[12:28:56] Query: Internet, app 221100, no filters
+[12:29:06] Master list cached: 7274 servers. Searching now filters this list instantly.
+[12:29:17] Showing 7274 remembered community servers from 12:29 while Steam is asked for the current list.
+[12:29:17] Query: Internet, app 221100, name_match=*z*
+[12:29:20] Showing 8513 remembered community servers from 12:29 while Steam is asked for the current list.
+[12:29:20] Query: Internet, app 221100, name_match=*zero chernarus*
+[12:29:32] Master list cached: 8889 servers. Searching now filters this list instantly.
+[12:30:53] Showing 8889 remembered community servers from 12:29 while Steam is asked for the current list.
+[12:30:53] Query: Internet, app 221100, no filters
+[12:31:04] Master list cached: 8912 servers. Searching now filters this list instantly.
+[12:42:43] Launcher started
+[12:42:43] Showing 8912 remembered community servers from 12:31 while Steam is asked for the current list.
+[12:42:43] Steam API: connected (ISteamUGC v017).
+[12:42:43] Server browser: connected to Steam.
+[12:42:43] Query: Internet, app 221100, no filters
+[12:42:53] Master list cached: 8943 servers. Searching now filters this list instantly.
+[12:42:56] Showing 8943 remembered community servers from 12:42 while Steam is asked for the current list.
+[12:42:56] Query: Internet, app 221100, name_match=*z*
+[12:42:56] Showing 8943 remembered community servers from 12:42 while Steam is asked for the current list.
+[12:42:56] Query: Internet, app 221100, name_match=*zer*
+[12:42:57] Showing 8943 remembered community servers from 12:42 while Steam is asked for the current list.
+[12:42:57] Query: Internet, app 221100, name_match=*zero*
+[12:43:00] Showing 8943 remembered community servers from 12:42 while Steam is asked for the current list.
+[12:43:00] Query: Internet, app 221100, name_match=*zero cherna*
+[12:43:01] Showing 8943 remembered community servers from 12:42 while Steam is asked for the current list.
+[12:43:01] Query: Internet, app 221100, name_match=*zero chernarus*
+[12:43:06] Master list cached: 8943 servers. Searching now filters this list instantly.
+[12:49:41] Launcher started
+[12:49:41] Showing 8943 remembered community servers from 12:43 while Steam is asked for the current list.
+[12:49:42] Steam API: connected (ISteamUGC v017).
+[12:49:42] Server browser: connected to Steam.
+[12:49:42] Query: Internet, app 221100, no filters
+[12:49:51] Master list cached: 8961 servers. Searching now filters this list instantly.
+[12:54:48] Launcher started
+[12:54:48] Showing 8961 remembered community servers from 12:49 while Steam is asked for the current list.
+[12:54:48] Steam API: connected (ISteamUGC v017).
+[12:54:48] Server browser: connected to Steam.
+[12:54:48] Query: Internet, app 221100, no filters
+[12:54:59] Master list cached: 8984 servers. Searching now filters this list instantly.
+[12:55:00] Showing 8984 remembered community servers from 12:54 while Steam is asked for the current list.
+[12:55:00] Query: Internet, app 221100, name_match=*zero cher*
+[12:55:01] Showing 8984 remembered community servers from 12:55 while Steam is asked for the current list.
+[12:55:01] Query: Internet, app 221100, name_match=*zero chernarus*
+[12:55:12] Master list cached: 8991 servers. Searching now filters this list instantly.
+[13:06:14] Launcher started
+[13:06:14] Showing 8991 remembered community servers from 12:55 while Steam is asked for the current list.
+[13:06:14] Steam API: connected (ISteamUGC v017).
+[13:06:14] Server browser: connected to Steam.
+[13:06:14] Query: Internet, app 221100, no filters
+[13:06:22] Showing 9011 remembered community servers from 13:06 while Steam is asked for the current list.
+[13:06:22] Query: Internet, app 221100, name_match=*z*
+[13:06:22] Showing 9011 remembered community servers from 13:06 while Steam is asked for the current list.
+[13:06:22] Query: Internet, app 221100, name_match=*zer*
+[13:06:24] Showing 9995 remembered community servers from 13:06 while Steam is asked for the current list.
+[13:06:24] Query: Internet, app 221100, name_match=*zero chernarus*
+[13:06:30] Master list cached: 9995 servers. Searching now filters this list instantly.
+[13:23:24] Launcher started
+[13:23:24] Showing 9995 remembered community servers from 13:06 while Steam is asked for the current list.
+[13:23:24] Steam API: connected (ISteamUGC v017).
+[13:23:24] Server browser: connected to Steam.
+[13:23:24] Query: Internet, app 221100, no filters
+[13:23:34] Master list cached: 10010 servers. Searching now filters this list instantly.
+[13:23:37] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:23:37] Query: Internet, app 221100, name_match=*z*
+[13:23:37] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:23:37] Query: Internet, app 221100, name_match=*zer*
+[13:23:37] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:23:37] Query: Internet, app 221100, name_match=*zero*
+[13:23:41] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:23:41] Query: Internet, app 221100, name_match=*zero cherna*
+[13:23:42] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:23:42] Query: Internet, app 221100, name_match=*zero chernarus*
+[13:23:47] Master list cached: 10010 servers. Searching now filters this list instantly.
+[13:29:27] Filter panel shown.
+[13:43:02] Launcher started
+[13:43:03] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:43:03] Steam API: connected (ISteamUGC v017).
+[13:43:03] Server browser: connected to Steam.
+[13:43:03] Query: Internet, app 221100, no filters
+[13:43:11] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:11] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:11] Query: Internet, app 221100, name_match=*z*
+[13:43:12] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:12] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:12] Query: Internet, app 221100, name_match=*zero cher*
+[13:43:13] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:13] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:13] Query: Internet, app 221100, name_match=*zero cherna*
+[13:43:13] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:13] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:13] Query: Internet, app 221100, name_match=*zero chernarus*
+[13:43:17] Master list cached: 10022 servers. Searching now filters this list instantly.
+[13:43:24] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:24] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:24] Query: Internet, app 221100, name_match=*zero chernaru*
+[13:43:25] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:25] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:25] Query: Internet, app 221100, name_match=*zero c*
+[13:43:25] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:43:25] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:43:25] Query: Internet, app 221100, name_match=*zero*
+[13:43:29] Master list cached: 10022 servers. Searching now filters this list instantly.
+[13:44:08] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:44:08] Showing 10022 remembered community servers from 13:43 while Steam is asked for the current list.
+[13:44:08] Query: Internet, app 221100, name_match=*zero cher*
+[13:44:19] Master list cached: 10024 servers. Searching now filters this list instantly.
+[13:44:34] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:44:34] Showing 10024 remembered community servers from 13:44 while Steam is asked for the current list.
+[13:44:34] Query: Internet, app 221100, name_match=*b*
+[13:44:35] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:44:35] Showing 10024 remembered community servers from 13:44 while Steam is asked for the current list.
+[13:44:35] Query: Internet, app 221100, name_match=*beau*
+[13:44:36] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:44:36] Showing 10024 remembered community servers from 13:44 while Steam is asked for the current list.
+[13:44:36] Query: Internet, app 221100, name_match=*beautiful*
+[13:44:39] Master list cached: 10024 servers. Searching now filters this list instantly.
+[13:44:57] Connecting to The Outpost | A Beautiful Potato | Server 2 | Vanilla (104.218.48.62:4202)...
+[13:45:00] Showing 10024 remembered community servers from 13:44 while Steam is asked for the current list.
+[13:45:00] Query: Internet, app 221100, name_match=*beautiful*
+[13:45:03] Master list cached: 10024 servers. Searching now filters this list instantly.
+[13:45:05] Showing 10024 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:45:05] Query: Internet, app 221100, name_match=*beautiful*
+[13:45:15] Master list cached: 10024 servers. Searching now filters this list instantly.
+[13:45:25] Showing 362 remembered community servers from 11:32 while Steam is asked for the current list.
+[13:45:25] Query: Internet, app 1024020, name_match=*beautiful*
+[13:45:29] Master list cached: 362 servers. Searching now filters this list instantly.
+[13:45:37] Showing 10024 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:45:38] Showing 362 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:45:38] Showing 8376 remembered community servers from 11:48 while Steam is asked for the current list.
+[13:45:38] Query: Internet, app 221100, name_match=*beautiful*
+[13:45:41]   stable: 0 servers. Now asking for Experimental...
+[13:45:45] Master list cached: 8376 servers. Searching now filters this list instantly.
+[13:47:04] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:47:05] Showing 8376 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:47:05] Query: Internet, app 221100, name_match=*kar*
+[13:47:05] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:47:05] Showing 8376 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:47:05] Query: Internet, app 221100, name_match=*karma*
+[13:47:06] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:47:06] Showing 8376 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:47:06] Query: Internet, app 221100, name_match=*karmak*
+[13:47:06] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:47:06] Showing 8376 remembered community servers from 13:45 while Steam is asked for the current list.
+[13:47:06] Query: Internet, app 221100, name_match=*karmakrew*
+[13:47:10]   stable: 0 servers. Now asking for Experimental...
+[13:47:13] Master list cached: 8376 servers. Searching now filters this list instantly.
+[13:48:00] Filter panel shown.
+[13:48:05] Filter panel hidden.
+[13:48:07] Showing 181 remembered official servers from 17:14 while Steam is asked for the current list.
+[13:48:07] Query: Internet, app 221100, name_match=*karmakrew*
+[13:48:08] Showing 8376 remembered community servers from 13:47 while Steam is asked for the current list.
+[13:48:10] Showing 8376 remembered community servers from 13:47 while Steam is asked for the current list.
+[13:48:10] Query: Internet, app 221100, name_match=*karmakrew*
+[13:48:14]   stable: 0 servers. Now asking for Experimental...
+[13:48:17] Master list cached: 8376 servers. Searching now filters this list instantly.
+[13:48:29] Filter panel shown.
+[13:48:31] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:48:31] Showing 8376 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:31] Query: Internet, app 221100, name_match=*karma krew*
+[13:48:35]   stable: 0 servers. Now asking for Experimental...
+[13:48:35] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:48:35] Showing 8376 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:35] Query: Internet, app 221100, name_match=*karma ew*
+[13:48:36] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:48:36] Showing 8376 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:36] Query: Internet, app 221100, name_match=*karma*
+[13:48:38] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:48:38] Showing 8376 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:38] Query: Internet, app 221100, name_match=*karm*
+[13:48:38] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:48:39] Showing 8376 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:39] Query: Internet, app 221100, no filters
+[13:48:42]   stable: 0 servers. Now asking for Experimental...
+[13:48:46] Filter panel hidden.
+[13:48:49] Showing 8404 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:48:49] Query: Internet, app 221100, no filters
+[13:48:53]   stable: 0 servers. Now asking for Experimental...
+[13:48:56] Master list cached: 8404 servers. Searching now filters this list instantly.
+[13:49:05] Filter panel shown.
+[13:49:35] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:49:35] Showing 8404 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:49:35] Query: Internet, app 221100, name_match=*ka*
+[13:49:35] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:49:35] Showing 8404 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:49:35] Query: Internet, app 221100, name_match=*kar*
+[13:49:36] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:49:36] Showing 8404 remembered community servers from 13:48 while Steam is asked for the current list.
+[13:49:36] Query: Internet, app 221100, name_match=*karma*
+[13:49:38] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:49:38] Showing 8404 remembered community servers from 13:49 while Steam is asked for the current list.
+[13:49:38] Query: Internet, app 221100, no filters
+[13:49:42]   stable: 0 servers. Now asking for Experimental...
+[13:49:51] Master list cached: 8405 servers. Searching now filters this list instantly.
+[13:50:47] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:50:47] Showing 8405 remembered community servers from 13:49 while Steam is asked for the current list.
+[13:50:47] Query: Internet, app 221100, gameaddr=193.25.252.55:2302
+[13:50:48] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:50:48] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:50:48] Query: Internet, app 221100, no filters
+[13:50:50] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:50:50] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:50:50] Query: Internet, app 221100, gameaddr=193.25.252.55:2302
+[13:50:53]   stable: 0 servers. Now asking for Experimental...
+[13:50:57] Master list cached: 8406 servers. Searching now filters this list instantly.
+[13:51:00] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:00] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:00] Query: Internet, app 221100, name_match=*Ka*
+[13:51:01] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:01] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:01] Query: Internet, app 221100, no filters
+[13:51:01] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:02] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:02] Query: Internet, app 221100, name_match=*kar*
+[13:51:02] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:02] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:02] Query: Internet, app 221100, name_match=*karma*
+[13:51:02] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:02] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:02] Query: Internet, app 221100, name_match=*karmak*
+[13:51:03] Filters changed in ways Steam can narrow - re-fetching master list.
+[13:51:03] Showing 8406 remembered community servers from 13:50 while Steam is asked for the current list.
+[13:51:03] Query: Internet, app 221100, name_match=*karmakrew*
+[13:51:13]   stable: 2427 servers. Now asking for Experimental...
+[13:51:17] Master list cached: 10665 servers. Searching now filters this list instantly.
+[13:51:18] Filter panel hidden.
+[21:50:19] Launcher started
+[21:50:20] Showing 10665 remembered community servers from 13:51 while Steam is asked for the current list.
+[21:50:20] Steam API: connected (ISteamUGC v017).
+[21:50:20] Server browser: connected to Steam.
+[21:50:20] Query: Internet, app 221100, no filters
+[21:50:29]   stable: 4998 servers. Now asking for Experimental...
+[21:50:39] Master list cached: 10755 servers. Searching now filters this list instantly.
+[21:51:59] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:51:59] Showing 10755 remembered community servers from 21:50 while Steam is asked for the current list.
+[21:51:59] Query: Internet, app 221100, name_match=*z*
+[21:51:59] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:51:59] Showing 10755 remembered community servers from 21:50 while Steam is asked for the current list.
+[21:51:59] Query: Internet, app 221100, name_match=*zero*
+[21:52:00] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:00] Showing 10755 remembered community servers from 21:50 while Steam is asked for the current list.
+[21:52:00] Query: Internet, app 221100, name_match=*zero cher*
+[21:52:00] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:00] Showing 10755 remembered community servers from 21:50 while Steam is asked for the current list.
+[21:52:00] Query: Internet, app 221100, name_match=*zero chern*
+[21:52:04]   stable: 0 servers. Now asking for Experimental...
+[21:52:08] Master list cached: 10755 servers. Searching now filters this list instantly.
+[21:52:26] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:26] Query: Internet, app 221100, name_match=*zero chern*
+[21:52:29]   stable: 0 servers. Now asking for Experimental...
+[21:52:31] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:31] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:31] Query: Internet, app 221100, no filters
+[21:52:33] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:33] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:33] Query: Internet, app 221100, name_match=*Z*
+[21:52:34] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:34] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:34] Query: Internet, app 221100, name_match=*Zero*
+[21:52:35] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:35] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:35] Query: Internet, app 221100, name_match=*Zero Che*
+[21:52:36] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:36] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:36] Query: Internet, app 221100, name_match=*Zero Cher*
+[21:52:37] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:37] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:37] Query: Internet, app 221100, name_match=*Zero Ch*
+[21:52:38] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:38] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:38] Query: Internet, app 221100, name_match=*Zero C*
+[21:52:39] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:39] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:39] Query: Internet, app 221100, name_match=*Zero*
+[21:52:43]   stable: 0 servers. Now asking for Experimental...
+[21:52:46] Master list cached: 10755 servers. Searching now filters this list instantly.
+[21:52:59] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:52:59] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:52:59] Query: Internet, app 221100, name_match=*Zer*
+[21:53:00] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:00] Showing 10755 remembered community servers from 21:52 while Steam is asked for the current list.
+[21:53:00] Query: Internet, app 221100, no filters
+[21:53:03]   stable: 0 servers. Now asking for Experimental...
+[21:53:07] Master list cached: 10755 servers. Searching now filters this list instantly.
+[21:53:26] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:26] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:26] Query: Internet, app 221100, name_match=*Z*
+[21:53:26] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:26] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:26] Query: Internet, app 221100, name_match=*Zer*
+[21:53:27] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:27] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:27] Query: Internet, app 221100, name_match=*Zero*
+[21:53:28] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:28] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:28] Query: Internet, app 221100, name_match=*Zero C*
+[21:53:29] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:29] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:29] Query: Internet, app 221100, name_match=*Zero Cher*
+[21:53:30] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:30] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:30] Query: Internet, app 221100, name_match=*Zero Che*
+[21:53:31] Filters changed in ways Steam can narrow - re-fetching master list.
+[21:53:31] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[21:53:31] Query: Internet, app 221100, no filters
+[21:53:35]   stable: 0 servers. Now asking for Experimental...
+[21:53:44] Master list cached: 10755 servers. Searching now filters this list instantly.
+[22:16:33] Launcher started
+[22:16:34] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[22:16:34] Steam API: connected (ISteamUGC v017).
+[22:16:34] Server browser: connected to Steam.
+[22:16:34] Query: Internet, app 221100, no filters
+[01:57:06] Launcher started
+[01:57:07] Showing 11200 remembered community servers from 01:52 while Steam is asked for the current list.
+[01:57:07] Steam API: connected (ISteamUGC v017).
+[01:57:07] Server browser: connected to Steam.
+[01:57:07] Query: Internet, app 221100, no filters
+[01:57:16]   stable: 4998 servers. Now asking for Experimental...
+[01:57:25] Master list cached: 11201 servers. Searching now filters this list instantly.
+[02:01:42] Launcher started
+[02:01:43] Showing 11201 remembered community servers from 01:57 while Steam is asked for the current list.
+[02:01:43] Steam API: connected (ISteamUGC v017).
+[02:01:43] Server browser: connected to Steam.
+[02:01:43] Query: Internet, app 221100, no filters
+[02:01:52]   stable: 4998 servers. Now asking for Experimental...
+[02:02:01] Master list cached: 11203 servers. Searching now filters this list instantly.
+[02:14:25] Launcher started
+[02:14:25] Showing 11203 remembered community servers from 02:02 while Steam is asked for the current list.
+[02:14:25] Steam API: connected (ISteamUGC v017).
+[02:14:25] Server browser: connected to Steam.
+[02:14:25] Query: Internet, app 221100, no filters
+[02:14:35]   stable: 4997 servers. Now asking for Experimental...
+[02:14:53] Master list cached: 11212 servers. Searching now filters this list instantly.
+[02:32:03] Launcher started
+[02:32:03] Showing 11212 remembered community servers from 02:14 while Steam is asked for the current list.
+[02:32:03] Steam API: connected (ISteamUGC v017).
+[02:32:03] Server browser: connected to Steam.
+[02:32:03] Query: Internet, app 221100, no filters
+[02:32:12]   stable: 4997 servers. Now asking for Experimental...
+[02:32:22] Master list cached: 11218 servers. Searching now filters this list instantly.
+[02:38:25] Launcher started
+[02:38:25] Showing 11218 remembered community servers from 02:32 while Steam is asked for the current list.
+[02:38:26] Steam API: connected (ISteamUGC v017).
+[02:38:26] Server browser: connected to Steam.
+[02:38:26] Query: Internet, app 221100, no filters

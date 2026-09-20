@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -158,12 +159,39 @@ namespace BeautifulPotatoExpLauncher
             SaveFavourites(Names.Keys);
         }
 
+        public static void SetName(string endpoint, string name)
+        {
+            RememberName(endpoint, name);
+            SaveFavourites(Names.Keys);
+        }
+
         public static Rectangle? LoadWindowBounds()
         {
             int x, y, w, h;
             bool maximised;
             if (!LoadWindow(out x, out y, out w, out h, out maximised)) return null;
             return new Rectangle(x, y, w, h);
+        }
+
+        public static bool LoadWindow(out Point location, out Size size)
+        {
+            int x, y, w, h;
+            bool maximised;
+            if (!LoadWindow(out x, out y, out w, out h, out maximised))
+            {
+                location = Point.Empty;
+                size = Size.Empty;
+                return false;
+            }
+
+            location = new Point(x, y);
+            size = new Size(w, h);
+            return true;
+        }
+
+        public static void SaveWindow(Point location, Size size)
+        {
+            SaveWindow(location.X, location.Y, size.Width, size.Height, false);
         }
 
         public static void SaveWindowBounds(Rectangle bounds)
@@ -312,6 +340,163 @@ namespace BeautifulPotatoExpLauncher
                       .Append(Environment.NewLine);
                 File.WriteAllText(PanelFile, sb.ToString());
             }
+            catch { }
+        }
+
+        // ---- per-mod launch choices ----
+
+        private static string ModOverrideFile { get { return Path.Combine(Dir, "modchoices.tsv"); } }
+
+        public static Dictionary<string, ModOverride> LoadModOverrides()
+        {
+            var result = new Dictionary<string, ModOverride>();
+            try
+            {
+                if (!File.Exists(ModOverrideFile)) return result;
+                foreach (string line in File.ReadAllLines(ModOverrideFile, Encoding.UTF8))
+                {
+                    if (line.Length == 0) continue;
+                    string[] f = line.Split('\t');
+                    if (f.Length < 3) continue;
+                    if (f[0].Length == 0) continue;
+                    result[f[0]] = new ModOverride { Enabled = f[1] == "1", Folder = f[2] };
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        public static void SaveModOverrides(IDictionary<string, ModOverride> map)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                foreach (var kv in map)
+                    sb.Append(kv.Key).Append('\t')
+                      .Append(kv.Value.Enabled ? 1 : 0).Append('\t')
+                      .Append(Clean(kv.Value.Folder)).Append('\n');
+                File.WriteAllText(ModOverrideFile, sb.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        // ---- the mod library index ----
+
+        private static string ModIndexFile { get { return Path.Combine(Dir, "mods.tsv"); } }
+
+        /// <summary>
+        /// The saved mod index. Tab separated, one mod per line, with the
+        /// free-text fields stripped of tabs and newlines so a mod name can
+        /// never shift the columns of its own row.
+        /// </summary>
+        public static void SaveModIndex(IEnumerable<ModEntry> mods)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                foreach (var m in mods)
+                {
+                    sb.Append(m.WorkshopId).Append('\t')
+                      .Append(Clean(m.Name)).Append('\t')
+                      .Append(Clean(m.Folder)).Append('\t')
+                      .Append(m.MetaStamp).Append('\t')
+                      .Append(Stamp(m.InstalledAt)).Append('\t')
+                      .Append(m.SizeBytes).Append('\t')
+                      .Append(Clean(m.Author)).Append('\t')
+                      .Append(Clean(m.Version)).Append('\t')
+                      .Append(m.HasMeta ? 1 : 0).Append('\t')
+                      .Append(m.HasKeysFolder ? 1 : 0).Append('\t')
+                      .Append(m.KeyFileCount).Append('\t')
+                      .Append(m.PboCount).Append('\t')
+                      .Append(m.SignatureCount).Append('\t')
+                      .Append(Stamp(m.LastLoaded)).Append('\t')
+                      .Append(Stamp(m.DeepScannedAt)).Append('\n');
+                }
+                File.WriteAllText(ModIndexFile, sb.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        public static List<ModEntry> LoadModIndex()
+        {
+            var result = new List<ModEntry>();
+            try
+            {
+                if (!File.Exists(ModIndexFile)) return result;
+                foreach (string line in File.ReadAllLines(ModIndexFile, Encoding.UTF8))
+                {
+                    if (line.Length == 0) continue;
+                    string[] f = line.Split('\t');
+                    if (f.Length < 15) continue;
+                    try
+                    {
+                        result.Add(new ModEntry
+                        {
+                            WorkshopId = ulong.Parse(f[0]),
+                            Name = f[1],
+                            Folder = f[2],
+                            MetaStamp = ulong.Parse(f[3]),
+                            InstalledAt = FromStamp(f[4]),
+                            SizeBytes = long.Parse(f[5]),
+                            Author = f[6],
+                            Version = f[7],
+                            HasMeta = f[8] == "1",
+                            HasKeysFolder = f[9] == "1",
+                            KeyFileCount = int.Parse(f[10]),
+                            PboCount = int.Parse(f[11]),
+                            SignatureCount = int.Parse(f[12]),
+                            LastLoaded = FromStamp(f[13]),
+                            DeepScannedAt = FromStamp(f[14])
+                        });
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        private static string Stamp(DateTime t)
+        {
+            return t == DateTime.MinValue ? "0"
+                 : t.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static DateTime FromStamp(string v)
+        {
+            long ticks;
+            if (!long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out ticks) || ticks <= 0)
+                return DateTime.MinValue;
+            // Kept in UTC, exactly as written. An earlier version converted to
+            // local time here, which made every InstalledAt differ from the
+            // File.GetLastWriteTimeUtc it is compared against - so the index
+            // looked stale on every run and the expensive size scan was redone
+            // from scratch each time. Display converts; storage does not.
+            try { return new DateTime(ticks, DateTimeKind.Utc); }
+            catch { return DateTime.MinValue; }
+        }
+
+        // ---- an extra folder the player keeps mods in ----
+
+        private static string ExtraModFile { get { return Path.Combine(Dir, "extramods.txt"); } }
+
+        /// <summary>
+        /// A second place to look for mods, chosen by the player. Empty when
+        /// they have not set one, which is the normal case.
+        /// </summary>
+        public static string LoadExtraModPath()
+        {
+            try
+            {
+                if (!File.Exists(ExtraModFile)) return "";
+                return File.ReadAllText(ExtraModFile).Trim();
+            }
+            catch { return ""; }
+        }
+
+        public static void SaveExtraModPath(string path)
+        {
+            try { File.WriteAllText(ExtraModFile, path ?? ""); }
             catch { }
         }
 

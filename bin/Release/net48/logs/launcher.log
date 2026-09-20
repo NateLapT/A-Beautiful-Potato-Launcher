@@ -30,3 +30,218 @@
 [11:49:01] Query: Recent, app 221100, no filters
 [11:49:02]   stable: 3 servers. Now asking for Experimental...
 [11:49:03] Master list cached: 13 servers. Searching now filters this list instantly.
+[13:34:59] Launcher started
+[13:34:59] Showing 10010 remembered community servers from 13:23 while Steam is asked for the current list.
+[13:34:59] Steam API: connected (ISteamUGC v017).
+[13:34:59] Server browser: connected to Steam.
+[13:34:59] Query: Internet, app 221100, no filters
+[22:34:51] Launcher started
+[22:34:51] Showing 10755 remembered community servers from 21:53 while Steam is asked for the current list.
+[22:34:52] Steam API: connected (ISteamUGC v017).
+[22:34:52] Server browser: connected to Steam.
+[22:34:52] Query: Internet, app 221100, no filters
+[22:35:03]   stable: 4998 servers. Now asking for Experimental...
+[22:35:12] Master list cached: 10775 servers. Searching now filters this list instantly.
+[22:35:15] SEARCH pressed - asking Steam for servers matching "zero chernarus".
+[22:35:15] Showing 10775 remembered community servers from 22:35 while Steam is asked for the current list.
+[22:35:15] Query: Internet, app 221100, name_match=*zero chernarus*
+[22:35:25]   stable: 404 servers. Now asking for Experimental...
+[22:35:29] Master list cached: 11144 servers. Searching now filters this list instantly.
+[22:35:36] Connecting to ZERO CHERNARUS | Autumn | No Bases (51.38.89.140:2502)...
+[23:33:35] Launcher started
+[23:33:35] Showing 11144 remembered community servers from 22:35 while Steam is asked for the current list.
+[23:33:35] Steam API: connected (ISteamUGC v017).
+[23:33:35] Server browser: connected to Steam.
+[23:33:35] Query: Internet, app 221100, no filters
+[23:33:47]   stable: 4997 servers. Now asking for Experimental...
+[23:33:58] Master list cached: 11163 servers. Searching now filters this list instantly.
+[23:55:16] Launcher started
+[23:55:16] Showing 11163 remembered community servers from 23:33 while Steam is asked for the current list.
+[23:55:16] Steam API: connected (ISteamUGC v017).
+[23:55:16] Server browser: connected to Steam.
+[23:55:16] Query: Internet, app 221100, no filters
+[23:55:28]   stable: 4998 servers. Now asking for Experimental...
+[23:55:39] Master list cached: 11174 servers. Searching now filters this list instantly.
+[00:22:16] Launcher started
+[00:22:16] Showing 11174 remembered community servers from 23:55 while Steam is asked for the current list.
+[00:22:16] Steam API: connected (ISteamUGC v017).
+[00:22:16] Server browser: connected to Steam.
+[00:22:17] Query: Internet, app 221100, no filters
+[00:22:28]   stable: 4997 servers. Now asking for Experimental...
+[00:22:40] Master list cached: 11185 servers. Searching now filters this list instantly.
+[01:36:05] Launcher started
+[01:36:05] Showing 11185 remembered community servers from 00:22 while Steam is asked for the current list.
+[01:36:05] Steam API: connected (ISteamUGC v017).
+[01:36:05] Server browser: connected to Steam.
+[01:36:05] Query: Internet, app 221100, no filters
+[01:36:17]   stable: 4998 servers. Now asking for Experimental...
+[01:36:29] Master list cached: 11193 servers. Searching now filters this list instantly.
+[01:51:54] Launcher started
+[01:51:54] Showing 11193 remembered community servers from 01:36 while Steam is asked for the current list.
+[01:51:54] Steam API: connected (ISteamUGC v017).
+[01:51:54] Server browser: connected to Steam.
+[01:51:54] Query: Internet, app 221100, no filters
+[01:52:06]   stable: 4998 servers. Now asking for Experimental...
+[01:52:16] Master list cached: 11200 servers. Searching now filters this list instantly.
+[02:38:39] Launcher started
+[02:38:40] Showing 11218 remembered community servers from 02:32 while Steam is asked for the current list.
+[02:38:40] Steam API: connected (ISteamUGC v017).
+[02:38:40] Server browser: connected to Steam.
+[02:38:40] Query: Internet, app 221100, no filters
+[02:38:44]   stable: 0 servers. Now asking for Experimental...
+[02:38:53] Master list cached: 11219 servers. Searching now filters this list instantly.
+[02:39:48] Query: Lan, app 221100, no filters
+[02:39:50]   stable: 0 servers. Now asking for Experimental...
+[02:39:52] Master list cached: 0 servers. Searching now filters this list instantly.
+[02:39:57] Filter panel shown.
+[02:39:58] Filter panel hidden.
+[02:45:47] Launcher started
+[02:45:47] Steam API: connected (ISteamUGC v017).
+[02:45:47] Server browser: connected to Steam.
+[02:45:47] Query: Lan, app 221100, no filters
+[02:45:49]   stable: 0 servers. Now asking for Experimental...
+[02:45:52] Master list cached: 0 servers. Searching now filters this list instantly.
+[02:54:02] Launcher started
+[02:54:02] Steam API: connected (ISteamUGC v017).
+[02:54:02] Server browser: connected to Steam.
+[02:54:02] Query: Lan, app 221100, no filters
+[02:54:04]   stable: 0 servers. Now asking for Experimental...
+[02:54:06] Master list cached: 0 servers. Searching now filters this list instantly.
+[02:55:44] Query: Lan, app 221100, no filters
+[02:55:46]   stable: 1 servers. Now asking for Experimental...
+[02:55:47] Master list cached: 1 servers. Searching now filters this list instantly.
+[02:55:51] Steam : c:\program files (x86)\steam
+[02:55:51] 
+[02:55:51] Asking 10.20.60.2:2302 what it is running...
+[02:55:51] Server: Local Potato
+[02:55:51] Build : Experimental (app 1024020)  version 1.30.164014
+[02:55:51] Game  : c:\program files (x86)\steam\steamapps\common\DayZ Exp
+[02:55:51] 
+[02:55:51] Asking which mods it requires...
+[02:55:51] Server publishes 2 mod(s).
+[02:55:51] Note: a server only advertises as many mods as its steamProtocolMaxDataSize
+[02:55:51]       allows. If it kicks you for a mod not listed above, that setting is
+[02:55:51]       too small on the server and no launcher can see the rest.
+[02:55:51] Checking published versions with Steam...
+[02:55:52]   [MISSING]  892619329    Akol.MountsAndSights
+[02:55:52]   [MISSING]  2054775140   DayZRussia
+[02:55:52] 
+[02:55:52] Fetching 2 mod(s) that are missing, out of date, or still downloading...
+[02:55:57] Download cancelled - not launching.
+[02:58:55] Launcher started
+[02:58:56] Showing 1 remembered lan servers from 02:55 while Steam is asked for the current list.
+[02:58:56] Steam API: connected (ISteamUGC v017).
+[02:58:56] Server browser: connected to Steam.
+[02:58:56] Query: Lan, app 221100, no filters
+[02:58:57]   stable: 1 servers. Now asking for Experimental...
+[02:58:59] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:05:35] Launcher started
+[03:05:35] Showing 1 remembered lan servers from 02:58 while Steam is asked for the current list.
+[03:05:35] Steam API: connected (ISteamUGC v017).
+[03:05:35] Server browser: connected to Steam.
+[03:05:35] Query: Lan, app 221100, no filters
+[03:05:37]   stable: 1 servers. Now asking for Experimental...
+[03:05:38] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:05:42] Showing 1 remembered lan servers from 03:05 while Steam is asked for the current list.
+[03:05:42] Query: Lan, app 221100, no filters
+[03:05:44]   stable: 1 servers. Now asking for Experimental...
+[03:05:45] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:06:33] Showing 11219 remembered community servers from 02:38 while Steam is asked for the current list.
+[03:06:33] Query: Internet, app 221100, no filters
+[03:06:42]   stable: 4997 servers. Now asking for Experimental...
+[03:06:51] Master list cached: 11223 servers. Searching now filters this list instantly.
+[03:06:55] Showing 1 remembered lan servers from 03:05 while Steam is asked for the current list.
+[03:06:55] Query: Lan, app 221100, no filters
+[03:06:57]   stable: 1 servers. Now asking for Experimental...
+[03:06:58] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:07:00] Repairing Akol.MountsAndSights (892619329) - Steam is re-downloading it.
+[03:07:08] Repairing DayZRussia (2054775140) - Steam is re-downloading it.
+[03:08:01] Steam : c:\program files (x86)\steam
+[03:08:01] 
+[03:08:01] Asking 10.20.60.2:2302 what it is running...
+[03:08:01] Server: Local Potato
+[03:08:01] Build : Experimental (app 1024020)  version 1.30.164014
+[03:08:01] Game  : c:\program files (x86)\steam\steamapps\common\DayZ Exp
+[03:08:01] 
+[03:08:01] Asking which mods it requires...
+[03:08:01] Server publishes 2 mod(s).
+[03:08:01] Note: a server only advertises as many mods as its steamProtocolMaxDataSize
+[03:08:01]       allows. If it kicks you for a mod not listed above, that setting is
+[03:08:01]       too small on the server and no launcher can see the rest.
+[03:08:01] Checking published versions with Steam...
+[03:08:01]   [CUSTOM]   892619329    Akol.MountsAndSights
+[03:08:01]   [CUSTOM]   2054775140   DayZRussia
+[03:08:01]   [CUSTOM]  Akol.MountsAndSights -> P:\Published\@GhostRider
+[03:08:01]   [CUSTOM]  DayZRussia -> P:\Published\@ThrowDirt
+[03:08:01] Mod argument: 26 characters.
+[03:08:01] 
+[03:08:02] Launching through DayZ_BE.exe so BattlEye attaches:
+[03:08:02]   DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe "-mod=!m\892619329;!m\2054775140" -connect=10.20.60.2 -port=2302 "-name=PotatoLauncher" -nolauncher -world=empty
+[03:08:02]   SteamAppId for the game process: 1024020 (Experimental)
+[03:08:02] 
+[03:08:02] Started. DayZ takes a minute or two to appear - be patient.
+[03:09:48] Showing 1 remembered lan servers from 03:06 while Steam is asked for the current list.
+[03:09:48] Query: Lan, app 221100, no filters
+[03:09:49]   stable: 1 servers. Now asking for Experimental...
+[03:09:51] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:24:07] Launcher started
+[03:24:07] Showing 1 remembered lan servers from 03:09 while Steam is asked for the current list.
+[03:24:07] Steam API: connected (ISteamUGC v017).
+[03:24:07] Server browser: connected to Steam.
+[03:24:07] Query: Lan, app 221100, no filters
+[03:24:09]   stable: 1 servers. Now asking for Experimental...
+[03:24:10] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:27:35] Launcher started
+[03:27:35] Showing 1 remembered lan servers from 03:24 while Steam is asked for the current list.
+[03:27:35] Steam API: connected (ISteamUGC v017).
+[03:27:35] Server browser: connected to Steam.
+[03:27:35] Query: Lan, app 221100, no filters
+[03:27:37]   stable: 1 servers. Now asking for Experimental...
+[03:27:38] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:55:33] Launcher started
+[03:55:34] Showing 1 remembered lan servers from 03:27 while Steam is asked for the current list.
+[03:55:34] Steam API: connected (ISteamUGC v017).
+[03:55:34] Server browser: connected to Steam.
+[03:55:34] Query: Lan, app 221100, no filters
+[03:55:36]   stable: 0 servers. Now asking for Experimental...
+[03:55:38] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:55:39] Showing 1 remembered lan servers from 03:55 while Steam is asked for the current list.
+[03:55:39] Query: Lan, app 221100, no filters
+[03:55:41]   stable: 0 servers. Now asking for Experimental...
+[03:55:43] Master list cached: 1 servers. Searching now filters this list instantly.
+[03:56:50] Showing 11223 remembered community servers from 03:06 while Steam is asked for the current list.
+[03:56:50] Query: Internet, app 221100, no filters
+[03:56:59]   stable: 4997 servers. Now asking for Experimental...
+[03:57:08] Master list cached: 11230 servers. Searching now filters this list instantly.
+[03:58:30] Showing 14 remembered recent servers from 11:54 while Steam is asked for the current list.
+[03:58:30] Query: Recent, app 221100, no filters
+[03:58:31]   stable: 3 servers. Now asking for Experimental...
+[03:58:33] Master list cached: 16 servers. Searching now filters this list instantly.
+[03:58:53] Showing 11230 remembered community servers from 03:57 while Steam is asked for the current list.
+[03:58:53] Query: Internet, app 221100, no filters
+[03:59:00] Steam : c:\program files (x86)\steam
+[03:59:00] 
+[03:59:00] Asking 104.218.48.62:4902 what it is running...
+[03:59:00] Server: A Beautiful Potato MotoX Motocross
+[03:59:00] Build : Experimental (app 1024020)  version 1.30.164014
+[03:59:00] Game  : c:\program files (x86)\steam\steamapps\common\DayZ Exp
+[03:59:00] 
+[03:59:00] Asking which mods it requires...
+[03:59:00] Server publishes 4 mod(s).
+[03:59:00] Note: a server only advertises as many mods as its steamProtocolMaxDataSize
+[03:59:00]       allows. If it kicks you for a mod not listed above, that setting is
+[03:59:00]       too small on the server and no launcher can see the rest.
+[03:59:00] Checking published versions with Steam...
+[03:59:00]   [ok]       3803129582   BikeWheelies
+[03:59:00]   [ok]       3800710051   MotoX
+[03:59:00]   [ok]       1564026768   Community Online Tools
+[03:59:00]   [ok]       1625463737   Community Framework
+[03:59:00] Mod argument: 55 characters.
+[03:59:00] 
+[03:59:00] Launching through DayZ_BE.exe so BattlEye attaches:
+[03:59:00]   DayZ_BE.exe 2 1 0 -exe DayZ_x64.exe "-mod=!m\3803129582;!m\3800710051;!m\1564026768;!m\1625463737" -connect=104.218.48.62 -port=4902 "-name=PotatoLauncher" -nolauncher -world=empty
+[03:59:00]   SteamAppId for the game process: 1024020 (Experimental)
+[03:59:00] 
+[03:59:00] Started. DayZ takes a minute or two to appear - be patient.
+[03:59:02]   stable: 4997 servers. Now asking for Experimental...
+[03:59:11] Master list cached: 11230 servers. Searching now filters this list instantly.

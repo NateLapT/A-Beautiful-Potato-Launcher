@@ -63,6 +63,35 @@ namespace BeautifulPotatoExpLauncher
         // "battleye,no3rd,external,privHive,shard123ABC,lqs0,etm3.000000,
         //  entm64.000000,mod,isDLC,16:48"
         public bool HasMods     { get { return HasTag("mod"); } }
+
+        /// <summary>
+        /// How many players are waiting to get in, or 0 when nobody is.
+        ///
+        /// DayZ publishes this as an "lqs" entry in the Steam tags - lqs3 is
+        /// three waiting. It is NOT in any of the places one would look first:
+        /// the Bots byte reads 0 even on a server with a dozen queued, no rule
+        /// carries it, and the player count never exceeds the maximum, so the
+        /// usual "players minus slots" trick finds nothing. Measured across
+        /// 4,998 servers, every one carried an lqs tag, and of those reporting
+        /// both a live player count and a non-zero queue, every single one was
+        /// exactly full.
+        /// </summary>
+        public int Queue { get { return TagNumber("lqs"); } }
+
+        /// <summary>The number attached to a tag, e.g. "lqs12" -> 12.</summary>
+        private int TagNumber(string prefix)
+        {
+            if (string.IsNullOrEmpty(Tags)) return 0;
+            foreach (var part in Tags.Split(','))
+            {
+                string t = part.Trim();
+                if (t.Length <= prefix.Length) continue;
+                if (!t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                int v;
+                if (int.TryParse(t.Substring(prefix.Length), out v) && v >= 0) return v;
+            }
+            return 0;
+        }
         public bool BattlEye    { get { return HasTag("battleye"); } }
         public bool ThirdPerson { get { return !HasTag("no3rd"); } }
         public bool PrivateHive { get { return HasTag("privHive"); } }

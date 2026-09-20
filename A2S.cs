@@ -52,6 +52,13 @@ namespace BeautifulPotatoExpLauncher
         public string Version = "";
         public string Keywords = "";
 
+        /// <summary>
+        /// The server is password protected. A2S calls this "visibility": 0 is
+        /// open, anything else means a password is required before the game
+        /// will let you in.
+        /// </summary>
+        public bool Password;
+
         public bool IsExperimental { get { return AppId == A2S.ExperimentalAppId; } }
         public bool IsStable       { get { return AppId == A2S.StableAppId; } }
 
@@ -260,7 +267,7 @@ namespace BeautifulPotatoExpLauncher
                 i++;                                   // bots
                 i++;                                   // server type
                 i++;                                   // environment
-                i++;                                   // visibility
+                info.Password = d[i++] != 0;           // visibility: 0 open, 1 locked
                 i++;                                   // VAC
                 info.Version = ReadCString(d, ref i);
 
@@ -355,7 +362,69 @@ namespace BeautifulPotatoExpLauncher
 
             var all = new List<byte>();
             foreach (var kv in chunks) all.AddRange(kv.Value);
-            return all.ToArray();
+            return Unescape(all.ToArray());
+        }
+
+        /// <summary>
+        /// Undoes the byte escaping DayZ applies to the packed mod blob.
+        ///
+        /// WHY THE ESCAPING EXISTS
+        ///   The blob travels inside an A2S_RULES value, and those are NUL
+        ///   terminated strings - a literal 0x00 anywhere inside would end the
+        ///   value early and destroy the rest of the reply. So the bytes that
+        ///   cannot be sent raw are encoded as pairs beginning 0x01.
+        ///
+        /// WHY IT MATTERS SO MUCH
+        ///   Most records survive being read without decoding, because most
+        ///   hashes and ids contain no byte needing an escape. The ones that DO
+        ///   are unreadable, and a record that cannot be read stops the walk
+        ///   dead - taking every mod after it as well.
+        ///
+        ///   Measured on a live server: read raw, the walk found 6 mods and died
+        ///   at offset 129 on a length byte of 107. Decoded first, the same blob
+        ///   yields a clean chain of 10 running all the way to the signature
+        ///   list - recovering "WCP" and "Asmond Vanilla Clothing", which were
+        ///   simply invisible before. A player joining on the old answer would
+        ///   be missing mods the launcher never mentioned.
+        ///
+        /// THE MAPPING, AND HOW IT WAS ESTABLISHED
+        ///   01 01 -> 01     01 02 -> 00     01 03 -> FF
+        ///
+        ///   Not guessed. The candidate mappings were tried against five live
+        ///   servers and judged on the one thing that cannot be fudged: whether
+        ///   the whole blob then parses into records, signatures and description
+        ///   landing EXACTLY on its final byte. This mapping is the only one
+        ///   that does so on all five. Swapping 00 and 01 leaves four of the
+        ///   five one byte adrift, and not decoding at all loses most of the
+        ///   mods outright - one server read 1 mod where it has 76.
+        ///
+        ///   A 0x01 followed by anything else is left alone, so a blob that is
+        ///   not escaped at all passes through untouched.
+        /// </summary>
+        private static byte[] Unescape(byte[] b)
+        {
+            if (b == null || b.Length == 0) return b;
+
+            // Nothing to do unless an escape is actually present; the common
+            // case then costs one scan and no allocation.
+            bool any = false;
+            for (int i = 0; i + 1 < b.Length; i++)
+                if (b[i] == 0x01 && (b[i + 1] == 0x01 || b[i + 1] == 0x02 || b[i + 1] == 0x03))
+                { any = true; break; }
+            if (!any) return b;
+
+            var outBuf = new List<byte>(b.Length);
+            for (int i = 0; i < b.Length; i++)
+            {
+                if (b[i] == 0x01 && i + 1 < b.Length)
+                {
+                    if (b[i + 1] == 0x01) { outBuf.Add(0x01); i++; continue; }
+                    if (b[i + 1] == 0x02) { outBuf.Add(0x00); i++; continue; }
+                    if (b[i + 1] == 0x03) { outBuf.Add(0xFF); i++; continue; }
+                }
+                outBuf.Add(b[i]);
+            }
+            return outBuf.ToArray();
         }
 
         /// <summary>
@@ -416,31 +485,100 @@ namespace BeautifulPotatoExpLauncher
             var result = new ServerRules();
             if (blob == null || blob.Length < 12) return result;
 
-            // The first plausible record is not authoritative: in some blobs the
-            // header or description contains random text that happens to look like
-            // a valid mod name. Only a candidate that can parse all the way to the
-            // real list end is accepted.
-            int limit = Math.Min(blob.Length, MaxHeaderScan);
-            for (int i = 1; i < limit; i++)
-            {
-                ulong id; string name; int next;
-                if (!TryRecord(blob, i, out id, out name, out next)) continue;
+            // Some blobs contain junk text in the header region that can look like
+            // a valid record for a few frames before the real mod list starts. The
+            // fix is to score every valid candidate and keep the one with the
+            // largest complete mod list instead of accepting the first shallow hit.
+            // Two passes. The first reads only the canonical record shape, which
+            // is what virtually every server uses and which can be read exactly.
+            // Only if that produces nothing provable are the looser shapes tried,
+            // for the few servers that need them. Mixing the two in one pass let
+            // false records from the loose shapes wreck otherwise clean reads.
+            ServerRules best = ScanFrom(blob, true);
+            if (best != null) return best;
 
-                var candidate = TryParseFrom(blob, i);
-                if (candidate != null && candidate.Complete)
-                    return candidate;
-            }
+            best = ScanFrom(blob, false);
+            if (best != null) return best;
 
-            // No records anywhere in the header region: this server really has no
-            // mods, and that is a complete answer, not a failure.
+            ServerRules bestPartial = BestPartial(blob, true) ?? BestPartial(blob, false);
+
+            // Records were found but the list never resolved to a clean end. That
+            // is NOT "no mods" - it is a list we could not fully trust, and
+            // saying so is what lets the launcher warn instead of sending a
+            // player to a server whose mods it has under-counted.
+            if (bestPartial != null) return bestPartial;
+
+            // Nothing that even looks like a record: this server really has no
+            // mods, and that is a complete answer rather than a failure.
             result.Complete = true;
             return result;
         }
 
-        private static ServerRules TryParseFrom(byte[] blob, int start)
+        /// <summary>The largest PROVEN-complete list readable in one shape mode.</summary>
+        private static ServerRules ScanFrom(byte[] blob, bool canonicalOnly)
+        {
+            ServerRules best = null;
+            int limit = Math.Min(blob.Length, MaxHeaderScan);
+            for (int i = 1; i < limit; i++)
+            {
+                ulong id; string name; int next;
+                if (!TryRecord(blob, i, canonicalOnly, out id, out name, out next)) continue;
+
+                var candidate = TryParseFrom(blob, i, canonicalOnly);
+                if (candidate == null || !candidate.Complete || candidate.Mods.Count == 0) continue;
+                if (best == null || candidate.Mods.Count > best.Mods.Count) best = candidate;
+            }
+            return best;
+        }
+
+        /// <summary>The largest list found when none could be proven complete.</summary>
+        private static ServerRules BestPartial(byte[] blob, bool canonicalOnly)
+        {
+            ServerRules best = null;
+            int limit = Math.Min(blob.Length, MaxHeaderScan);
+            for (int i = 1; i < limit; i++)
+            {
+                ulong id; string name; int next;
+                if (!TryRecord(blob, i, canonicalOnly, out id, out name, out next)) continue;
+
+                var candidate = TryParseFrom(blob, i, canonicalOnly);
+                if (candidate == null || candidate.Mods.Count == 0) continue;
+                if (best == null || candidate.Mods.Count > best.Mods.Count) best = candidate;
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Walks the records from one candidate starting point.
+        ///
+        /// WHY A GAP MUST NOT END THE WALK
+        ///   Records are usually back to back, but not always. Measured on a
+        ///   live server whose blob arrives in 23 chunks, the records sat at
+        ///   offsets 8, 43, 68, 93, 117, 156 and 185 - and the FIRST one ended
+        ///   at 42, one byte short of the next.
+        ///
+        ///   Giving up on that first mismatch did not merely lose one mod. The
+        ///   walk died, the candidate was discarded, and whichever other start
+        ///   offset happened to survive won instead - so the server reported 5
+        ///   mods out of 68, and reported them as COMPLETE. A player joining on
+        ///   that answer is kicked for the 63 mods the launcher never mentioned.
+        ///   Another server read 19 of 45 the same way.
+        ///
+        ///   So a mismatch costs ONE BYTE, not the list. Resynchronising is safe
+        ///   because the end is proven separately: TailFits has to land exactly
+        ///   on the final byte, so a walk that wanders cannot be mistaken for a
+        ///   complete one. Keeping junk out is TryRecord and LooksLikeModName's
+        ///   job, and they still reject anything that is not a real name.
+        ///
+        ///   The skip budget stops a pathological blob being scanned to death;
+        ///   once that much has been skipped this start point is simply wrong,
+        ///   and the caller has better candidates to try.
+        /// </summary>
+        private static ServerRules TryParseFrom(byte[] blob, int start, bool canonicalOnly)
         {
             var result = new ServerRules();
             int at = start;
+            int skipped = 0;
 
             while (at < blob.Length)
             {
@@ -452,63 +590,127 @@ namespace BeautifulPotatoExpLauncher
                 }
 
                 ulong id; string name; int next;
-                if (TryRecord(blob, at, out id, out name, out next))
+                if (TryRecord(blob, at, canonicalOnly, out id, out name, out next)
+                    && !string.IsNullOrWhiteSpace(name) && LooksLikeModName(name))
                 {
-                    if (!string.IsNullOrWhiteSpace(name) && LooksLikeModName(name))
-                    {
-                        result.Mods.Add(new Mod(name, id));
-                        at = next;
-                        continue;
-                    }
+                    result.Mods.Add(new Mod(name, id));
+                    at = next;
+                    continue;
                 }
 
-                return null;
+                at++;
+                if (++skipped > MaxResyncBytes) break;
             }
 
             return result.Mods.Count > 0 ? result : null;
         }
 
+        /// <summary>
+        /// How many bytes a walk may skip in total before its starting point is
+        /// judged wrong. Generous: the gaps actually seen are one or two bytes,
+        /// and the signature block at the end of a blob is only a few hundred.
+        /// </summary>
+        private const int MaxResyncBytes = 2048;
+
         /// <summary>How far in the mod records may start; see ParseBlob.</summary>
         /// <remarks>
         /// Some heavily modded servers pad the binary blob with extra bytes
         /// before the first real record, so a hard 14-byte window is too small.
-        /// A 64-byte scan still stays tight while covering the real-world cases.
+        /// The real start can sit well past the earlier assumptions, so the scan
+        /// needs to cover a larger window before concluding that a server has no
+        /// valid mod list at all.
         /// </remarks>
-        private const int MaxHeaderScan = 64;
+        private const int MaxHeaderScan = 256;
 
         /// <summary>Tests one position against the record shape.</summary>
         private static bool TryRecord(byte[] b, int i, out ulong id, out string name, out int next)
         {
+            return TryRecord(b, i, false, out id, out name, out next);
+        }
+
+        /// <summary>
+        /// Tests one position against the record shape.
+        ///
+        /// WHY THERE IS A CANONICAL MODE
+        ///   Almost every server lays a record out one way: four bytes of hash,
+        ///   the 0x04 marker, the id, a length byte, the name. A few - DayOne
+        ///   among them - shift a discriminator byte around, so the alternative
+        ///   shapes below exist to read those.
+        ///
+        ///   But accepting four shapes at every offset makes the test far weaker
+        ///   than it looks. On an ordinary server it finds records that are not
+        ///   there, and those false records derail the walk past the real end of
+        ///   the list: one server produced 80 "mods" out of a true 68 and could
+        ///   no longer prove where the list finished.
+        ///
+        ///   So the canonical shape is tried FIRST, on its own, and only if that
+        ///   fails to produce a provable list are the looser shapes allowed.
+        ///   Ordinary servers are read exactly; the odd ones still work.
+        /// </summary>
+        private static bool TryRecord(byte[] b, int i, bool canonicalOnly,
+                                      out ulong id, out string name, out int next)
+        {
             id = 0; name = null; next = i;
             if (i + 10 > b.Length) return false;
 
-            if (TryRecordAtMarker(b, i + 4, out id, out name, out next)) return true;
+            if (TryRecordAtMarker(b, i + 4, canonicalOnly, out id, out name, out next)) return true;
+            if (canonicalOnly) return false;
 
             // Some DayOne records carry one small discriminator byte before the
-            // marker; others carry it after. Try both shapes and let the exact
-            // tail proof decide whether the full candidate is real.
-            return TryRecordAtMarker(b, i + 5, out id, out name, out next);
+            // marker; others carry it after.
+            return TryRecordAtMarker(b, i + 5, false, out id, out name, out next);
         }
 
-        private static bool TryRecordAtMarker(byte[] b, int markerAt, out ulong id, out string name, out int next)
+        /// <summary>
+        /// Reads a record whose id field begins at <paramref name="markerAt"/>.
+        ///
+        /// THAT BYTE IS THE LENGTH OF THE ID, NOT A MARKER.
+        ///   It reads 0x04 on almost every server, which is why it was taken
+        ///   for a fixed marker for so long - a workshop id is four bytes. But a
+        ///   server loading a mod that is NOT from the workshop writes 0x01 and
+        ///   a single zero byte, because that mod has no id at all:
+        ///
+        ///       e2 ce 56 1b | 04 | b9 9b e2 60 | 13 | "Community Framework"
+        ///       02 01 93 a5 | 01 | 00          | 0b | "@GhostRider"
+        ///
+        ///   Insisting on 0x04 made every locally installed mod invisible, and
+        ///   worse, the walk then resynchronised into the signature list and
+        ///   reported signature names as mods. A LAN server running three local
+        ///   mods reported two mods, both wrong.
+        /// </summary>
+        private static bool TryRecordAtMarker(byte[] b, int markerAt, bool canonicalOnly,
+                                              out ulong id, out string name, out int next)
         {
             id = 0; name = null; next = markerAt;
-            if (markerAt < 0 || markerAt >= b.Length || b[markerAt] != 0x04) return false;
+            if (markerAt < 0 || markerAt >= b.Length) return false;
 
-            if (TryRecordBody(b, markerAt + 1, out id, out name, out next)) return true;
-            return TryRecordBody(b, markerAt + 2, out id, out name, out next);
+            int idLen = b[markerAt];
+            if (idLen < 1 || idLen > 8) return false;
+            if (TryRecordBody(b, markerAt + 1, idLen, out id, out name, out next)) return true;
+
+            // A shape seen on some servers carries one extra byte before the id.
+            if (canonicalOnly) return false;
+            return TryRecordBody(b, markerAt + 2, idLen, out id, out name, out next);
         }
 
-        private static bool TryRecordBody(byte[] b, int idAt, out ulong id, out string name, out int next)
+        private static bool TryRecordBody(byte[] b, int idAt, int idLen,
+                                          out ulong id, out string name, out int next)
         {
             id = 0; name = null; next = idAt;
-            if (idAt + 5 > b.Length) return false;
+            if (idAt + idLen + 1 > b.Length) return false;
 
-            id = BitConverter.ToUInt32(b, idAt);
-            if (id < 100000 || id > 4000000000) return false;
+            // Little-endian, however many bytes the record said it uses.
+            ulong value = 0;
+            for (int k = 0; k < idLen; k++) value |= (ulong)b[idAt + k] << (8 * k);
+            id = value;
 
-            int lenAt = idAt + 4;
-            int textAt = idAt + 5;
+            // A workshop id has to look like one. An id of zero is not a
+            // mistake - it is how a server says "this mod is not from the
+            // workshop", and those are identified by name instead.
+            if (id != 0 && (id < 100000 || id > 4000000000)) return false;
+
+            int lenAt = idAt + idLen;
+            int textAt = lenAt + 1;
             int len = b[lenAt];
             if (len < 2 || len > 64) return false;
             if (textAt + len > b.Length) return false;
@@ -516,7 +718,10 @@ namespace BeautifulPotatoExpLauncher
             for (int k = textAt; k < textAt + len; k++)
                 if (b[k] < 32 || b[k] == 127) return false;   // names are printable
 
-            try { name = Encoding.UTF8.GetString(b, textAt, len); }
+            // StrictUtf8 THROWS on malformed input where Encoding.UTF8 would
+            // quietly hand back replacement characters - and "these bytes are
+            // not text at all" is exactly the question being asked.
+            try { name = StrictUtf8.GetString(b, textAt, len); }
             catch { return false; }
 
             // A malformed packet can still contain a byte sequence that is
@@ -530,6 +735,9 @@ namespace BeautifulPotatoExpLauncher
             next = textAt + len;
             return true;
         }
+
+        /// <summary>Decoding that refuses malformed input; see TryRecordBody.</summary>
+        private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private static bool LooksLikeModName(string name)
         {
@@ -591,7 +799,21 @@ namespace BeautifulPotatoExpLauncher
                 i += len;
             }
 
-            while (i < b.Length)
+            // EXACTLY ONE optional entry may follow the signatures - the
+            // description - and then the blob must END.
+            //
+            // This was briefly a while-loop that consumed entries until the
+            // buffer ran out, and that quietly destroyed the whole proof. Any
+            // stretch of bytes can be read as a chain of length-prefixed blocks
+            // that happens to finish on the last byte, so "the mod list ends
+            // here" became true almost everywhere - and the walk stopped at the
+            // first place it was asked. One server reported 5 mods of 68 and
+            // called the answer complete; another 19 of 45. The player then
+            // joins and is kicked for the mods that were never listed.
+            //
+            // The exactness IS the proof. Keeping it to one entry is what makes
+            // landing on the final byte mean something.
+            if (i < b.Length)
             {
                 int len = b[i]; i++;
                 if (i + len > b.Length) return false;

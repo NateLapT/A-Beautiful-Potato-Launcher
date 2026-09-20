@@ -30,22 +30,32 @@ namespace BeautifulPotatoExpLauncher
             using (var f = new Form())
             {
                 f.Text = "Mod info";
-                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                // Resizable on purpose. Some of these values are long - an
+                // installed-at path runs well past 560 pixels - and a fixed
+                // dialog gives the player no way to read the end of one.
+                f.FormBorderStyle = FormBorderStyle.Sizable;
                 f.StartPosition = FormStartPosition.CenterParent;
-                f.MinimizeBox = f.MaximizeBox = false;
-                f.ClientSize = new Size(560, 430);
+                f.MinimizeBox = false;
+                f.MaximizeBox = true;
+                f.ClientSize = new Size(680, 470);
+                f.MinimumSize = new Size(520, 360);
                 f.BackColor = Ink;
                 f.ForeColor = Color.Gainsboro;
                 f.Font = new Font("Segoe UI", 9f);
 
-                f.Controls.Add(new Label
+                var title = new Label
                 {
                     Text = mod.DisplayName,
-                    Bounds = new Rectangle(16, 14, 528, 26),
+                    Bounds = new Rectangle(16, 14, f.ClientSize.Width - 32, 26),
                     Font = new Font("Segoe UI", 13f, FontStyle.Bold),
                     ForeColor = Color.White,
-                    AutoEllipsis = true
-                });
+                    UseMnemonic = false,          // "&" in a mod name is not a shortcut
+                    AutoEllipsis = true,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                };
+                f.Controls.Add(title);
+
+                var tips = new ToolTip { AutoPopDelay = 20000 };
 
                 int y = 50;
                 foreach (var kv in facts)
@@ -55,15 +65,24 @@ namespace BeautifulPotatoExpLauncher
                         Text = kv.Key,
                         Bounds = new Rectangle(16, y, 110, 20),
                         TextAlign = ContentAlignment.MiddleRight,
-                        ForeColor = Dim
+                        ForeColor = Dim,
+                        Anchor = AnchorStyles.Top | AnchorStyles.Left
                     });
-                    f.Controls.Add(new Label
+
+                    var value = new Label
                     {
                         Text = kv.Value,
-                        Bounds = new Rectangle(134, y, 410, 20),
+                        Bounds = new Rectangle(134, y, f.ClientSize.Width - 150, 20),
                         ForeColor = Color.Gainsboro,
-                        AutoEllipsis = true
-                    });
+                        UseMnemonic = false,
+                        AutoEllipsis = true,
+                        // Grows with the window, so widening the dialog really
+                        // does reveal more of a long value.
+                        Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                    };
+                    // And when it still does not fit, hovering shows all of it.
+                    tips.SetToolTip(value, kv.Value);
+                    f.Controls.Add(value);
                     y += 23;
                 }
 
@@ -84,23 +103,50 @@ namespace BeautifulPotatoExpLauncher
                     });
                 }
 
-                var workshop = MakeBtn("Workshop page", new Rectangle(16, 386, 130, 30));
+                int by = f.ClientSize.Height - 44;
+                var workshop = MakeBtn("Workshop page", new Rectangle(16, by, 130, 30));
+                workshop.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
                 workshop.Click += (s, e) => SteamWorkshop.OpenWorkshopPage(mod.WorkshopId);
                 f.Controls.Add(workshop);
 
                 string folder = ItemFolder(steamPath, mod.WorkshopId);
-                var openFolder = MakeBtn("Open folder", new Rectangle(154, 386, 120, 30));
+                var openFolder = MakeBtn("Open folder", new Rectangle(154, by, 120, 30));
+                openFolder.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
                 openFolder.Enabled = folder != null && Directory.Exists(folder);
                 openFolder.Click += (s, e) =>
                 {
-                    try { Process.Start("explorer.exe", Quote(folder)); } catch { }
+                    // GetFullPath, always: explorer cannot read a path with
+                    // forward slashes in it and quietly opens Documents instead.
+                    try { Process.Start("explorer.exe", Quote(Path.GetFullPath(folder))); }
+                    catch { }
                 };
                 f.Controls.Add(openFolder);
+
+                var edit = MakeBtn("Edit", new Rectangle(282, by, 80, 30));
+                edit.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+                edit.Click += (s, e) =>
+                {
+                    if (ModChooserDialog.Show(f, mod, steamPath))
+                    {
+                        // The choice changes what will actually be loaded, so
+                        // say so rather than leaving the window looking the same.
+                        var ov = ModOverrides.For(mod);
+                        MessageBox.Show(f,
+                            ov == null
+                                ? "This mod will load normally, from the workshop copy."
+                                : !ov.Enabled
+                                    ? "This mod will NOT be loaded when joining."
+                                    : "This mod will load from:\r\n\r\n" + ov.Folder,
+                            "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                };
+                f.Controls.Add(edit);
 
                 string action = ReadKey(modCpp, "action");
                 if (action.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 {
-                    var site = MakeBtn("Mod website", new Rectangle(282, 386, 120, 30));
+                    var site = MakeBtn("Mod website", new Rectangle(370, by, 120, 30));
+                    site.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
                     site.Click += (s, e) => { try { Process.Start(action); } catch { } };
                     f.Controls.Add(site);
                 }
@@ -108,7 +154,8 @@ namespace BeautifulPotatoExpLauncher
                 var close = new Button
                 {
                     Text = "Close",
-                    Bounds = new Rectangle(454, 386, 90, 30),
+                    Bounds = new Rectangle(f.ClientSize.Width - 106, by, 90, 30),
+                    Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
                     DialogResult = DialogResult.OK,
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Color.FromArgb(60, 60, 64),
@@ -118,6 +165,7 @@ namespace BeautifulPotatoExpLauncher
                 f.AcceptButton = close;
                 f.CancelButton = close;
 
+                UiCursors.ApplyTo(f);
                 f.ShowDialog(owner);
             }
         }
