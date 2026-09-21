@@ -21,7 +21,57 @@ arbitrary until you know what they were measured against.
 ### Added
 - **Changelog.** This file.
 
+### Changed
+- **The Browse dropdown carries the server list's colours** — Stable green,
+  Experimental orange, "All servers" plain. Owner-drawn, using the same values
+  as the Game column so the two agree at a glance.
+- **The FILTERS button turns amber with a bullet when any filter is set.** A
+  filter left on with the panel closed is invisible, and that is where "why can
+  I not see any servers" usually ends. Driven by a new `AnyPlayerChose` rather
+  than the existing `AnyActive`, which includes the tab-driven Official setting
+  and would therefore be true the moment you left the Recent tab. It also covers
+  the newer controls — regions, countries, required mods, game modes, the two
+  sliders — that `AnyActive` predates.
+- **Official servers named `- MI` are shown as `- Miami`.** Bohemia's datacentre
+  codes are cities, and that one reads as Michigan to everyone who sees it while
+  the hardware is in Florida. Applied where the name enters the index rather
+  than at draw time, so searching "Miami" finds them. Only `MI` is expanded —
+  the rest are unambiguous, and every expansion changes what a player sees.
+  12 servers affected, country resolution unaffected.
+
 ### Fixed
+- **Official servers showed the wrong country.** Bohemia's entire fleet sits in
+  RIPE blocks registered to Germany and Luxembourg, so the registry table filed
+  New York, Miami, Sao Paulo and Sydney servers under DE/LU. Their names carry
+  the datacentre — `3208 | NORTH AMERICA - MI | Temp` — so that is used instead
+  for these servers only; a community server's name is whatever its owner typed.
+  **99 of 181 officials were being mislabelled.** Note the codes are cities:
+  **MI is Miami**, not Michigan.
+- **The Region filter disagreed with the Country column.** `PassesRegion` read
+  the address directly instead of the name-first rule, so US official servers
+  showed `US` in the column while the Europe filter claimed them. There is now
+  one place that answers this — `IpRegion.CountryOf(name, host)` — and the row,
+  the column and the filter all call it. Verified: 181 officials, 0
+  disagreements; 48 now under North America rather than all 130 under Europe.
+- **The "not configured yet" notice was drawn in the refresh column.** That
+  column is 26px wide, so the text was invisible. It goes in the Name column.
+- **Unknown countries show `??` rather than a blank cell.** A blank reads like
+  nobody looked; two question marks say we looked and could not tell. Sorts as
+  unknown, not as a country.
+- **OFFICIAL and COMMUNITY tabs were showing each other's servers.** Nothing set
+  `_filters.Official` from the tab, so it sat on `Any` and both lists were
+  unfiltered — the Official cache held 5,649 servers of which 176 were actually
+  official. The tab now drives it, for the Steam query *and* the local match.
+  Recent, Friends, LAN and Favourites are deliberately left alone: which hive a
+  server is on is not what those lists are about. Verified at 0 leakage in both
+  directions.
+- **Chip entries overflowed and covered their neighbours.** The Has Mods control
+  was 660px wide starting at x=118, running clean across the panel and over the
+  3rd Person, Mods and checkbox controls on the right. It is 250px now, matching
+  the rest of its column, and the chip area **scrolls** — previously it simply
+  stopped drawing once the rows ran out, making a filter the player had set
+  invisible. Mouse wheel, drawn scrollbar, and it jumps to the newest chip as
+  one is added.
 - **The logos were missing from the main window.** `LoadImage` looked for an
   `assets` folder beside the executable, but the images are embedded resources
   and nothing deploys such a folder — so it silently returned a 1×1 bitmap and
@@ -31,6 +81,16 @@ arbitrary until you know what they were measured against.
   room for two or three mods before the rest ran off the edge. They now sit
   underneath across the full width and wrap onto two lines — measured at six
   long mod names in 660-720px, where the previous arrangement held three.
+
+### Investigated and rejected
+- **Flagging country mismatches by ping.** Measured and abandoned: A2S ping is
+  dominated by server-side processing, not distance. Pinging one server five
+  times gives a median spread of **50 ms** and a worst case of **194 ms**, while
+  the gap between country medians is only **20-30 ms** (SG 108, DE 118, US 127).
+  The noise on a single server is larger than the difference between continents,
+  so any threshold would flag legitimate servers constantly. Within-country
+  spread is also enormous (DE: 79-479 ms). A bundled GeoLite2 database is the
+  route to better accuracy, not latency inference.
 
 ---
 

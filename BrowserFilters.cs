@@ -307,7 +307,10 @@ namespace ABeautifulPotatoLauncher
         {
             if (!AnyRegionFilter) return true;
 
-            string cc = IpRegion.Country(s.Host);
+            // Name first, then address - see IpRegion.CountryOf. Reading the
+            // address directly here is what put US official servers under the
+            // Europe filter while the Country column correctly said US.
+            string cc = IpRegion.CountryOf(s.Name, s.Host);
             WorldRegion region = IpRegion.RegionOf(cc);
 
             if (HiddenCountries.Count > 0 && cc.Length > 0 && HiddenCountries.Contains(cc))
@@ -636,6 +639,37 @@ namespace ABeautifulPotatoLauncher
                     || ThirdPerson != TriState.Any || Mods != TriState.Any
                     || Official != TriState.Any
                     || NoPassword || HideFull || HideEmpty;
+            }
+        }
+
+        /// <summary>
+        /// Whether the PLAYER has narrowed anything, for the indicator on the
+        /// FILTERS button.
+        ///
+        /// Deliberately NOT AnyActive. That includes Official, which the tab
+        /// sets on every switch to OFFICIAL or COMMUNITY - so the button would
+        /// claim a filter was set the moment you left the Recent tab, and the
+        /// light would mean nothing.
+        ///
+        /// Everything the panel can change is listed, including the newer
+        /// controls that AnyActive predates.
+        /// </summary>
+        public bool AnyPlayerChose
+        {
+            get
+            {
+                return Name.Trim().Length > 0
+                    || Address.Trim().Length > 0
+                    || Map.Trim().Length > 0
+                    || MaxPing > 0
+                    || !AnyPlayerRange
+                    || !AnyGameTime
+                    || ThirdPerson != TriState.Any
+                    || Mods != TriState.Any
+                    || NoPassword || HideFull || HideEmpty
+                    || AnyRegionFilter
+                    || RequiredMods.Count > 0
+                    || GameModes.Count > 0;
             }
         }
 

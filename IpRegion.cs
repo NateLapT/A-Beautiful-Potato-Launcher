@@ -95,6 +95,130 @@ namespace ABeautifulPotatoLauncher
             return RegionOf(Country(host));
         }
 
+        /// <summary>
+        /// A server's country, from the best source available.
+        ///
+        /// THE ONE PLACE THIS IS DECIDED. An official server's own name beats
+        /// its address - Bohemia's fleet is on German and Luxembourgish blocks
+        /// whatever continent the hardware is on - and everything that needs a
+        /// country has to agree on that, or the column says US while the region
+        /// filter files it under Europe. Which is exactly what happened when
+        /// the row worked it out one way and the filter another.
+        /// </summary>
+        public static string CountryOf(string name, string host)
+        {
+            string cc = CountryFromOfficialName(name);
+            return cc.Length > 0 ? cc : Country(host);
+        }
+
+        /// <summary>The part of the world a server is in, by the same rule.</summary>
+        public static WorldRegion RegionOf(string name, string host)
+        {
+            return RegionOf(CountryOf(name, host));
+        }
+
+        /// <summary>
+        /// The country a Bohemia official server says it is in, or "".
+        ///
+        /// WHY THE NAME BEATS THE ADDRESS HERE
+        ///   Official servers are named "3208 | NORTH AMERICA - MI | Temp" -
+        ///   the datacentre is in the name. Their addresses are not: the whole
+        ///   official fleet sits in RIPE-allocated ranges registered to
+        ///   Germany, so the registry table calls a New York server "DE", and
+        ///   so does it for Los Angeles, Miami and Sydney. Measured: every one
+        ///   of the 181 officials with this name shape is on a DE-registered
+        ///   block.
+        ///
+        ///   The name is the better source for exactly these servers, and only
+        ///   these - a community server's name is whatever its owner typed.
+        ///
+        /// THE CODES ARE CITIES, NOT STATES
+        ///   MI is Miami, not Michigan. LA is Los Angeles, SP is Sao Paulo, SY
+        ///   is Sydney. Reading them as states or countries is how a Florida
+        ///   server ends up filed under the Great Lakes.
+        /// </summary>
+        public static string CountryFromOfficialName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "";
+
+            // "<number> | <REGION> - <CODE>" and then anything.
+            var m = OfficialName.Match(name);
+            if (!m.Success) return "";
+
+            string code = m.Groups[2].Value.ToUpperInvariant();
+
+            string cc;
+            return DataCentres.TryGetValue(code, out cc) ? cc : "";
+        }
+
+        // Accepts both the code Bohemia ships and the expanded spelling this
+        // launcher substitutes - "- MI" and "- Miami" both have to resolve, or
+        // renaming the server for readability would cost it its country.
+        private static readonly System.Text.RegularExpressions.Regex OfficialName =
+            new System.Text.RegularExpressions.Regex(
+                @"^\s*\d+\s*\|\s*([A-Za-z ]+?)\s*-\s*([A-Za-z]{2,12})\b",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>
+        /// Bohemia's datacentre codes, as they appear in official server names.
+        /// </summary>
+        private static readonly Dictionary<string, string> DataCentres =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "NY", "US" },     // New York
+                { "LA", "US" },     // Los Angeles
+                { "MI", "US" },     // MIAMI - not Michigan
+                { "DE", "DE" },     // Germany
+                { "SP", "BR" },     // Sao Paulo
+                { "SY", "AU" },     // Sydney
+                { "HK", "HK" },     // Hong Kong
+                { "SG", "SG" },     // Singapore
+                { "HC", "VN" },     // Ho Chi Minh City
+                { "TY", "JP" },     // Tokyo
+                { "LO", "GB" },     // London
+                { "AM", "NL" },     // Amsterdam
+
+                // The expanded spellings, so a renamed server still resolves.
+                { "Miami", "US" },
+            };
+
+        /// <summary>
+        /// Rewrites an official server's datacentre code to something a person
+        /// can read.
+        ///
+        /// ONLY "MI". Bohemia's codes are datacentre cities, and that one reads
+        /// as the state of Michigan to everybody who sees it - the server is in
+        /// Florida. The rest are either unambiguous (NY, LA) or would only be
+        /// made longer by expanding, so they are left exactly as Bohemia wrote
+        /// them.
+        ///
+        /// Returns the name unchanged when there is nothing to do, so it is
+        /// safe to call on everything and safe to call twice.
+        /// </summary>
+        public static string ReadableName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+
+            var m = OfficialName.Match(name);
+            if (!m.Success) return name;
+
+            var code = m.Groups[2];
+            string expanded;
+            if (!Expansions.TryGetValue(code.Value, out expanded)) return name;
+
+            return name.Substring(0, code.Index) + expanded + name.Substring(code.Index + code.Length);
+        }
+
+        /// <summary>
+        /// Codes worth spelling out. Deliberately short: every entry changes
+        /// what a player sees, and only an actively misleading one earns that.
+        /// </summary>
+        private static readonly Dictionary<string, string> Expansions =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                { "MI", "Miami" },
+            };
+
         /// <summary>The part of the world a country code belongs to.</summary>
         public static WorldRegion RegionOf(string cc)
         {

@@ -195,12 +195,26 @@ namespace ABeautifulPotatoLauncher
         {
             get
             {
-                if (_country == null) _country = IpRegion.Country(Host);
+                if (_country != null) return _country;
+
+                // One shared rule - name first, then address. See
+                // IpRegion.CountryOf.
+                _country = IpRegion.CountryOf(Name, Host);
+
+                // "??" rather than a blank when the address is in no registry
+                // allocation - a hostname, a private range, or a block nobody
+                // has claimed. An empty cell reads like "nobody looked"; two
+                // question marks say we looked and could not tell.
+                if (_country.Length == 0) _country = "??";
+
                 return _country;
             }
         }
 
         public WorldRegion Region { get { return IpRegion.RegionOf(Country); } }
+
+        // (Country already applied the name-before-address rule, so this does
+        // not need to repeat it.)
 
         /// <summary>
         /// Set when this row is a heading rather than a server - the notice
@@ -1436,6 +1450,13 @@ namespace ABeautifulPotatoLauncher
                 ForeColor = Color.Gainsboro,
                 FlatStyle = FlatStyle.Flat
             };
+            // Owner-drawn so each build can carry the colour it has in the
+            // Game column of the server list - green for stable, orange for
+            // Experimental. A ComboBox has no per-item colour otherwise.
+            _cbBuild.DrawMode = DrawMode.OwnerDrawFixed;
+            _cbBuild.ItemHeight = 17;
+            _cbBuild.DrawItem += DrawBuildItem;
+
             _cbBuild.Items.AddRange(new object[] { "All servers", "Experimental servers", "Stable servers" });
             _cbBuild.SelectedIndex = IndexForMode(_browseMode);
             _cbBuild.SelectedIndexChanged += (s, e) =>
@@ -1633,9 +1654,14 @@ namespace ABeautifulPotatoLauncher
             // added to the list underneath. Several at once, because "has both
             // of these" is the question people actually ask.
             lab("Has Mods", 4, y);
-            // Two rows of chips under the box - mod names are long, and a
-            // couple of them fill a line on their own.
-            _modFilter = new ChipInput(660, 2) { Location = new Point(118, y), BackColor = Panel };
+            // 250 wide to match every other control in this column. It used to
+            // be 660, which ran clean across the panel and covered the 3rd
+            // Person, Mods and checkbox controls on the right-hand side.
+            //
+            // Three rows deep, and the area scrolls - mod names are long, so a
+            // narrow column fills quickly and the rest has to stay reachable
+            // rather than being silently dropped.
+            _modFilter = new ChipInput(250, 3) { Location = new Point(118, y), BackColor = Panel };
             _modFilter.EntriesChanged += (s2, e2) => ModFilterChanged();
             _fMod = _modFilter.Box;
             p.Controls.Add(_modFilter);
@@ -1922,6 +1948,34 @@ namespace ABeautifulPotatoLauncher
 
         private bool _syncingBuild;
 
+        /// <summary>
+        /// Paints one row of the build dropdown in the same colour the server
+        /// list uses for that build, so the two agree at a glance.
+        /// </summary>
+        private void DrawBuildItem(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0) return;
+
+            string text = Convert.ToString(_cbBuild.Items[e.Index]);
+
+            bool highlighted = (e.State & DrawItemState.Selected) != 0;
+            Color back = highlighted ? Color.FromArgb(60, 60, 68) : Panel2;
+
+            using (var brush = new SolidBrush(back))
+                e.Graphics.FillRectangle(brush, e.Bounds);
+
+            // Same values as the Game column in the list - see MakeItem.
+            Color ink = text.StartsWith("Experimental", StringComparison.OrdinalIgnoreCase)
+                            ? Color.FromArgb(255, 170, 80)
+                      : text.StartsWith("Stable", StringComparison.OrdinalIgnoreCase)
+                            ? Color.FromArgb(110, 220, 140)
+                      : Color.Gainsboro;          // "All servers" stays plain
+
+            TextRenderer.DrawText(e.Graphics, text, _cbBuild.Font,
+                new Rectangle(e.Bounds.X + 2, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height),
+                ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+
         private static int IndexForMode(string mode)
         {
             return mode == "all" ? 0 : mode == "exp" ? 1 : 2;
@@ -2032,7 +2086,7 @@ namespace ABeautifulPotatoLauncher
             row.Online = info.Online;
             if (info.Online)
             {
-                if (!string.IsNullOrEmpty(info.Name)) row.Name = info.Name;
+                if (!string.IsNullOrEmpty(info.Name)) row.Name = IpRegion.ReadableName(info.Name);
                 row.Map = info.Map;
                 row.Players = info.Players;
                 row.MaxPlayers = info.MaxPlayers;
@@ -2236,7 +2290,9 @@ namespace ABeautifulPotatoLauncher
                     // not "country A", it is an unknown.
                     byColumn = (a, b) =>
                     {
-                        bool na = string.IsNullOrEmpty(a.Country), nb = string.IsNullOrEmpty(b.Country);
+                        // "??" is an unknown, not a country beginning with a
+                        // question mark - it sorts last either way, like a blank.
+                        bool na = Unknown(a.Country), nb = Unknown(b.Country);
                         if (na != nb) return na ? 1 : -1;
                         return string.Compare(a.Country, b.Country, StringComparison.OrdinalIgnoreCase);
                     };
@@ -2314,12 +2370,18 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         private ListViewItem HeadingItem(Row row)
         {
-            var it = new ListViewItem(row.Heading)
+            // The text goes in the NAME column, not the first one - column 0
+            // is the refresh arrow, about 26 pixels wide, so the notice was
+            // being squeezed into it and was unreadable.
+            var it = new ListViewItem("")
             {
                 UseItemStyleForSubItems = true,
                 ForeColor = Color.FromArgb(225, 175, 90),
                 BackColor = Ink
             };
+
+            while (it.SubItems.Count <= ColName) it.SubItems.Add("");
+            it.SubItems[ColName].Text = row.Heading;
 
             // A VIRTUAL ListView DEMANDS ONE SUB-ITEM PER COLUMN.
             //
@@ -2334,6 +2396,12 @@ namespace ABeautifulPotatoLauncher
                 it.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
 
             return it;
+        }
+
+        /// <summary>A country cell with nothing real in it.</summary>
+        private static bool Unknown(string cc)
+        {
+            return string.IsNullOrEmpty(cc) || cc == "??";
         }
 
         private static int Rank(Row r)
@@ -3118,7 +3186,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     Flagged.Add(new FlaggedServer
                     {
-                        Name = srv.Name,
+                        Name = IpRegion.ReadableName(srv.Name),
                         Host = srv.Host,
                         Port = srv.Port,
                         Reason = reason
@@ -3131,7 +3199,8 @@ namespace ABeautifulPotatoLauncher
 
                 var row = new Row
                 {
-                    Name = srv.Name, Map = srv.Map, Host = srv.Host, Port = srv.Port,
+                    Name = IpRegion.ReadableName(srv.Name),
+                    Map = srv.Map, Host = srv.Host, Port = srv.Port,
                     QueryPort = srv.QueryPort,
                     Players = srv.Players, MaxPlayers = srv.MaxPlayers, Ping = srv.Ping,
                     AppId = srv.AppId, Tags = srv.Tags, Password = srv.Password,
@@ -3955,9 +4024,13 @@ namespace ABeautifulPotatoLauncher
             // servers and any number of them will have been renamed since they
             // were last seen; a line each buries the sweep totals, which are
             // the part worth reading. The row updates on screen regardless.
-            if (!string.IsNullOrEmpty(info.Name) && entry.Name != info.Name)
+            // ReadableName here rather than at draw time: the index is what is
+            // searched, sorted and saved, so the spelling has to live in it or
+            // typing "Miami" would find nothing.
+            string liveName = IpRegion.ReadableName(info.Name);
+            if (!string.IsNullOrEmpty(liveName) && entry.Name != liveName)
             {
-                entry.Name = info.Name;
+                entry.Name = liveName;
                 changed = true;
             }
 
@@ -4125,6 +4198,32 @@ namespace ABeautifulPotatoLauncher
             _filters.Map = mapText;
             _filters.Search = _search?.Text ?? "";
             ReadCountryFilter();
+
+            // THE TAB DECIDES. Nothing was setting this, so it sat on Any and
+            // both tabs showed each other's servers: OFFICIAL was listing
+            // community servers, and COMMUNITY was listing Bohemia's.
+            //
+            // Applied after the rest of the panel is read so it cannot be
+            // overridden by a stale control, and applied to BOTH the Steam
+            // query and the local match - the query narrows what arrives, the
+            // local test keeps anything already cached from leaking through.
+            switch (_tab)
+            {
+                case Tab.Official:
+                    _filters.Official = TriState.Enabled;
+                    break;
+
+                case Tab.Community:
+                    _filters.Official = TriState.Disabled;
+                    break;
+
+                default:
+                    // Recent, Friends, LAN and Favourites are lists of servers
+                    // the player has a relationship with. Which hive they are
+                    // on is not the point, so neither is filtered out.
+                    _filters.Official = TriState.Any;
+                    break;
+            }
             int ping;
             _filters.MaxPing = int.TryParse(_fPing?.Text, out ping) ? ping : 0;
             if (_playerRange != null)
@@ -4394,12 +4493,24 @@ namespace ABeautifulPotatoLauncher
 
             bool open = _filterPanel != null && _filterPanel.Visible;
 
+            // Whether anything is SET matters more than whether the panel is
+            // open: a filter left on with the panel closed is invisible, and
+            // "why can I not see any servers" usually ends there.
+            bool narrowed = _filters != null && _filters.AnyPlayerChose;
+
             _filterToggle.BackColor = open ? Color.FromArgb(60, 95, 60) : Panel2;
-            _filterToggle.ForeColor = open ? Color.White : Color.Gainsboro;
-            _filterToggle.FlatAppearance.BorderColor = open
-                ? Color.FromArgb(100, 150, 100)
+
+            _filterToggle.ForeColor = narrowed
+                ? Color.FromArgb(255, 200, 90)          // amber: filters are on
+                : open ? Color.White : Color.Gainsboro;
+
+            _filterToggle.FlatAppearance.BorderColor = narrowed
+                ? Color.FromArgb(190, 150, 70)
+                : open ? Color.FromArgb(100, 150, 100)
                 : Color.FromArgb(75, 75, 82);
-            _filterToggle.Text = open ? "FILTERS \u25B2" : "FILTERS \u25BC";
+
+            _filterToggle.Text = (narrowed ? "FILTERS \u2022 " : "FILTERS ")
+                               + (open ? "\u25B2" : "\u25BC");
         }
 
         /// <summary>
@@ -4986,8 +5097,19 @@ namespace ABeautifulPotatoLauncher
             catch { }
         }
 
+        /// <summary>
+        /// A filter control changed. Debounces the actual work, and repaints
+        /// the FILTERS button so the indicator keeps up with the controls.
+        /// </summary>
         private void QueueFilter()
         {
+            // Reading the panel is a handful of property reads and one small
+            // string split - cheap enough to do per keystroke, and it is what
+            // lets the button light up as soon as something is typed rather
+            // than a second later when the timer fires.
+            ReadFilterUi();
+            PaintFilterToggle();
+
             _typeTimer.Stop();
             _typeTimer.Start();
         }

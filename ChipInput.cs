@@ -1,17 +1,22 @@
 // ---------------------------------------------------------------------------
-//  A box you type into, and the things you have added laid out beside it, each
-//  with its own X.
+//  A box you type into, and the things you have added underneath it, each with
+//  its own X.
 //
 //  Used wherever a filter takes SEVERAL values rather than one - the mods a
 //  server must run, the mods to pick out of a server's list. Written once and
 //  shared, so adding and removing behaves the same in both places.
 //
-//  The entries sit BELOW the box and flow left to right across the full width,
-//  wrapping onto further lines. Two earlier arrangements did not work: a
-//  scrolling list hid everything past the second row behind a scrollbar nobody
-//  noticed, and putting the chips beside the box left them so little room that
-//  the third mod ran off the edge. Mod names are long; they need the whole
-//  width and as many lines as they take.
+//  The entries sit BELOW the box, flow left to right, wrap onto further lines,
+//  and the area SCROLLS when there are more than fit. Three arrangements came
+//  before this one, each fixing the last:
+//
+//    * a list box, whose scrollbar nobody noticed;
+//    * chips beside the box, where the third mod ran off the edge;
+//    * chips below the box with no scrolling, which simply stopped drawing once
+//      the rows ran out - making a filter the player had set invisible.
+//
+//  Scrolling is drawn here rather than delegated to AutoScroll, which steals the
+//  first click on whatever it decides to bring into view.
 //
 //  Chips are drawn, not built from controls: a label and a button per entry is
 //  two windows to create, place and dispose every time the set changes, for
@@ -47,8 +52,6 @@ namespace ABeautifulPotatoLauncher
         /// <summary>The typing box, exposed so callers can stock its dropdown.</summary>
         public ComboBox Box { get { return _box; } }
 
-        /// <summary>Width of the typing box; the chips take everything after it.</summary>
-        private const int BoxWidth = 230;
         private const int AddWidth = 46;
 
         /// <summary>Height of one row of chips, including the gap below it.</summary>
@@ -57,13 +60,13 @@ namespace ABeautifulPotatoLauncher
         public ChipInput(int width, int rows)
         {
             Width = width;
-
-            // The box's row, then however many rows of chips were asked for.
             Height = 26 + Math.Max(1, rows) * ChipRowHeight + 2;
+
+            int boxWidth = Math.Max(90, width - AddWidth - 4);
 
             _box = new ComboBox
             {
-                Bounds = new Rectangle(0, 0, BoxWidth, 23),
+                Bounds = new Rectangle(0, 0, boxWidth, 23),
                 BackColor = Panel2,
                 ForeColor = Color.Gainsboro,
                 FlatStyle = FlatStyle.Flat,
@@ -89,7 +92,7 @@ namespace ABeautifulPotatoLauncher
             _clear = new Label
             {
                 Text = "✕",
-                Bounds = new Rectangle(BoxWidth - 38, 3, 17, 17),
+                Bounds = new Rectangle(boxWidth - 38, 3, 17, 17),
                 ForeColor = Dim,
                 BackColor = Panel2,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -105,7 +108,7 @@ namespace ABeautifulPotatoLauncher
             _add = new Button
             {
                 Text = "ADD",
-                Bounds = new Rectangle(BoxWidth + 4, 0, AddWidth, 23),
+                Bounds = new Rectangle(boxWidth + 4, 0, AddWidth, 23),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Panel2,
                 ForeColor = Color.White,
@@ -117,9 +120,6 @@ namespace ABeautifulPotatoLauncher
             _add.Click += (s, e) => Add(_box.Text);
             Controls.Add(_add);
 
-            // The chips go UNDERNEATH, across the whole width. Beside the box
-            // there was only room for two or three before they disappeared off
-            // the edge.
             _strip = new ChipStrip(this)
             {
                 Bounds = new Rectangle(0, 26, width, Math.Max(ChipRowHeight, Height - 26)),
@@ -129,6 +129,11 @@ namespace ABeautifulPotatoLauncher
 
             Resize += (s, e) =>
             {
+                int bw = Math.Max(90, Width - AddWidth - 4);
+                _box.Width = bw;
+                _clear.Left = bw - 38;
+                _add.Left = bw + 4;
+
                 _strip.Bounds = new Rectangle(0, 26, Width, Math.Max(ChipRowHeight, Height - 26));
                 _strip.Invalidate();
             };
@@ -162,7 +167,7 @@ namespace ABeautifulPotatoLauncher
 
             _entries.Add(clean);
             _box.Text = "";
-            _strip.Invalidate();
+            _strip.ScrollToEnd();
 
             Raise();
         }
@@ -197,7 +202,8 @@ namespace ABeautifulPotatoLauncher
         // --------------------------------------------------------- chips --
 
         /// <summary>
-        /// Draws the entries as chips and handles clicks on their crosses.
+        /// Draws the entries as chips, scrolls them, and handles clicks on their
+        /// crosses.
         ///
         /// Its own control so that painting and hit-testing share one set of
         /// rectangles - working them out twice is how the X ends up one chip
@@ -209,18 +215,84 @@ namespace ABeautifulPotatoLauncher
             private readonly List<Rectangle> _closes = new List<Rectangle>();
             private int _hover = -1;
 
+            /// <summary>How far the content is scrolled, in pixels.</summary>
+            private int _scroll;
+
+            /// <summary>Height the chips need. More than Height means scrolling.</summary>
+            private int _contentHeight;
+
             public ChipStrip(ChipInput owner)
             {
                 _owner = owner;
                 SetStyle(ControlStyles.AllPaintingInWmPaint
                        | ControlStyles.OptimizedDoubleBuffer
                        | ControlStyles.ResizeRedraw
-                       | ControlStyles.UserPaint, true);
+                       | ControlStyles.UserPaint
+                       | ControlStyles.Selectable, true);
+
+                // The wheel goes to whatever has focus, so hovering has to take
+                // it - otherwise scrolling here scrolls something else.
+                MouseEnter += (s, e) => { if (CanFocus) Focus(); };
             }
 
             private const int ChipHeight = 19;
             private const int CloseWidth = 16;
             private const int Pad = 7;
+            private const int BarWidth = 5;
+
+            private bool Scrollable { get { return _contentHeight > Height; } }
+            private int UsableWidth { get { return Width - (Scrollable ? BarWidth + 3 : 0); } }
+
+            /// <summary>Shows the newest chip, which is the one just added.</summary>
+            public void ScrollToEnd()
+            {
+                Measure();
+                _scroll = Math.Max(0, _contentHeight - Height);
+                Invalidate();
+            }
+
+            /// <summary>
+            /// Where every chip goes, in content coordinates - before scrolling.
+            ///
+            /// Nothing is dropped: a chip that does not fit on screen still gets
+            /// a position, which is what makes it reachable by scrolling instead
+            /// of vanishing.
+            /// </summary>
+            private List<Rectangle> Layout()
+            {
+                var rects = new List<Rectangle>(_owner._entries.Count);
+                int x = 0, y = 1;
+                int room = Math.Max(40, UsableWidth);
+
+                foreach (string text in _owner._entries)
+                {
+                    int chipWidth = Pad + TextRenderer.MeasureText(text, Font).Width + CloseWidth;
+                    if (chipWidth > room) chipWidth = room;      // a very long name
+
+                    if (x > 0 && x + chipWidth > room)
+                    {
+                        x = 0;
+                        y += ChipHeight + 3;
+                    }
+
+                    rects.Add(new Rectangle(x, y, chipWidth, ChipHeight));
+                    x += chipWidth + 5;
+                }
+                return rects;
+            }
+
+            private void Measure()
+            {
+                var rects = Layout();
+                _contentHeight = rects.Count == 0 ? 0 : rects[rects.Count - 1].Bottom + 2;
+            }
+
+            private void ClampScroll()
+            {
+                int max = Math.Max(0, _contentHeight - Height);
+                if (_scroll > max) _scroll = max;
+                if (_scroll < 0) _scroll = 0;
+            }
 
             protected override void OnPaint(PaintEventArgs e)
             {
@@ -228,50 +300,82 @@ namespace ABeautifulPotatoLauncher
                 g.Clear(BackColor);
                 _closes.Clear();
 
-                int x = 0, y = 1;
-
-                for (int i = 0; i < _owner._entries.Count; i++)
+                if (_owner._entries.Count == 0)
                 {
-                    string text = _owner._entries[i];
-                    int textWidth = TextRenderer.MeasureText(text, Font).Width;
-                    int chipWidth = Pad + textWidth + CloseWidth;
+                    _contentHeight = 0;
+                    _scroll = 0;
 
-                    // Wrap rather than run off the edge.
-                    if (x > 0 && x + chipWidth > Width)
+                    TextRenderer.DrawText(g, "nothing added yet", Font,
+                        new Rectangle(2, 0, Width, Height), Dim,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    return;
+                }
+
+                // Laid out first: the scrollbar has to know whether it is
+                // needed, and the usable width depends on that answer.
+                var rects = Layout();
+                _contentHeight = rects[rects.Count - 1].Bottom + 2;
+                ClampScroll();
+
+                for (int i = 0; i < rects.Count; i++)
+                {
+                    var chip = rects[i];
+                    chip.Y -= _scroll;
+
+                    // Scrolled out of view. It still gets a close rectangle so
+                    // the indexes line up - just one that cannot be hit.
+                    if (chip.Bottom < 0 || chip.Top > Height)
                     {
-                        x = 0;
-                        y += ChipHeight + 3;
-                        if (y + ChipHeight > Height) break;      // no room left
+                        _closes.Add(Rectangle.Empty);
+                        continue;
                     }
-
-                    var chip = new Rectangle(x, y, chipWidth, ChipHeight);
 
                     using (var back = new SolidBrush(ChipBack))
                         g.FillRectangle(back, chip);
                     using (var edge = new Pen(ChipEdge))
                         g.DrawRectangle(edge, chip);
 
-                    TextRenderer.DrawText(g, text, Font,
+                    int textWidth = chip.Width - Pad - CloseWidth;
+                    TextRenderer.DrawText(g, _owner._entries[i], Font,
                         new Rectangle(chip.X + Pad - 3, chip.Y, textWidth + 4, chip.Height),
                         Color.White,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.EndEllipsis);
 
-                    // The cross sits immediately after the name, inside the chip.
                     var close = new Rectangle(chip.Right - CloseWidth, chip.Y, CloseWidth, chip.Height);
                     _closes.Add(close);
 
                     TextRenderer.DrawText(g, "✕", Font, close,
                         _hover == i ? Color.White : Color.FromArgb(200, 225, 200),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-
-                    x += chipWidth + 5;
                 }
 
-                // Say what the empty space is for, rather than leaving a blank.
-                if (_owner._entries.Count == 0)
-                    TextRenderer.DrawText(g, "nothing added yet", Font,
-                        new Rectangle(2, 0, Width, Height), Dim,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                if (Scrollable) DrawScrollBar(g);
+            }
+
+            private void DrawScrollBar(Graphics g)
+            {
+                int trackX = Width - BarWidth;
+
+                using (var track = new SolidBrush(Color.FromArgb(48, 48, 54)))
+                    g.FillRectangle(track, trackX, 0, BarWidth, Height);
+
+                int thumbHeight = Math.Max(14, (int)(Height * (Height / (double)_contentHeight)));
+                int span = Math.Max(1, _contentHeight - Height);
+                int thumbY = (int)((Height - thumbHeight) * (_scroll / (double)span));
+
+                using (var thumb = new SolidBrush(Color.FromArgb(110, 110, 120)))
+                    g.FillRectangle(thumb, trackX, thumbY, BarWidth, thumbHeight);
+            }
+
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                base.OnMouseWheel(e);
+                if (!Scrollable) return;
+
+                _scroll -= Math.Sign(e.Delta) * (ChipHeight + 3);
+                ClampScroll();
+                Invalidate();
             }
 
             protected override void OnMouseMove(MouseEventArgs e)
@@ -280,7 +384,11 @@ namespace ABeautifulPotatoLauncher
 
                 int over = -1;
                 for (int i = 0; i < _closes.Count; i++)
-                    if (_closes[i].Contains(e.Location)) { over = i; break; }
+                {
+                    if (_closes[i].IsEmpty || !_closes[i].Contains(e.Location)) continue;
+                    over = i;
+                    break;
+                }
 
                 Cursor = over >= 0 ? Cursors.Hand : Cursors.Default;
 
@@ -305,7 +413,7 @@ namespace ABeautifulPotatoLauncher
                 // silently drops a filter.
                 for (int i = 0; i < _closes.Count; i++)
                 {
-                    if (!_closes[i].Contains(e.Location)) continue;
+                    if (_closes[i].IsEmpty || !_closes[i].Contains(e.Location)) continue;
                     _owner.RemoveAt(i);
                     return;
                 }
