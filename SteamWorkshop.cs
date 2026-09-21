@@ -38,7 +38,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal class Mod
     {

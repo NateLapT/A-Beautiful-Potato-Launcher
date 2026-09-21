@@ -10,9 +10,11 @@
 //  created, so a control added later cannot quietly miss out.
 // ---------------------------------------------------------------------------
 
+using System;
+using System.Collections.Generic;
 using System.Windows.Forms;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class UiCursors
     {
@@ -26,6 +28,54 @@ namespace BeautifulPotatoExpLauncher
                 if (IsClickable(c)) c.Cursor = Cursors.Hand;
                 ApplyTo(c);
             }
+        }
+
+        /// <summary>
+        /// Gives a ListView a hand cursor over the columns that act as buttons.
+        ///
+        /// A ListView has no notion of a clickable cell - the launcher builds
+        /// its own by painting "Repair" or "Remove" into a column and watching
+        /// for a click on it. Nothing about the pointer says so, which left the
+        /// player guessing at what was a button and what was text. This watches
+        /// the pointer and switches the cursor over exactly those columns.
+        ///
+        /// <paramref name="isLive"/> is asked before showing the hand, so a
+        /// greyed-out cell - one whose action does not apply to that row - keeps
+        /// the ordinary arrow rather than promising something it will not do.
+        /// </summary>
+        public static void HandOverColumns(ListView list, Func<ListViewItem, int, bool> isLive,
+                                           params int[] columns)
+        {
+            if (list == null || columns == null || columns.Length == 0) return;
+
+            var wanted = new HashSet<int>(columns);
+
+            list.MouseMove += (s, e) =>
+            {
+                Cursor want = Cursors.Default;
+                try
+                {
+                    var hit = list.HitTest(e.Location);
+                    if (hit.Item != null && hit.SubItem != null)
+                    {
+                        int col = hit.Item.SubItems.IndexOf(hit.SubItem);
+
+                        // An empty cell is not a button even in a button column:
+                        // rows that offer no action leave theirs blank.
+                        if (wanted.Contains(col)
+                            && !string.IsNullOrWhiteSpace(hit.SubItem.Text)
+                            && (isLive == null || isLive(hit.Item, col)))
+                            want = Cursors.Hand;
+                    }
+                }
+                catch { }
+
+                if (list.Cursor != want) list.Cursor = want;
+            };
+
+            // Leaving by any route puts it back - without this the hand can be
+            // left behind when the pointer exits over a button cell.
+            list.MouseLeave += (s, e) => list.Cursor = Cursors.Default;
         }
 
         /// <summary>

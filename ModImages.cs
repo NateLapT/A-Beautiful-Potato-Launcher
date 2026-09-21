@@ -29,7 +29,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class ModImages
     {
@@ -43,16 +43,53 @@ namespace BeautifulPotatoExpLauncher
             {
                 string d = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "BeautifulPotatoExpLauncher", "images");
+                    "ABeautifulPotatoLauncher", "images");
                 try { if (!Directory.Exists(d)) Directory.CreateDirectory(d); }
                 catch { }
                 return d;
             }
         }
 
-        private static string CachePath(ulong id)
+        /// <summary>
+        /// Where a mod's preview is cached.
+        ///
+        /// Named for what the bytes ARE, not what the download was called. The
+        /// workshop serves JPEG and PNG and the URL says neither, so the format
+        /// is read from the first few bytes and the file gets the matching
+        /// extension - which means Explorer previews it and anything else can
+        /// open it.
+        /// </summary>
+        private static string CachePath(ulong id, string extension)
         {
-            return Path.Combine(CacheDir, id + ".img");
+            return Path.Combine(CacheDir, id + extension);
+        }
+
+        /// <summary>Any cached preview for this mod, whatever its format.</summary>
+        private static string FindCached(ulong id)
+        {
+            foreach (string ext in new[] { ".jpg", ".png", ".gif", ".img" })
+            {
+                string p = Path.Combine(CacheDir, id + ext);
+                if (File.Exists(p)) return p;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The right extension for these bytes, by magic number. Falls back to
+        /// .img when nothing recognisable is there, so a bad download is still
+        /// cached rather than fetched over and over.
+        /// </summary>
+        private static string ExtensionFor(byte[] data)
+        {
+            if (data == null || data.Length < 4) return ".img";
+
+            if (data[0] == 0xFF && data[1] == 0xD8) return ".jpg";                 // JPEG
+            if (data[0] == 0x89 && data[1] == 0x50 &&
+                data[2] == 0x4E && data[3] == 0x47) return ".png";                 // PNG
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return ".gif";
+
+            return ".img";
         }
 
         /// <summary>
@@ -63,7 +100,7 @@ namespace BeautifulPotatoExpLauncher
         {
             try
             {
-                string path = CachePath(id);
+                string path = FindCached(id);
                 if (!File.Exists(path)) return null;
 
                 // Loaded through a byte array on purpose: Image.FromFile keeps
@@ -87,7 +124,7 @@ namespace BeautifulPotatoExpLauncher
             lock (Lock)
             {
                 if (InFlight.Contains(id) || Hopeless.Contains(id)) return;
-                if (File.Exists(CachePath(id))) return;
+                if (FindCached(id) != null) return;
                 InFlight.Add(id);
             }
 
@@ -102,7 +139,8 @@ namespace BeautifulPotatoExpLauncher
                         byte[] data = Download(url);
                         if (data != null && data.Length > 64)
                         {
-                            try { File.WriteAllBytes(CachePath(id), data); } catch { }
+                            try { File.WriteAllBytes(CachePath(id, ExtensionFor(data)), data); }
+                            catch { }
                             using (var ms = new MemoryStream(data)) img = Image.FromStream(ms);
                         }
                     }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Beautiful Potato Experimental Launcher - MSI
+  A Beautiful Potato Launcher - MSI
 
   Scope is perUser on purpose. A perMachine install writes to Program Files and
   therefore triggers a UAC elevation prompt, which is exactly the kind of thing
@@ -51,7 +51,7 @@
 
       <Component Id="LauncherExe" Directory="INSTALLFOLDER" Guid="*">
         <File Id="LauncherExeFile"
-              Source="..\bin\Release\net48\BeautifulPotatoExpLauncher.exe"
+              Source="..\bin\Release\net48\ABeautifulPotatoLauncher.exe"
               KeyPath="yes" />
       </Component>
 
@@ -61,7 +61,7 @@
         <Shortcut Id="StartMenuLink"
                   Name="A Beautiful Potato Launcher"
                   Description="Browse and join the A Beautiful Potato DayZ servers"
-                  Target="[INSTALLFOLDER]BeautifulPotatoExpLauncher.exe"
+                  Target="[INSTALLFOLDER]ABeautifulPotatoLauncher.exe"
                   WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
         <RegistryValue Root="HKCU"
@@ -73,7 +73,7 @@
         <Shortcut Id="DesktopLink"
                   Name="A Beautiful Potato Launcher"
                   Description="Browse and join the A Beautiful Potato DayZ servers"
-                  Target="[INSTALLFOLDER]BeautifulPotatoExpLauncher.exe"
+                  Target="[INSTALLFOLDER]ABeautifulPotatoLauncher.exe"
                   WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU"
                        Key="Software\A Beautiful Potato\Experimental Launcher"

@@ -7,8 +7,8 @@
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>BeautifulPotatoExpLauncher</AssemblyName>
-    <RootNamespace>BeautifulPotatoExpLauncher</RootNamespace>
+    <AssemblyName>ABeautifulPotatoLauncher</AssemblyName>
+    <RootNamespace>ABeautifulPotatoLauncher</RootNamespace>
     <ApplicationIcon>assets\potato.ico</ApplicationIcon>
     <Product>A Beautiful Potato Launcher</Product>
     <AssemblyTitle>A Beautiful Potato Launcher</AssemblyTitle>
@@ -26,6 +26,10 @@
     <EmbeddedResource Include="assets\logo_title.png"  LogicalName="logo_title.png" />
     <EmbeddedResource Include="assets\logo_potato.png" LogicalName="logo_potato.png" />
     <EmbeddedResource Include="assets\DayZLogo.png"    LogicalName="dayz_logo.png" />
+
+    <!-- IP -> country ranges from the regional internet registries, 1.4 MB.
+         Rebuild with tools/build-ip-table.ps1; see IpRegion.cs. -->
+    <EmbeddedResource Include="assets\ip-country.bin"  LogicalName="ip-country.bin" />
   </ItemGroup>
 
 </Project>

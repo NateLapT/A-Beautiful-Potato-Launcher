@@ -15,7 +15,7 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class ModInfoDialog
     {

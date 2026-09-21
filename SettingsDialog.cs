@@ -14,7 +14,7 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class SettingsDialog
     {
@@ -49,6 +49,11 @@ namespace BeautifulPotatoExpLauncher
                 var tabs = new TabControl { Dock = DockStyle.Fill };
                 f.Controls.Add(tabs);
 
+                // Built further down, but added FIRST: this is the page people
+                // open Settings for.
+                var modsPage = new TabPage("Mods") { BackColor = Panel };
+                tabs.TabPages.Add(modsPage);
+
                 // ------------------------------------------ flagged servers --
                 var flaggedPage = new TabPage("Flagged servers") { BackColor = Panel };
                 tabs.TabPages.Add(flaggedPage);
@@ -62,7 +67,10 @@ namespace BeautifulPotatoExpLauncher
                     ForeColor = Color.Gainsboro,
                     BorderStyle = BorderStyle.FixedSingle
                 };
-                flaggedPage.Controls.Add(searchBox);
+                // Added after the list below, deliberately. Docking is applied
+                // in reverse z-order, so the control added FIRST ends up
+                // innermost - and with the search box first it was laid over
+                // the list's column headers.
 
                 var list = new ListView
                 {
@@ -97,7 +105,12 @@ namespace BeautifulPotatoExpLauncher
                 searchBox.TextChanged += (s, e) => refreshFlagList();
                 refreshFlagList();
 
-                flaggedPage.Controls.Add(list);
+                flaggedPage.Controls.Add(list);        // Fill, so it goes in first
+                flaggedPage.Controls.Add(searchBox);   // then the bar above it
+
+                // Docked, so it is laid out after this returns - the X follows
+                // it either way because it tracks the box's own bounds.
+                ClearBox.AddTo(searchBox);
 
                 var flaggedBar = new Panel { Dock = DockStyle.Bottom, Height = 76, BackColor = Panel };
                 flaggedPage.Controls.Add(flaggedBar);
@@ -153,9 +166,6 @@ namespace BeautifulPotatoExpLauncher
 
                 // ------------------------------------------------- the rules --
                 // ---- Mods ----
-                var modsPage = new TabPage("Mods") { BackColor = Panel };
-                tabs.TabPages.Add(modsPage);
-
                 modsPage.Controls.Add(new Label
                 {
                     Text = "DayZ workshop folder",
@@ -165,9 +175,19 @@ namespace BeautifulPotatoExpLauncher
                 });
 
                 string steamPath = steam;
+
+                // THE JUNCTION FOLDER, NOT THE RAW WORKSHOP ONE.
+                //
+                // Steam downloads into steamapps\workshop\content\221100\<id>,
+                // which is all numbers and tells nobody anything. DayZ then
+                // makes a folder of junctions named after the mods -
+                // steamapps\common\DayZ\!Workshop\@SomeMod - and THAT is what
+                // the game loads and what a player recognises. Showing the
+                // numeric path here meant the folder they opened never looked
+                // like the mods they had installed.
                 string workshop = string.IsNullOrEmpty(steamPath)
                     ? "(Steam not found)"
-                    : SteamWorkshop.WorkshopRoot(steamPath);
+                    : (WorkshopLinks.Root(steamPath) ?? SteamWorkshop.WorkshopRoot(steamPath));
 
                 var workshopBox = new TextBox
                 {
@@ -180,17 +200,20 @@ namespace BeautifulPotatoExpLauncher
                 };
                 modsPage.Controls.Add(workshopBox);
 
+                modsPage.Controls.Add(MakeExplorerButton(f, 580, 37, () => workshopBox.Text));
+
                 modsPage.Controls.Add(new Label
                 {
-                    Text = "Set by Steam - shown so you can see where mods are being read from.",
-                    Bounds = new Rectangle(14, 64, 560, 18),
+                    Text = "Where DayZ loads mods from. Steam downloads them into a folder named "
+                         + "by number;\r\nthis is the one named after the mods themselves.",
+                    Bounds = new Rectangle(14, 64, 560, 32),
                     ForeColor = Dim
                 });
 
                 modsPage.Controls.Add(new Label
                 {
                     Text = "Additional mods folder",
-                    Bounds = new Rectangle(14, 98, 300, 18),
+                    Bounds = new Rectangle(14, 106, 300, 18),
                     ForeColor = Color.Gainsboro,
                     Font = new Font("Segoe UI", 9f, FontStyle.Bold)
                 });
@@ -198,7 +221,7 @@ namespace BeautifulPotatoExpLauncher
                 var extraBox = new TextBox
                 {
                     Text = ServerStore.LoadExtraModPath(),
-                    Bounds = new Rectangle(14, 120, 470, 23),
+                    Bounds = new Rectangle(14, 128, 440, 23),
                     BackColor = Panel2,
                     ForeColor = Color.Gainsboro,
                     BorderStyle = BorderStyle.FixedSingle
@@ -208,7 +231,7 @@ namespace BeautifulPotatoExpLauncher
                 var browse = new Button
                 {
                     Text = "Browse",
-                    Bounds = new Rectangle(492, 119, 82, 25),
+                    Bounds = new Rectangle(462, 127, 74, 25),
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Panel2,
                     ForeColor = Color.White
@@ -227,13 +250,14 @@ namespace BeautifulPotatoExpLauncher
                     }
                 };
                 modsPage.Controls.Add(browse);
+                modsPage.Controls.Add(MakeExplorerButton(f, 544, 127, () => extraBox.Text));
 
                 modsPage.Controls.Add(new Label
                 {
                     Text = "A second place to look for mods - useful for hand-installed ones that "
                          + "Steam does not manage.\r\nLeave it empty if you keep everything in the "
                          + "workshop folder.",
-                    Bounds = new Rectangle(14, 148, 560, 40),
+                    Bounds = new Rectangle(14, 158, 600, 40),
                     ForeColor = Dim
                 });
 
@@ -244,65 +268,32 @@ namespace BeautifulPotatoExpLauncher
                         ServerStore.SaveExtraModPath(extraBox.Text.Trim());
                 };
 
-                var rulesPage = new TabPage("Fake server rules") { BackColor = Panel };
-                tabs.TabPages.Add(rulesPage);
-
+                // THE RULES ARE NOT WRITTEN DOWN IN THE INTERFACE ANY MORE.
+                //
+                // There used to be a "Fake server rules" tab spelling out every
+                // check - the slot counts, the address thresholds, the name
+                // tests. Anyone running a redirect farm could open it and read
+                // off exactly what to change. The switch stays, on the Mods
+                // page with the other settings; the recipe does not.
                 var chk = new CheckBox
                 {
-                    Text = "Hide servers that fail these checks",
+                    Text = "Hide fake and redirect servers",
                     Checked = hideFakes,
-                    Bounds = new Rectangle(16, 16, 400, 24),
+                    Bounds = new Rectangle(14, 210, 400, 24),
                     ForeColor = Color.Gainsboro,
                     FlatStyle = FlatStyle.Flat
                 };
-                rulesPage.Controls.Add(chk);
+                modsPage.Controls.Add(chk);
 
-                var body = new TextBox
+                modsPage.Controls.Add(new Label
                 {
-                    Multiline = true,
-                    ReadOnly = true,
-                    ScrollBars = ScrollBars.Vertical,
-                    BackColor = Panel2,
-                    ForeColor = Color.Gainsboro,
-                    BorderStyle = BorderStyle.FixedSingle,
-                    Bounds = new Rectangle(16, 50, 850, 420),
-                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                    Text = string.Join(Environment.NewLine, new[]
-                    {
-                        "TOO MANY SLOTS",
-                        "    DayZ supports at most " + BrowserFilters.MaxRealSlots + " players. A server",
-                        "    advertising 140, 200 or 255 slots cannot deliver them; the number is",
-                        "    there to sort it to the top of a browser.",
-                        "",
-                        "ONE ADDRESS, MANY IDENTITIES",
-                        "    An address running " + BrowserFilters.FarmServersPerIp + "+ servers under "
-                            + BrowserFilters.FarmNamesPerIp + "+ different community",
-                        "    names is a redirect farm. A real host running many servers uses one",
-                        "    brand across them.",
-                        "",
-                        "A SUBNET PACKED WITH THEM",
-                        "    Farms dodge the rule above by spreading over a /24. That is caught by",
-                        "    density: " + BrowserFilters.FarmServersPerSubnet + "+ servers, "
-                            + BrowserFilters.FarmNamesPerSubnet + "+ names, and at least "
-                            + BrowserFilters.FarmServersPerAddress + " servers per address.",
-                        "",
-                        "    Density is what separates a farm from a hosting provider. Measured",
-                        "    against the live list: farms run 20 to 200 servers per address, while",
-                        "    genuine providers run 1.1 to 2.5. Nothing sits in between, so the",
-                        "    threshold is not finely balanced.",
-                        "",
-                        "WHAT IS DELIBERATELY NOT USED",
-                        "    \"Nearly full\" sounds like a good signal, and the farms do report 125",
-                        "    of 127 when queried. But the master list reports every server as empty",
-                        "    until it is individually asked, so fullness is unknown at the moment",
-                        "    the list is filtered - and the rules above already separate them.",
-                        "",
-                        "IF SOMETHING GENUINE IS CAUGHT",
-                        "    Use the Flagged servers tab to allow it back. Allowing is remembered",
-                        "    in allowed.txt next to the other settings."
-                    })
-                };
-                rulesPage.Controls.Add(body);
+                    Text = "Screens out redirect farms and fabricated listings. Use the Flagged "
+                         + "servers tab\r\nto see what was caught, and to allow an address back in.",
+                    Bounds = new Rectangle(32, 236, 600, 34),
+                    ForeColor = Dim
+                });
+
+
 
                 // ------------------------------------------------------ close --
                 var close = new Button
@@ -337,6 +328,63 @@ namespace BeautifulPotatoExpLauncher
                 ForeColor = Color.White
             };
             b.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
+            return b;
+        }
+
+        /// <summary>
+        /// A small button that opens a path in Explorer.
+        ///
+        /// The path is fetched when the button is PRESSED, not when it is made,
+        /// so it follows whatever the box currently holds - including a folder
+        /// the player has just browsed to but not yet saved.
+        /// </summary>
+        private static Button MakeExplorerButton(Form owner, int x, int y, Func<string> path)
+        {
+            var b = new Button
+            {
+                Text = "Explorer",
+                Bounds = new Rectangle(x, y, 74, 25),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Panel2,
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            b.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
+
+            b.Click += (s, e) =>
+            {
+                string target = (path() ?? "").Trim();
+
+                if (target.Length == 0 || target.StartsWith("("))
+                {
+                    MessageBox.Show(owner, "There is no folder set here yet.",
+                                    "Nothing to open", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                try
+                {
+                    // GetFullPath because the registry hands paths back with
+                    // forward slashes, and Explorer opens Documents when given
+                    // one of those.
+                    target = Path.GetFullPath(target);
+
+                    if (!Directory.Exists(target))
+                    {
+                        MessageBox.Show(owner, "That folder does not exist:\r\n\r\n" + target,
+                                        "Not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    System.Diagnostics.Process.Start("explorer.exe", "\"" + target + "\"");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(owner, "Could not open that folder:\r\n\r\n" + ex.Message,
+                                    "Explorer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+
             return b;
         }
     }

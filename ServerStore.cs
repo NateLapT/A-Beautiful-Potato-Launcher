@@ -14,7 +14,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal sealed class ServerEntry
     {
@@ -45,12 +45,99 @@ namespace BeautifulPotatoExpLauncher
         {
             get
             {
-                string d = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "BeautifulPotatoExpLauncher");
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string d = Path.Combine(appData, "ABeautifulPotatoLauncher");
                 Directory.CreateDirectory(d);
+
+                BringForwardOldData(appData, d);
                 return d;
             }
+        }
+
+        /// <summary>
+        /// Moves a previous installation's data to the current folder.
+        ///
+        /// The launcher began life covering DayZ Experimental only, and kept
+        /// its files under "BeautifulPotatoExpLauncher", then briefly under
+        /// "BeautifulPotatoLauncher". It covers every DayZ
+        /// server now and the "Exp" is gone from the name - but a player's
+        /// favourites, settings and the server index behind them are worth
+        /// real time, and the index in particular is built up over many
+        /// sessions. Renaming the folder without this would silently hand them
+        /// an empty launcher.
+        ///
+        /// Runs once, recorded by a marker file rather than by whether the new
+        /// folder exists. That folder can already be there and still be empty -
+        /// an abandoned build, a half-started install - and testing for it
+        /// meant the real data sat in the old folder untouched while the player
+        /// stared at an empty launcher.
+        ///
+        /// Anything already present in the new folder WINS: this fills gaps, it
+        /// never overwrites. And the old folder is copied rather than moved, so
+        /// a failure part way through cannot destroy the only copy, and an
+        /// older build still installed keeps working from it.
+        /// </summary>
+        private static void BringForwardOldData(string appData, string target)
+        {
+            try
+            {
+                string marker = Path.Combine(target, "migrated-from-exp.txt");
+                if (File.Exists(marker)) return;
+
+                // Two previous homes, newest first so it wins any tie: the
+                // launcher was "BeautifulPotatoExpLauncher" while it covered
+                // Experimental only, then briefly "BeautifulPotatoLauncher"
+                // before the name was settled with its leading "A".
+                string[] previous =
+                {
+                    Path.Combine(appData, "BeautifulPotatoLauncher"),
+                    Path.Combine(appData, "BeautifulPotatoExpLauncher")
+                };
+
+                int copied = 0;
+                var from = new List<string>();
+
+                foreach (string old in previous)
+                {
+                    if (!Directory.Exists(old)) continue;
+                    from.Add(Path.GetFileName(old));
+
+                    copied += CopyMissing(old, target);
+
+                    foreach (string sub in Directory.GetDirectories(old))
+                    {
+                        string into = Path.Combine(target, Path.GetFileName(sub));
+                        Directory.CreateDirectory(into);
+                        copied += CopyMissing(sub, into);
+                    }
+                }
+
+                File.WriteAllText(marker, from.Count == 0
+                    ? "Nothing to migrate.\r\n"
+                    : "Brought " + copied + " file(s) forward from "
+                      + string.Join(", ", from.ToArray()) + " on "
+                      + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + ".\r\n"
+                      + "The old folder(s) were left untouched and can be deleted by hand.\r\n");
+            }
+            catch
+            {
+                // Starting fresh is a poor outcome but a working one. Failing to
+                // open because an old file could not be copied is not.
+            }
+        }
+
+        /// <summary>Copies files that the target does not already have. Returns how many.</summary>
+        private static int CopyMissing(string from, string to)
+        {
+            int copied = 0;
+            foreach (string file in Directory.GetFiles(from))
+            {
+                string dest = Path.Combine(to, Path.GetFileName(file));
+                if (File.Exists(dest)) continue;
+                try { File.Copy(file, dest); copied++; }
+                catch { }
+            }
+            return copied;
         }
 
         private static string ServersFile { get { return Path.Combine(Dir, "servers.txt"); } }
@@ -85,7 +172,7 @@ namespace BeautifulPotatoExpLauncher
             {
                 var lines = new List<string>
                 {
-                    "# Beautiful Potato Experimental Launcher - server list",
+                    "# A Beautiful Potato Launcher - server list",
                     "# name <TAB> host <TAB> game port   (the query port is game port + 1)"
                 };
                 foreach (var s in servers)
@@ -500,6 +587,247 @@ namespace BeautifulPotatoExpLauncher
             catch { }
         }
 
+        // ---- the map index ----
+        //
+        // Every map name ever seen, one per line, kept forever.
+        //
+        // This is the key to getting past Steam's 10,000-server cap: the cap is
+        // per REQUEST, so asking map by map returns far more of the list than
+        // asking once. To ask map by map you have to know the maps, and there
+        // is no endpoint that lists them - they are whatever community map
+        // makers have released. So the launcher learns them from the servers it
+        // sees, and never forgets: a map seen once is worth asking about again,
+        // even if nobody happens to be running it today.
+
+        private static string MapsFile { get { return Path.Combine(Dir, "maps.txt"); } }
+
+        public static HashSet<string> LoadKnownMaps()
+        {
+            var maps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(MapsFile)) return maps;
+                foreach (string line in File.ReadAllLines(MapsFile))
+                {
+                    string m = line.Trim();
+                    if (m.Length > 0) maps.Add(m);
+                }
+            }
+            catch { }
+            return maps;
+        }
+
+        /// <summary>
+        /// Adds these maps to the ones already known and writes the file back.
+        /// Returns how many were new, so the caller can say so.
+        /// </summary>
+        public static int RememberMaps(IEnumerable<string> maps)
+        {
+            if (maps == null) return 0;
+            try
+            {
+                var known = LoadKnownMaps();
+                int before = known.Count;
+
+                foreach (string m in maps)
+                {
+                    if (m == null) continue;
+                    string t = m.Trim();
+                    // A map name with whitespace or control characters in it is
+                    // a misread, not a map - it would poison every later query.
+                    if (t.Length == 0 || t.Length > 64) continue;
+                    if (t.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0) continue;
+                    known.Add(t);
+                }
+
+                if (known.Count == before) return 0;
+
+                var sorted = new List<string>(known);
+                sorted.Sort(StringComparer.OrdinalIgnoreCase);
+                File.WriteAllLines(MapsFile, sorted.ToArray());
+                return known.Count - before;
+            }
+            catch { return 0; }
+        }
+
+        private static string MapStatsFile { get { return Path.Combine(Dir, "map-counts.tsv"); } }
+
+        /// <summary>
+        /// How many servers each map returned the last two times it was asked
+        /// about. Tab separated: map, previous count, latest count.
+        /// </summary>
+        public static Dictionary<string, int[]> LoadMapCounts()
+        {
+            var result = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(MapStatsFile)) return result;
+                foreach (string line in File.ReadAllLines(MapStatsFile))
+                {
+                    var f = line.Split('\t');
+                    if (f.Length < 3) continue;
+                    int a, b;
+                    if (!int.TryParse(f[1], out a) || !int.TryParse(f[2], out b)) continue;
+                    result[f[0]] = new[] { a, b };
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        /// <summary>
+        /// Files away what each map returned this time, keeping the previous
+        /// figure alongside it. Two readings rather than one so a single
+        /// hiccup - Steam busy, a dropped packet - cannot condemn a map.
+        /// </summary>
+        public static void RecordMapCounts(IDictionary<string, int> latest)
+        {
+            if (latest == null || latest.Count == 0) return;
+            try
+            {
+                var all = LoadMapCounts();
+
+                foreach (var kv in latest)
+                {
+                    int[] prev;
+                    int before = all.TryGetValue(kv.Key, out prev) ? prev[1] : -1;
+                    all[kv.Key] = new[] { before, kv.Value };
+                }
+
+                var lines = new List<string>();
+                foreach (var kv in all)
+                    lines.Add(kv.Key + "\t" + kv.Value[0] + "\t" + kv.Value[1]);
+                lines.Sort(StringComparer.OrdinalIgnoreCase);
+
+                File.WriteAllLines(MapStatsFile, lines.ToArray());
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Maps that returned nothing on BOTH of the last two sweeps.
+        ///
+        /// Asking about these again is a round trip that reliably returns zero,
+        /// so the sweep skips them. They stay in the map index, and one
+        /// non-zero reading is enough to bring a map straight back.
+        /// </summary>
+        public static HashSet<string> BarrenMaps()
+        {
+            var barren = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in LoadMapCounts())
+                if (kv.Value[0] == 0 && kv.Value[1] == 0) barren.Add(kv.Key);
+            return barren;
+        }
+
+        // ---- which mods each server runs ----
+        //
+        // A server's mod list only arrives from A2S_RULES, one server at a
+        // time, and a full sweep of twelve thousand takes minutes. Filtering by
+        // mod would be useless if it started from nothing every launch, so what
+        // has been learnt is kept: the filter answers instantly from this, and
+        // servers that have never been asked fill in as the sweep reaches them.
+
+        private static string ModListsFile { get { return Path.Combine(Dir, "server-mods.tsv"); } }
+
+        /// <summary>endpoint -> the mod names that server asked for.</summary>
+        public static Dictionary<string, List<string>> LoadServerMods()
+        {
+            var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(ModListsFile)) return result;
+
+                foreach (string line in File.ReadAllLines(ModListsFile))
+                {
+                    if (line.Length == 0 || line[0] == '#') continue;
+
+                    var f = line.Split('\t');
+                    if (f.Length < 2) continue;
+
+                    var mods = new List<string>();
+                    for (int i = 1; i < f.Length; i++)
+                        if (f[i].Length > 0) mods.Add(f[i]);
+
+                    result[f[0]] = mods;
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        public static void SaveServerMods(IDictionary<string, List<string>> byEndpoint)
+        {
+            if (byEndpoint == null) return;
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("# server endpoint, then one column per mod name");
+
+                foreach (var kv in byEndpoint)
+                {
+                    if (kv.Value == null || kv.Value.Count == 0) continue;
+
+                    sb.Append(kv.Key);
+                    foreach (string m in kv.Value)
+                    {
+                        if (string.IsNullOrEmpty(m)) continue;
+                        sb.Append('\t').Append(m.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '));
+                    }
+                    sb.AppendLine();
+                }
+
+                File.WriteAllText(ModListsFile, sb.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private static string DescFile { get { return Path.Combine(Dir, "server-desc.tsv"); } }
+
+        /// <summary>
+        /// endpoint -> the server's description line, for the servers that have
+        /// been queried. Kept beside the mod lists and for the same reason:
+        /// filtering on it has to work before the sweep has run again.
+        /// </summary>
+        public static Dictionary<string, string> LoadServerDescriptions()
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(DescFile)) return result;
+
+                foreach (string line in File.ReadAllLines(DescFile))
+                {
+                    if (line.Length == 0 || line[0] == '#') continue;
+                    var f = line.Split('\t');
+                    if (f.Length < 2 || f[0].Length == 0) continue;
+                    result[f[0]] = f[1];
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        public static void SaveServerDescriptions(IDictionary<string, string> byEndpoint)
+        {
+            if (byEndpoint == null) return;
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("# server endpoint, then its description");
+
+                foreach (var kv in byEndpoint)
+                {
+                    if (string.IsNullOrEmpty(kv.Value)) continue;
+                    sb.Append(kv.Key).Append('\t')
+                      .Append(kv.Value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '))
+                      .AppendLine();
+                }
+
+                File.WriteAllText(DescFile, sb.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
         // ---- the cached server lists ----
 
         private static string ListDir
@@ -533,7 +861,18 @@ namespace BeautifulPotatoExpLauncher
         }
 
         /// <summary>How long a remembered server stays in the cache unseen.</summary>
-        public static readonly TimeSpan ListMaxAge = TimeSpan.FromDays(7);
+        /// <summary>
+        /// How long a remembered server stays in the index unseen.
+        ///
+        /// WHY THIS IS NOT A WEEK ANY MORE
+        ///   An ordinary refresh only asks about a SLICE of the known maps -
+        ///   twelve out of well over a hundred - so a live server on a quiet
+        ///   map can easily go a fortnight without turning up in a reply. At
+        ///   seven days the index was throwing away perfectly good servers for
+        ///   the crime of being on an unfashionable map, which is the opposite
+        ///   of what an index is for. A month outlasts the rotation.
+        /// </summary>
+        public static readonly TimeSpan ListMaxAge = TimeSpan.FromDays(30);
 
         /// <summary>
         /// Writes a browsed list to disk so the next launch can show it at once

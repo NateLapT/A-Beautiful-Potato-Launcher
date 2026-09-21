@@ -20,9 +20,9 @@
                         prevents stray input.
 
     USAGE
-      ui-inject.ps1 -Proc BeautifulPotatoExpLauncher -Click 400,113
-      ui-inject.ps1 -Proc BeautifulPotatoExpLauncher -RightClick 400,113
-      ui-inject.ps1 -Proc BeautifulPotatoExpLauncher -Keys "^f" -Then "motox"
+      ui-inject.ps1 -Proc ABeautifulPotatoLauncher -Click 400,113
+      ui-inject.ps1 -Proc ABeautifulPotatoLauncher -RightClick 400,113
+      ui-inject.ps1 -Proc ABeautifulPotatoLauncher -Keys "^f" -Then "motox"
       ui-inject.ps1 -Proc X -Click 10,10 -Shot out.png
       Add -Force to skip the prompt (still enforces the foreground check).
 #>

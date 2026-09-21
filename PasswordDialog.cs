@@ -12,7 +12,7 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal sealed class PasswordDialog : Form
     {

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-//  Beautiful Potato Experimental Launcher
+//  A Beautiful Potato Launcher
 //
 //  A replacement for DayZ's Experimental launcher, built around the two things
 //  the official one cannot do.
@@ -45,7 +45,7 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class Program
     {
@@ -65,9 +65,44 @@ namespace BeautifulPotatoExpLauncher
             }
             catch { }
 
+            // A CRASH SHOULD LEAVE EVIDENCE.
+            //
+            // An unhandled exception on a BACKGROUND thread terminates the
+            // process outright - no dialog, no log line, the window simply
+            // disappears. That is what a thread-safety bug in the mod sweep did,
+            // and it was invisible: nothing in the log, nothing on screen.
+            //
+            // These handlers cannot make such a bug safe - the process is still
+            // going down for a background failure - but they write down what
+            // happened first, which is the difference between a fixable report
+            // and "it just closed".
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                LogCrash("background thread", e.ExceptionObject as Exception);
+
+            Application.ThreadException += (s, e) =>
+            {
+                LogCrash("UI thread", e.Exception);
+                MessageBox.Show(
+                    "Something went wrong:\r\n\r\n" + e.Exception.Message
+                    + "\r\n\r\nThe details are in logs\\launcher.log.",
+                    "A Beautiful Potato Launcher", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            };
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+        }
+
+        private static void LogCrash(string where, Exception ex)
+        {
+            try
+            {
+                File.AppendAllText(LogFile,
+                    "[" + DateTime.Now.ToString("HH:mm:ss") + "] UNHANDLED on the " + where + ": "
+                    + (ex == null ? "(no exception object)" : ex.ToString())
+                    + Environment.NewLine + Environment.NewLine);
+            }
+            catch { }
         }
     }
 
@@ -148,6 +183,34 @@ namespace BeautifulPotatoExpLauncher
         /// </summary>
         public bool? Online;
         public bool Offline { get { return Online.HasValue && !Online.Value; } }
+
+        /// <summary>
+        /// Two-letter country code for the server's address, worked out from
+        /// the registry table rather than asked of anyone. Cached per row
+        /// because a list of twelve thousand asks for this on every repaint.
+        /// </summary>
+        private string _country;
+
+        public string Country
+        {
+            get
+            {
+                if (_country == null) _country = IpRegion.Country(Host);
+                return _country;
+            }
+        }
+
+        public WorldRegion Region { get { return IpRegion.RegionOf(Country); } }
+
+        /// <summary>
+        /// Set when this row is a heading rather than a server - the notice
+        /// that separates the configured servers from the ones still carrying
+        /// their host's stock name. Headings are never queried, never selected
+        /// and never counted.
+        /// </summary>
+        public string Heading;
+
+        public bool IsHeading { get { return Heading != null; } }
         public string Error = "";
 
         public string StatusText
@@ -272,8 +335,9 @@ namespace BeautifulPotatoExpLauncher
         // Column indices. The first column is a clickable refresh glyph - a
         // ListView cannot host real buttons, so the cell is hit-tested instead.
         private const int ColRefresh = 0, ColStar = 1, ColName = 2, ColGame = 3,
-                          ColStatus = 4, ColMap = 5, ColPlayers = 6, ColTime = 7,
-                          ColPing = 8, ColMods = 9, ColPassword = 10, ColAddress = 11;
+                          ColStatus = 4, ColMap = 5, ColCountry = 6, ColPlayers = 7,
+                          ColTime = 8, ColPing = 9, ColMods = 10, ColPassword = 11,
+                          ColAddress = 12;
 
         // Row colours, kept in one place so the list reads consistently:
         //   normal   - listed, and either answered or not yet asked
@@ -318,7 +382,187 @@ namespace BeautifulPotatoExpLauncher
         private static readonly Color Good   = Color.FromArgb(140, 200, 140);
 
         // Max player threshold; DayZ rarely exceeds 120 slots without severe degradation.
-        private const int MaxRealisticSlots = 120;
+        /// <summary>
+        /// Above this, a claimed slot count is not believable.
+        ///
+        /// MEASURED 2026-09-20 across 12,357 cached servers. The old value of
+        /// 120 was hiding 6,304 of them - HALF THE LIST - and 5,604 of those
+        /// were reporting exactly 127. That is not a claim, it is 0x7F, the
+        /// largest signed byte, which is what the field reads when a server
+        /// does not report a real figure. Spot-checking those names turns up
+        /// ordinary community servers - "Lois Pizza", "FlatLine PVP",
+        /// "ANDROMEDA : Fresh Wipe - PvP" - not a farm.
+        /// </summary>
+        private const int MaxRealisticSlots = 127;
+
+        /// <summary>
+        /// Slot counts that are byte limits rather than real numbers: 127 is
+        /// 0x7F and 255 is 0xFF.
+        ///
+        /// A server reporting one of these has told us nothing about its
+        /// capacity - but "nothing" is itself worth something here, because
+        /// fake servers overwhelmingly report 127 while real ones state a real
+        /// figure. So this is a SIGNAL, weighed together with how crowded the
+        /// address is, never a verdict on its own. See SentinelOnAFarm.
+        /// </summary>
+        private static bool SlotsUnreported(int slots)
+        {
+            return slots == 127 || slots == 255;
+        }
+
+        /// <summary>
+        /// A sentinel slot count on an address that is running a crowd.
+        ///
+        /// WHY BOTH, AND NOT EITHER
+        ///   MEASURED 2026-09-20 over 12,357 cached servers. Of the 5,604
+        ///   reporting exactly 127, **94% sit on an address hosting 50 or more
+        ///   servers**, against 17% of everything else. The worst offenders are
+        ///   unanimous: 31.77.188.20 runs 860 servers and all 860 report 127;
+        ///   31.77.188.21 runs 844 and so do all of those.
+        ///
+        ///   But only 75 of the 5,604 are alone on their address, and those
+        ///   read as ordinary servers - "Lois Pizza", "FlatLine PVP",
+        ///   "Project Civilization | Frontier". Hiding every 127 threw those
+        ///   away; hiding none of them let 5,373 farm entries back in. Neither
+        ///   signal decides alone, so both are required.
+        ///
+        /// THE THRESHOLD
+        ///   A legitimate host really does run many servers on one address -
+        ///   this player's own host runs 18, every one of them stating a true
+        ///   capacity between 10 and 120 and never a sentinel. 20 clears that
+        ///   with room to spare while still catching 5,613 farm entries.
+        /// </summary>
+        /// <summary>
+        /// The slot count is evidence this server is not real - either an
+        /// outright impossible figure, or a sentinel backed up by a crowded
+        /// address.
+        /// </summary>
+        private bool ImpossibleCapacity(BrowserServer s)
+        {
+            if (s == null) return false;
+
+            // 255 IS ALWAYS A FAKE. No corroboration, no exceptions.
+            //
+            // 0xFF is what a fabricated entry puts in the byte. Of the 272
+            // servers reporting it, 242 also claim zero players - a server that
+            // is simultaneously enormous and deserted. No real DayZ server runs
+            // 255 slots; the engine cannot usefully host them.
+            if (s.MaxPlayers == 255) return true;
+
+            if (SlotsUnreported(s.MaxPlayers)) return SentinelIsFake(s);
+
+            return s.MaxPlayers > MaxRealisticSlots;
+        }
+
+        /// <summary>
+        /// Whether a 127-slot server is one of the fakes.
+        ///
+        /// 127 alone is not proof - a handful of real servers report it - so
+        /// each test below needs a second thing to be true as well. Together
+        /// they caught every address in a reported imposter network while
+        /// leaving that network's REAL servers untouched.
+        /// </summary>
+        private bool SentinelIsFake(BrowserServer s)
+        {
+            // 1. CLAIMS TO BE EXACTLY FULL AT THE SENTINEL.
+            //
+            //    "127/127" is a fabricated entry advertising itself as busy: it
+            //    copied the capacity into the player count. Real servers do sit
+            //    exactly full - but at a real capacity, 55/55 or 90/90 - and
+            //    those are untouched because the capacity is not a sentinel.
+            if (s.Players == s.MaxPlayers) return true;
+
+            int onThisAddress;
+            if (!_serversPerIp.TryGetValue(s.Host ?? "", out onThisAddress)) return false;
+
+            // 2. EVERY SERVER ON THE ADDRESS REPORTS A SENTINEL.
+            //
+            //    This is the one that catches the small farms. A genuine host
+            //    running eighteen servers states eighteen real capacities; an
+            //    address whose entire population reports 127 is not a host, it
+            //    is a generator - and it works whether it made two entries or
+            //    eight hundred.
+            if (onThisAddress >= 2 && _sentinelOnlyIps.Contains(s.Host)) return true;
+
+            // 3. A CROWD, whatever the individual entries say.
+            return onThisAddress >= SentinelFarmSize;
+        }
+
+        /// <summary>
+        /// Addresses hosting two or more servers of which every single one
+        /// reports a sentinel capacity. Rebuilt with the farm scan.
+        /// </summary>
+        private readonly HashSet<string> _sentinelOnlyIps =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>How many distinct addresses each exact server name appears on.</summary>
+        private readonly Dictionary<string, int> _addressesPerName =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A name on this many addresses is being impersonated by someone.</summary>
+        private const int ImpersonationAddresses = 3;
+
+        /// <summary>
+        /// Addresses where the other rules already condemned most of what is
+        /// running there. Filled at the END of the farm scan, so it is one pass
+        /// behind and can never feed itself.
+        /// </summary>
+        private readonly HashSet<string> _mostlyFakeIps =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private const int MostlyFakeMinServers = 5;
+        private const int MostlyFakePercent = 60;
+
+        /// <summary>
+        /// A copy of somebody else's server name, rather than the original.
+        ///
+        /// WHY A TIEBREAKER IS NEEDED
+        ///   When "KarmaKrew Chernarus #1 EU" turns up on thirty addresses, one
+        ///   of them IS that server. Hiding all thirty would hide the very
+        ///   server the player was looking for - so a duplicated name only
+        ///   condemns a copy that ALSO looks fabricated.
+        ///
+        /// WHAT THE REAL ONE LOOKS LIKE
+        ///   Measured across the nine genuine addresses of one impersonated
+        ///   network: every one states a true capacity (55, 70, 90, 115 - never
+        ///   a sentinel) and hosts one or two servers. Every surviving imposter
+        ///   either reported 127, or sat on an address running ten or more.
+        ///   Those two tests separated 40 imposters from 11 real servers
+        ///   without a single mistake in either direction.
+        /// </summary>
+        private bool ImpersonatedCopy(BrowserServer s)
+        {
+            if (s == null || string.IsNullOrWhiteSpace(s.Name)) return false;
+
+            int addresses;
+            if (!_addressesPerName.TryGetValue(s.Name.Trim(), out addresses)) return false;
+            if (addresses < ImpersonationAddresses) return false;
+
+            // Fabricated entries do not know the real capacity.
+            if (SlotsUnreported(s.MaxPlayers)) return true;
+
+            // The genuine server is not one of a crowd. A real group runs a
+            // couple of machines per address; a generator runs dozens.
+            int onThisAddress;
+            if (_serversPerIp.TryGetValue(s.Host ?? "", out onThisAddress)
+                && onThisAddress >= ImpersonationCrowd) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Servers on one address before a duplicated name counts against it.
+        /// Ten, because the genuine addresses measured ran one or two and the
+        /// imposters ran eleven or more.
+        /// </summary>
+        private const int ImpersonationCrowd = 10;
+
+        /// <summary>Servers on one address before a sentinel slot count condemns it.</summary>
+        private const int SentinelFarmSize = 20;
+
+        /// <summary>How many servers each address is running, rebuilt with the farm scan.</summary>
+        private readonly Dictionary<string, int> _serversPerIp =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         // ---- state ----
         private Tab _tab = Tab.Community;
@@ -445,7 +689,22 @@ namespace BeautifulPotatoExpLauncher
         private readonly System.Windows.Forms.Timer _pollTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer _typeTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer _modRecheck = new System.Windows.Forms.Timer();
-        private readonly System.Windows.Forms.Timer _resortTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer _saveTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>Sorts the list once the sweep stops turning up dead servers.</summary>
+        private readonly System.Windows.Forms.Timer _idleSort = new System.Windows.Forms.Timer();
+
+        /// <summary>Refreshes the view while mod lists are being collected.</summary>
+        private readonly System.Windows.Forms.Timer _modSweepTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>Holds the mod sweep back until the window has settled.</summary>
+        private readonly System.Windows.Forms.Timer _modIndexStart = new System.Windows.Forms.Timer();
+
+        /// <summary>True while servers are still waiting to be queried.</summary>
+        private bool PingsOutstanding
+        {
+            get { lock (_pingLock) return _pingBusy.Count > 0 || _sweep < _pingAll.Count; }
+        }
         private string _browseMode = ServerStore.LoadBrowseMode();
 
         private uint[] AppsForQuery
@@ -478,6 +737,9 @@ namespace BeautifulPotatoExpLauncher
 
         // ---- controls ----
         private ListView _list, _mods;
+
+        /// <summary>Narrows the mod panel to the mods being looked for.</summary>
+        private ChipInput _modFind;
         private RichTextBox _desc;
         private Label _descHeader;
         private TextBox _name, _log, _search;
@@ -485,8 +747,34 @@ namespace BeautifulPotatoExpLauncher
         private Button _connect, _refresh, _filterToggle, _favBtn;
         private Panel _filterPanel;
         private readonly Dictionary<Tab, Button> _tabs = new Dictionary<Tab, Button>();
-        private ComboBox _cbPlayers, _cbTime, _cbBuild;
-        private TextBox _fName, _fAddr, _fMap, _fPing;
+        private ComboBox _cbBuild;
+
+        /// <summary>The in-game clock range, in six hour steps.</summary>
+        private RangeSlider _timeRange;
+
+        /// <summary>Holds the game mode toggles, on the search row.</summary>
+        private Panel _modesBar;
+
+        /// <summary>Keeps the filter dropdowns stocked while the panel is open.</summary>
+        private readonly System.Windows.Forms.Timer _choicesTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>The player-count range, with a grip at each end.</summary>
+        private RangeSlider _playerRange;
+        private TextBox _fName, _fAddr, _fPing;
+
+        /// <summary>
+        /// Map filter. A ComboBox rather than a text box so the player can see
+        /// what maps actually exist - there are dozens and nobody remembers how
+        /// "deerisle" is spelt - while still being able to type to narrow it.
+        /// </summary>
+        private ComboBox _fMap;
+
+        /// <summary>Country codes to include, or exclude with a leading minus.</summary>
+        private ComboBox _fCountry;
+
+        /// <summary>Mod picker. _fMod is its typing box, kept for the dropdown fill.</summary>
+        private ChipInput _modFilter;
+        private ComboBox _fMod;
         private CheckBox _chkNoPass, _chkHideFull, _chkHideEmpty, _chkHideFakes;
         private Segmented _segThird, _segMods;
 
@@ -496,8 +784,12 @@ namespace BeautifulPotatoExpLauncher
             {
                 if (_list.SelectedIndices.Count == 0) return null;
                 int idx = _list.SelectedIndices[0];
-                if (idx >= 0 && idx < _rows.Count) return _rows[idx];
-                return null;
+                if (idx < 0 || idx >= _rows.Count) return null;
+
+                // Clicking the notice selects nothing. It is a label that
+                // happens to live in the list, not a server, and letting it
+                // through would have the mod panel query an empty address.
+                return _rows[idx].IsHeading ? null : _rows[idx];
             }
         }
 
@@ -523,6 +815,10 @@ namespace BeautifulPotatoExpLauncher
             BuildUi();
 
             // Every clickable thing gets the hand cursor; see UiCursors.
+            ListViewTweaks.Smooth(_list);
+            _filters.KnownMods = KnownModsFor;
+            _filters.KnownDescription = KnownDescriptionFor;
+            PaintFilterToggle();
             UiCursors.ApplyTo(this);
 
             _pollTimer.Interval = InternetPollMs;
@@ -551,11 +847,128 @@ namespace BeautifulPotatoExpLauncher
             // what was already fetched rather than querying the server again.
             _modRecheck.Tick += (s, e) => { _modRecheck.Stop(); RepopulateModsFromCache(); };
 
-            _resortTimer.Interval = 1800;
-            _resortTimer.Tick += (s, e) =>
+            // Whether a server is up is only learnt when its reply arrives -
+            // long after the list was sorted. Without this, a server found dead
+            // sat wherever it happened to be and never sank. The delay lets a
+            // burst of replies settle so the list is not reshuffled per packet.
+            // The index is written back to disk while a long build runs, not
+            // only when it finishes. A build takes minutes and closing the
+            // launcher half way through used to throw away everything found
+            // since the last completed sweep.
+            _saveTimer.Interval = 30000;
+            _saveTimer.Tick += (s, e) => { SaveIndex(); SaveServerMods(); };
+            _saveTimer.Start();
+
+            // Restarted by each dead server found, so it fires only once they
+            // stop coming - the quiet moment to let the list settle.
+            _idleSort.Interval = 4000;
+            _idleSort.Tick += (s, e) =>
             {
-                _resortTimer.Stop();
-                if (IsSteamTab(_tab)) RenderFromCache();
+                _idleSort.Stop();
+                if (PingsOutstanding) { _idleSort.Start(); return; }
+                ResortNow(true);
+            };
+
+            // While mod lists are being read the set of matching servers grows,
+            // so re-render on a slow tick and let the player watch it fill.
+            // Gives the list, the first render and the visible-row pings a
+            // clear run before any of this starts.
+            _modIndexStart.Interval = 6000;
+            _modIndexStart.Tick += (s, e) =>
+            {
+                _modIndexStart.Stop();
+                BeginBackgroundModIndex();
+            };
+            _modIndexStart.Start();
+
+            // Polls for downloads started from the mod panel. Two seconds is
+            // frequent enough to feel immediate and rare enough to cost
+            // nothing; it stops as soon as everything has landed.
+            _downloadWatch.Interval = 2000;
+            _downloadWatch.Tick += (s, e) =>
+            {
+                _downloadWatchTicks++;
+
+                string steam = FindSteam();
+                if (steam == null) { _downloadWatch.Stop(); _awaitingDownload.Clear(); return; }
+
+                var landed = new List<ulong>();
+                foreach (ulong id in _awaitingDownload)
+                {
+                    try
+                    {
+                        if (SteamWorkshop.IsInstalled(steam, id)
+                            && !SteamWorkshop.NeedsUpdate(steam, id)) landed.Add(id);
+                    }
+                    catch { }
+                }
+
+                foreach (ulong id in landed) _awaitingDownload.Remove(id);
+
+                if (landed.Count > 0)
+                {
+                    Log("  " + landed.Count + " mod(s) finished downloading.");
+                    RefreshInstalledState();
+                }
+
+                // Give up after ten minutes rather than polling forever: a
+                // download that has not finished by then has stalled, and the
+                // player can press REFRESH.
+                if (_awaitingDownload.Count == 0 || _downloadWatchTicks > 300)
+                {
+                    _downloadWatch.Stop();
+                    _awaitingDownload.Clear();
+                }
+            };
+
+            // While the panel is open the choices go stale as servers arrive,
+            // so they are topped up on a slow tick. Doing it here rather than
+            // on DropDown is the whole point: the work never coincides with the
+            // list being opened.
+            _choicesTimer.Interval = 4000;
+            _choicesTimer.Tick += (s, e) =>
+            {
+                if (_filterPanel == null || !_filterPanel.Visible) return;
+                RefreshFilterChoices();
+            };
+            _choicesTimer.Start();
+
+            _modSweepTimer.Interval = 3000;
+            _modSweepTimer.Tick += (s, e) =>
+            {
+                SaveServerMods();
+
+                // RE-RENDER ONLY WHEN THE ANSWER CHANGED.
+                //
+                // A render costs about 165 ms of RecomputeFarms plus the row
+                // building, on the UI thread. Doing that every three seconds
+                // whether or not a single new server matched is what made the
+                // whole window feel sticky. Counting the matches first is cheap
+                // by comparison, and most ticks now do nothing at all.
+                if (_filters.RequiredMods.Count > 0)
+                {
+                    // Re-render only when a newly-read server actually matched.
+                    //
+                    // Counting the matches to find out cost 94 ms a tick, which
+                    // is the same problem in a different place. The worker that
+                    // reads a mod list already has that one list in its hands,
+                    // so it tests it there - one server, not seventeen thousand
+                    // - and sets this. Most ticks now do nothing.
+                    bool changed;
+                    lock (_modListLock)
+                    {
+                        changed = _newModMatches;
+                        _newModMatches = false;
+                    }
+
+                    if (changed)
+                    {
+                        if (IsSteamTab(_tab)) RenderFromCache(); else RefreshMine();
+                    }
+                    else UpdateStatus(null);
+                }
+
+                if (!PingsOutstanding) _modSweepTimer.Stop();
             };
 
             RefreshCurrent();
@@ -618,13 +1031,17 @@ namespace BeautifulPotatoExpLauncher
             Controls.Add(main);
             main.BringToFront();
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 70, BackColor = Ink };
+            // 34 for the tabs, then a search row tall enough for two rows of
+            // game mode buttons beside the search box.
+            // 54 for the tabs and the game modes beside them, then the search
+            // row underneath.
+            var top = new Panel { Dock = DockStyle.Top, Height = 90, BackColor = Ink };
             main.Controls.Add(top);
 
             var searchRow = new Panel { Dock = DockStyle.Fill, BackColor = Ink };
             top.Controls.Add(searchRow);
 
-            var tabBar = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Ink };
+            var tabBar = new Panel { Dock = DockStyle.Top, Height = 54, BackColor = Ink };
             top.Controls.Add(tabBar);
 
             top.Controls.SetChildIndex(searchRow, 0);
@@ -658,6 +1075,19 @@ namespace BeautifulPotatoExpLauncher
                 _tabs[t] = b;
                 x += 99;
             }
+
+            // The game modes sit level with the tabs, to their right. They are
+            // used constantly and belong with the other things that change what
+            // the list shows, not buried under the search box.
+            _modesBar = new Panel { BackColor = Ink, Bounds = new Rectangle(x + 16, 1, 600, 50) };
+            tabBar.Controls.Add(_modesBar);
+            BuildGameModeButtons(_modesBar, 0, 0);
+
+            tabBar.Resize += (s2, e2) =>
+            {
+                int room = Math.Max(0, tabBar.ClientSize.Width - _modesBar.Left - 8);
+                _modesBar.Width = room;
+            };
 
             _search = new TextBox
             {
@@ -718,6 +1148,19 @@ namespace BeautifulPotatoExpLauncher
             _filterToggle.Click += (s, e) =>
             {
                 _filterPanel.Visible = !_filterPanel.Visible;
+                PaintFilterToggle();
+
+                // Filled on the way in, so the lists are ready before the first
+                // click rather than being built by it. If the mod index has not
+                // been read yet, that is brought forward too - opening Filters
+                // is a clear signal the player is about to want it, and waiting
+                // out the startup delay would show them an empty list.
+                if (_filterPanel.Visible)
+                {
+                    WarmModIndexNow();
+                    RefreshFilterChoices();
+                }
+
                 Log("Filter panel " + (_filterPanel.Visible ? "shown." : "hidden."));
             };
             searchArea.Controls.Add(_filterToggle);
@@ -725,6 +1168,8 @@ namespace BeautifulPotatoExpLauncher
             var apply = MakeBtn("SEARCH", new Rectangle(102, 4, 92, 25), Color.FromArgb(60, 95, 60));
             apply.Click += (s, e) => RunSteamSearch(true);
             searchArea.Controls.Add(apply);
+
+
 
             EventHandler layoutSearch = (s, e) =>
             {
@@ -740,6 +1185,8 @@ namespace BeautifulPotatoExpLauncher
                 _searchClear.Bounds = new Rectangle(startX + textWidth - 22, 6, 18, 19);
                 _filterToggle.Bounds = new Rectangle(buttonX, 4, 92, 25);
                 apply.Bounds = new Rectangle(buttonX + 92 + 8, 4, 92, 25);
+
+
                 _searchClear.BringToFront();
                 _searchHint.BringToFront();
                 _filterToggle.BringToFront();
@@ -788,6 +1235,7 @@ namespace BeautifulPotatoExpLauncher
             _list.Columns.Add("Game", 84);
             _list.Columns.Add("Status", 62);
             _list.Columns.Add("Map", 106);
+            _list.Columns.Add("Country", 58, HorizontalAlignment.Center);
             _list.Columns.Add("Players", 70, HorizontalAlignment.Center);
             _list.Columns.Add("Time", 54, HorizontalAlignment.Center);
             _list.Columns.Add("Ping", 56, HorizontalAlignment.Center);
@@ -874,7 +1322,49 @@ namespace BeautifulPotatoExpLauncher
             _mods.Columns.Add("", 60, HorizontalAlignment.Center);
             _mods.Columns.Add("", 44, HorizontalAlignment.Center);
             _mods.MouseClick += OnModClick;
-            detailSplit.Panel1.Controls.Add(_mods);
+            ListViewTweaks.Smooth(_mods);
+
+            // Info, Repair, Sub and Remove are all cells that do something when
+            // clicked, so the pointer says so. A local mod's Steam actions are
+            // drawn blank and HandOverColumns leaves those alone.
+            UiCursors.HandOverColumns(_mods, null,
+                                      MColInfo, MColRepair, MColSub, MColRemove);
+            detailSplit.Panel1.Controls.Add(_mods);        // Fill, so it docks innermost
+
+            // Search within THIS server's mod list. A busy server asks for
+            // eighty mods and the question is usually "has it got X", which is
+            // tedious to answer by scrolling. Several terms at once, because
+            // "has it got X and Y" is the next question.
+            var modSearchBar = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Ink };
+            detailSplit.Panel1.Controls.Add(modSearchBar);
+
+            modSearchBar.Controls.Add(new Label
+            {
+                Text = "Find mod",
+                Bounds = new Rectangle(4, 5, 62, 18),
+                ForeColor = Dim,
+                TextAlign = ContentAlignment.MiddleRight
+            });
+
+            // Anchored across the bar so the chips have the full width of the
+            // Mods panel to lay themselves out in, however it is resized.
+            // Two rows of chips: mod names run long, and three of them fill a
+            // line on their own.
+            _modFind = new ChipInput(400, 2)
+            {
+                Location = new Point(70, 1),
+                BackColor = Ink,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            _modFind.EntriesChanged += (s2, e2) => RepopulateModsFromCache();
+            modSearchBar.Controls.Add(_modFind);
+
+            modSearchBar.Resize += (s2, e2) =>
+                _modFind.Width = Math.Max(240, modSearchBar.ClientSize.Width - 78);
+
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_modFind.Box,
+                "Shows only the mods matching what you add here. Click the X on "
+                + "a row to drop it, or clear them all to see the whole list.");
 
             _log = new TextBox
             {
@@ -983,6 +1473,19 @@ namespace BeautifulPotatoExpLauncher
             rail.Controls.Add(resort);
             ry += 30;
 
+            // Steam will not hand over more than 10,000 servers in one request,
+            // so the full list has to be collected map by map. That takes a few
+            // minutes, which is why it is a button and not something that
+            // happens behind every refresh.
+            var buildIndex = MakeBtn("BUILD INDEX", new Rectangle(20, ry, 170, 26), Panel2);
+            buildIndex.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+            buildIndex.Click += (s, e) => BuildIndexNow();
+            rail.Controls.Add(buildIndex);
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(buildIndex,
+                "Asks Steam for every map the launcher knows about, which reaches past "
+                + "its 10,000-server limit. Takes a few minutes; the list fills as it goes.");
+            ry += 30;
+
             _favBtn = MakeBtn("ADD TO FAVORITES", new Rectangle(20, ry, 170, 26), Panel2);
             _favBtn.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
             _favBtn.Click += OnToggleFavourite;
@@ -1014,9 +1517,18 @@ namespace BeautifulPotatoExpLauncher
             var p = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 214,
+                Height = 214,          // replaced at the end by the measured height
                 BackColor = Panel,
                 Visible = false
+
+                // NO AutoScroll HERE.
+                //
+                // It was added so a short window could still reach the bottom
+                // row, but an AutoScroll panel swallows the first click on any
+                // child it decides to scroll into view - so every dropdown
+                // needed clicking twice, once to focus and once to open. The
+                // panel measures itself to fit its contents now, so there was
+                // nothing left for the scrolling to solve.
             };
 
             Action<string, int, int> lab = (t, lx, ly) => p.Controls.Add(new Label
@@ -1064,23 +1576,126 @@ namespace BeautifulPotatoExpLauncher
             };
 
             int y = 10;
-            lab("Server Name", 4, y); _fName = box(118, y); y += 28;
-            lab("IP Address", 4, y);  _fAddr = box(118, y); y += 28;
-            lab("Map Name", 4, y);    _fMap  = box(118, y); y += 28;
-            lab("Max Ping", 4, y);    _fPing = box(118, y); y += 28;
-
-            lab("Players", 4, y);
-            _cbPlayers = MakeCombo(new Rectangle(118, y, 250, 23),
-                                   new object[] { "(Any)", "Not empty", "Not full", "Empty only" });
-            _cbPlayers.SelectedIndexChanged += (s2, e2) => QueueFilter();
-            p.Controls.Add(_cbPlayers);
+            lab("Server Name", 4, y); _fName = box(118, y); ClearBox.AddTo(_fName); y += 28;
+            lab("IP Address", 4, y);  _fAddr = box(118, y); ClearBox.AddTo(_fAddr); y += 28;
+            lab("Map Name", 4, y);
+            _fMap = new ComboBox
+            {
+                Bounds = new Rectangle(118, y, 250, 23),
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro,
+                FlatStyle = FlatStyle.Flat,
+                // Editable, so typing narrows the list rather than only picking.
+                DropDownStyle = ComboBoxStyle.DropDown,
+                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+                AutoCompleteSource = AutoCompleteSource.ListItems
+            };
+            _fMap.TextChanged += (s2, e2) => QueueFilter();
+            // Opening the list is when the choices need to be right, so they are
+            // gathered from whatever is currently loaded rather than kept in
+            // step with every arriving server.
+            // NOT filled from DropDown. See RefreshFilterChoices.
+            p.Controls.Add(_fMap);
+            ClearBox.AddTo(_fMap);      // after Add: the X goes in the same parent
             y += 28;
 
-            lab("Game Time", 4, y);
-            _cbTime = MakeCombo(new Rectangle(118, y, 250, 23), new object[] { "(Any)", "Day", "Night" });
-            _cbTime.SelectedIndexChanged += (s2, e2) => QueueFilter();
-            p.Controls.Add(_cbTime);
+            // Region: a button per part of the world, each cycling through
+            // show-everything / only-this / not-this. A row of small buttons
+            // rather than a dropdown because players want two or three regions
+            // at once - "US and EU" is the common ask, and a single-select
+            // control cannot say it.
+            lab("Region", 4, y);
+            BuildRegionButtons(p, 118, y);
+            y += 30;
 
+            lab("Country", 4, y);
+            _fCountry = new ComboBox
+            {
+                Bounds = new Rectangle(118, y, 250, 23),
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro,
+                FlatStyle = FlatStyle.Flat,
+                DropDownStyle = ComboBoxStyle.DropDown,
+                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+                AutoCompleteSource = AutoCompleteSource.ListItems
+            };
+            _fCountry.TextChanged += (s2, e2) => QueueFilter();
+            // NOT filled from DropDown. See RefreshFilterChoices.
+            p.Controls.Add(_fCountry);
+            ClearBox.AddTo(_fCountry);  // after Add, for the same reason
+
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_fCountry,
+                "Two-letter codes, comma separated - US, DE, CA. Put a minus in "
+                + "front to hide one instead: -RU shows everything except Russia.");
+            y += 28;
+
+            // Mods: pick from what the launcher has seen, and each pick is
+            // added to the list underneath. Several at once, because "has both
+            // of these" is the question people actually ask.
+            lab("Has Mods", 4, y);
+            // Two rows of chips under the box - mod names are long, and a
+            // couple of them fill a line on their own.
+            _modFilter = new ChipInput(660, 2) { Location = new Point(118, y), BackColor = Panel };
+            _modFilter.EntriesChanged += (s2, e2) => ModFilterChanged();
+            _fMod = _modFilter.Box;
+            p.Controls.Add(_modFilter);
+
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_fMod,
+                "Servers must run ALL of these. Click the X on a row to drop it."
+                + "\r\n\r\nOnly servers whose mod list has been read can match, so "
+                + "the results grow as the launcher works through the list.");
+
+            y += _modFilter.Height + 6;
+
+            // Game Modes used to live here. It is on the search row now,
+            // directly above the list - it is the filter people reach for
+            // constantly, and it should not need the panel open.
+            lab("Max Ping", 4, y);    _fPing = box(118, y); ClearBox.AddTo(_fPing); y += 28;
+
+            // Players: a range with two grips, because "about sixty" is a band
+            // and a single value cannot say it. Dragging either end moves that
+            // end only; leaving both at the extremes means no filter at all.
+            lab("Players", 4, y);
+            _playerRange = new RangeSlider
+            {
+                Bounds = new Rectangle(118, y - 4, 300, 38),
+                BackColor = Panel,
+                Minimum = 0,
+                Maximum = BrowserFilters.PlayerCeiling
+            };
+            _playerRange.SetRange(0, BrowserFilters.PlayerCeiling);
+            _playerRange.RangeChanged += (s2, e2) => QueueFilter();
+            p.Controls.Add(_playerRange);
+
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_playerRange,
+                "Drag either end. At the far right the top of the range means "
+                + "\"and above\", so a busy server is never hidden by it.");
+            y += 40;
+
+            // In-game clock, in quarter-day steps. A range rather than a
+            // day/night switch because "dusk" and "early morning" are real
+            // requests that two options cannot express.
+            lab("Game Time", 4, y);
+            _timeRange = new RangeSlider
+            {
+                Bounds = new Rectangle(118, y - 4, 300, 38),
+                BackColor = Panel,
+                Minimum = 0,
+                Maximum = 24,
+                Step = 6,
+                ShowTicks = true,
+                FormatRange = (lo, hi) => lo <= 0 && hi >= 24
+                    ? "any time of day"
+                    : string.Format("{0:00}:00 to {1:00}:00", lo, hi == 24 ? 24 : hi)
+            };
+            _timeRange.SetRange(0, 24);
+            _timeRange.RangeChanged += (s2, e2) => QueueFilter();
+            p.Controls.Add(_timeRange);
+
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_timeRange,
+                "The server's in-game clock, in six hour steps. Servers that do "
+                + "not publish a clock are not shown while this is narrowed.");
+            y += 40;
             const int rx = 500;
             lab("3rd Person View", rx - 114, 10);
             _segThird = new Segmented(new[] { "Any", "Enabled", "Disabled" }, new Point(rx, 10));
@@ -1102,8 +1717,9 @@ namespace BeautifulPotatoExpLauncher
             var tipFake = new ToolTip();
             tipFake.SetToolTip(_chkHideFakes,
                 "Hides servers claiming more than " + MaxRealisticSlots +
-                " slots (DayZ limits effective capacity to ~120), and addresses running " +
-                BrowserFilters.FarmServersPerIp + "+ servers under " +
+                " slots (DayZ limits effective capacity to ~120); servers reporting no real " +
+                "slot count that share an address with " + SentinelFarmSize + "+ others; and " +
+                "addresses running " + BrowserFilters.FarmServersPerIp + "+ servers under " +
                 BrowserFilters.FarmNamesPerIp + "+ different names or identical mod arrays - redirect farms.");
 
             _chkNoPass.CheckedChanged    += (s2, e2) => QueueFilter();
@@ -1124,15 +1740,29 @@ namespace BeautifulPotatoExpLauncher
             clear.Click += (s, e) => { ClearFilterUi(); ApplyFilters(); };
             p.Controls.Add(clear);
 
+            // The footnote goes below everything else, wherever that turns out
+            // to be, rather than at a measured-once position.
+            int footY = 0;
+            foreach (Control c in p.Controls) footY = Math.Max(footY, c.Bottom);
+
             p.Controls.Add(new Label
             {
                 Text = "Filters apply as you change them, against the list already downloaded.  "
                      + "Name, map, players and password are also sent to Steam on the next REFRESH, "
                      + "which is how a narrowed refresh reaches past the 10,000 servers it returns at once.",
-                Bounds = new Rectangle(8, 190, 920, 18),
+                Bounds = new Rectangle(8, footY + 8, 920, 18),
                 ForeColor = Color.FromArgb(110, 110, 118),
                 Font = new Font("Segoe UI", 7.5f)
             });
+
+            // THE PANEL IS SIZED TO ITS CONTENTS, NOT TO A NUMBER.
+            //
+            // It was a fixed 214px, which was right until two more rows were
+            // added and Game Time disappeared behind the server list. Measuring
+            // means the next thing added cannot silently fall off the bottom.
+            int bottom = 0;
+            foreach (Control c in p.Controls) bottom = Math.Max(bottom, c.Bottom);
+            p.Height = bottom + 10;
 
             return p;
         }
@@ -1434,8 +2064,8 @@ namespace BeautifulPotatoExpLauncher
 
         private void MarkSortedColumn()
         {
-            string[] titles = { "", "", "Name", "Game", "Status", "Map",
-                                "Players", "Time", "Ping", "Mods", "Address" };
+            string[] titles = { "", "", "Name", "Game", "Status", "Map", "Country",
+                                "Players", "Time", "Ping", "Mods", "Password", "Address" };
             for (int i = 0; i < _list.Columns.Count && i < titles.Length; i++)
             {
                 string label = titles[i];
@@ -1467,15 +2097,57 @@ namespace BeautifulPotatoExpLauncher
         /// and hosting panels leave their own placeholders behind, so a few
         /// obvious ones are treated the same way.
         /// </summary>
+        /// <summary>
+        /// A server still carrying the name its host gave it out of the box.
+        ///
+        /// Nobody is searching for one of these - the owner has not set it up
+        /// yet - so they sort last whatever column is chosen. Matched on
+        /// SUBSTRINGS as well as whole names, because the hosting companies
+        /// each dress theirs up slightly differently ("DayZ gameserver hosted
+        /// by nitrado.net", "nitrado.net gameserver") and chasing every exact
+        /// spelling would be a losing game.
+        /// </summary>
         private static bool Unconfigured(Row r)
         {
             if (r == null || string.IsNullOrWhiteSpace(r.Name)) return true;
             string n = r.Name.Trim();
-            return n.Equals("EXAMPLE NAME", StringComparison.OrdinalIgnoreCase)
-                || n.Equals("DayZ", StringComparison.OrdinalIgnoreCase)
-                || n.Equals("nitrado.net gameserver", StringComparison.OrdinalIgnoreCase)
-                || n.Equals("Server Name", StringComparison.OrdinalIgnoreCase);
+
+            foreach (string exact in StockNames)
+                if (n.Equals(exact, StringComparison.OrdinalIgnoreCase)) return true;
+
+            foreach (string mark in HostDefaults)
+                if (n.IndexOf(mark, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
         }
+
+        /// <summary>Names that mean "never configured" on their own.</summary>
+        private static readonly string[] StockNames =
+        {
+            "EXAMPLE NAME",
+            "DayZ",
+            "Server Name",
+            "DayZ Server"
+        };
+
+        /// <summary>
+        /// Fragments the hosting companies leave in a default name. A server
+        /// whose name still advertises its host has not been named by anyone.
+        /// </summary>
+        private static readonly string[] HostDefaults =
+        {
+            "nitrado.net gameserver",
+            "gameserver hosted by nitrado",
+            // A hosting company's own test boxes - 36 of them in one sweep,
+            // named "NFOservers.com - Chicago test # 19" and so on. Real
+            // machines, but nobody's server.
+            "nfoservers.com",
+            "hosted by gtxgaming",
+            "server by hosthavoc",
+            "hosted by hosthavoc",
+            "gportal.com gameserver",
+            "hosted by gportal"
+        };
 
         private List<Row> KeepOrderThenAppend(List<Row> rows)
         {
@@ -1492,20 +2164,54 @@ namespace BeautifulPotatoExpLauncher
                 ordered.Add(fresh);
                 used.Add(existing.Endpoint);
             }
+            // New arrivals, in the order Steam handed them over.
+            var arrived = new List<Row>();
             foreach (var r in rows)
-                if (!used.Contains(r.Endpoint)) ordered.Add(r);
+                if (!used.Contains(r.Endpoint)) arrived.Add(r);
 
-            return ordered;
+            ordered.AddRange(arrived);
+
+            // The two groups that are positional rather than sorted stay where
+            // they belong: favourites at the top, never-configured servers at
+            // the very bottom. A STABLE partition, so within each group
+            // everything keeps the order it already had and nothing visible
+            // jumps. This is the only movement a loading list is allowed.
+            var favourites = new List<Row>();
+            var normal = new List<Row>();
+            var stock = new List<Row>();
+
+            foreach (var r in ordered)
+            {
+                if (Unconfigured(r)) stock.Add(r);
+                else if (r.Favourite) favourites.Add(r);
+                else normal.Add(r);
+            }
+
+            var result = new List<Row>(ordered.Count);
+            result.AddRange(favourites);
+            result.AddRange(normal);
+            result.AddRange(stock);
+            return result;
         }
 
         /// <summary>Re-sorts what is on screen using the last chosen column.</summary>
         private void ResortNow()
         {
+            ResortNow(false);
+        }
+
+        /// <summary>
+        /// <paramref name="quiet"/> is for the automatic re-sort that follows
+        /// servers being found offline: it must not overwrite the status line,
+        /// which is busy reporting the progress of that same sweep.
+        /// </summary>
+        private void ResortNow(bool quiet)
+        {
             if (_rows == null || _rows.Count == 0) return;
             var rows = new List<Row>(_rows);
             SortRows(rows);
             SetRows(rows, _selectedEndpoint);
-            _status.Text = string.Format("Re-sorted {0} servers.", rows.Count);
+            if (!quiet) _status.Text = string.Format("Re-sorted {0} servers.", rows.Count);
         }
 
         private void SortRows(List<Row> rows)
@@ -1524,6 +2230,16 @@ namespace BeautifulPotatoExpLauncher
                     break;
                 case ColMap:
                     byColumn = (a, b) => string.Compare(a.Map, b.Map, StringComparison.OrdinalIgnoreCase);
+                    break;
+                case ColCountry:
+                    // Blank sorts last either way - a server we cannot place is
+                    // not "country A", it is an unknown.
+                    byColumn = (a, b) =>
+                    {
+                        bool na = string.IsNullOrEmpty(a.Country), nb = string.IsNullOrEmpty(b.Country);
+                        if (na != nb) return na ? 1 : -1;
+                        return string.Compare(a.Country, b.Country, StringComparison.OrdinalIgnoreCase);
+                    };
                     break;
                 case ColPlayers:
                     // A queue means the server is full and MORE people want in,
@@ -1562,6 +2278,14 @@ namespace BeautifulPotatoExpLauncher
                 int unconfigured = (Unconfigured(x) ? 1 : 0) - (Unconfigured(y) ? 1 : 0);
                 if (unconfigured != 0) return unconfigured;
 
+                // FAVOURITES ARE ALWAYS AT THE TOP - offline or not.
+                //
+                // A favourite is a server the player has chosen to watch, and
+                // whether it is up is often the very thing they opened the
+                // launcher to find out. Sinking it when it goes down hides the
+                // answer. Offline still sorts to the bottom, but only within
+                // each group: dead favourites sit under live ones, and dead
+                // strangers under live strangers.
                 int fav = (y.Favourite ? 1 : 0) - (x.Favourite ? 1 : 0);
                 if (fav != 0) return fav;
 
@@ -1583,6 +2307,35 @@ namespace BeautifulPotatoExpLauncher
             });
         }
 
+        /// <summary>
+        /// The notice row. A ListViewItem carries its own Font, so this needs
+        /// no owner-drawing - which matters, because owner-drawing the list
+        /// would mean drawing every server row by hand as well.
+        /// </summary>
+        private ListViewItem HeadingItem(Row row)
+        {
+            var it = new ListViewItem(row.Heading)
+            {
+                UseItemStyleForSubItems = true,
+                ForeColor = Color.FromArgb(225, 175, 90),
+                BackColor = Ink
+            };
+
+            // A VIRTUAL ListView DEMANDS ONE SUB-ITEM PER COLUMN.
+            //
+            // Give it fewer and it throws from inside WndProc - "RetrieveVirtual
+            // ListItem event needs a list view SubItem for each ListView column"
+            // - and it surfaces as a crash dialog when that row is scrolled into
+            // view, not when it was built. The heading fills only the first
+            // column, so the rest are padded.
+            while (it.SubItems.Count < _list.Columns.Count) it.SubItems.Add("");
+
+            if (row.Heading.Length > 0)
+                it.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
+
+            return it;
+        }
+
         private static int Rank(Row r)
         {
             return !r.Online.HasValue ? 1 : r.Online.Value ? 0 : 2;
@@ -1595,6 +2348,12 @@ namespace BeautifulPotatoExpLauncher
 
         private void OnRetrieveItem(object sender, RetrieveVirtualItemEventArgs e)
         {
+            if (e.ItemIndex >= 0 && e.ItemIndex < _rows.Count && _rows[e.ItemIndex].IsHeading)
+            {
+                e.Item = HeadingItem(_rows[e.ItemIndex]);
+                return;
+            }
+
             var rows = _rows;
             if (e.ItemIndex < 0 || e.ItemIndex >= rows.Count)
             {
@@ -1622,6 +2381,7 @@ namespace BeautifulPotatoExpLauncher
                 row.GameLabel,
                 row.StatusText,
                 row.Map,
+                row.Country,
                 PlayersCell(row),
                 TagTime(row.Tags),
                 row.Ping > 0 ? row.Ping + " ms" : (row.Offline ? "-" : ""),
@@ -1633,6 +2393,10 @@ namespace BeautifulPotatoExpLauncher
                 UseItemStyleForSubItems = false,
                 ToolTipText = "Arrow re-checks this server; star saves it to Favorites"
             };
+
+            // Same rule as the heading: a virtual list needs every column
+            // filled, and columns get added over time.
+            while (it.SubItems.Count < _list.Columns.Count) it.SubItems.Add("");
 
             Color body = row.Offline ? RowOffline : RowNormal;
             for (int i = ColName; i < it.SubItems.Count; i++) it.SubItems[i].ForeColor = body;
@@ -1657,6 +2421,27 @@ namespace BeautifulPotatoExpLauncher
 
         private void SetRows(List<Row> rows, string keepSelected)
         {
+            rows = WithHeadings(rows);
+
+            // NOTHING CHANGED, SO CHANGE NOTHING.
+            //
+            // A refresh re-renders the whole list every time Steam's count
+            // moves, which during a fetch is constantly - and most of those
+            // renders produce exactly the same rows in exactly the same order.
+            // Rebuilding a virtual ListView repaints every visible row, and
+            // that is the flash. If the order is identical, the rows are the
+            // same objects and their contents are read on demand, so a redraw
+            // is all that is needed.
+            if (SameOrder(rows))
+            {
+                _rows = rows;
+                _rowIndex.Clear();
+                for (int i = 0; i < rows.Count; i++) _rowIndex[rows[i].Endpoint] = i;
+                _list.Invalidate();
+                SweepAll(rows);
+                return;
+            }
+
             _rows = rows;
             _rowIndex.Clear();
             for (int i = 0; i < rows.Count; i++) _rowIndex[rows[i].Endpoint] = i;
@@ -1672,7 +2457,12 @@ namespace BeautifulPotatoExpLauncher
                 if (keepSelected != null && _rowIndex.TryGetValue(keepSelected, out sel))
                 {
                     _list.SelectedIndices.Add(sel);
-                    if (sel < rows.Count) _list.EnsureVisible(sel);
+
+                    // Deliberately NOT EnsureVisible. The list is rebuilt every
+                    // time a ping comes back, and scrolling the view to the
+                    // selected row each time dragged the player back to it the
+                    // moment they tried to look anywhere else. The selection is
+                    // kept; where they are looking is left alone.
                 }
                 else if (rows.Count > 0)
                 {
@@ -1693,10 +2483,24 @@ namespace BeautifulPotatoExpLauncher
             _selectedEndpoint = current != null ? current.Endpoint : null;
             if (_selectedEndpoint != _modsShownFor) ShowMods();
 
+            FitNameColumn();
+
             _lastTopIndex = -1;
             _visTimer.Start();
             SweepAll(rows);
             _list.Invalidate();
+        }
+
+        /// <summary>
+        /// Scrolls to a server on purpose - used when the player asks to go to
+        /// one, never as part of a refresh.
+        /// </summary>
+        private void ScrollTo(string endpoint)
+        {
+            int i;
+            if (endpoint == null || !_rowIndex.TryGetValue(endpoint, out i)) return;
+            if (i < 0 || i >= _list.VirtualListSize) return;
+            try { _list.EnsureVisible(i); } catch { }
         }
 
         private void Redraw(string endpoint)
@@ -1754,18 +2558,21 @@ namespace BeautifulPotatoExpLauncher
 
             var kind = KindFor(_tab);
 
-            _appQueue = new Queue<uint>(AppsForQuery);
+            _appQueue = new Queue<SweepPass>();
+            foreach (uint a in AppsForQuery)
+                _appQueue.Enqueue(new SweepPass(a, BuildLabel(a)));
+
             _merged.Clear();
             _mergedKeys.Clear();
+            _deepSweepQueued = false;
 
             foreach (var srv in _cache)
                 if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
 
-            uint app = _appQueue.Dequeue();
+            var pass = _appQueue.Dequeue();
+            uint app = pass.App;
 
-            var steamFilters = kind == ListKind.Internet
-                             ? _filters.ToSteamFilters()
-                             : new List<KeyValuePair<string, string>>();
+            var steamFilters = FiltersFor(pass, kind);
             _lastSteamFilterKey = SteamFilterKey(steamFilters);
 
             _browser.Clear();
@@ -1782,6 +2589,7 @@ namespace BeautifulPotatoExpLauncher
                 return;
             }
             _appendWhileLoading = true;
+            _pollPass = pass;
             _pollApp = app;
             _pollTicks = 0;
             _stableTicks = 0;
@@ -1795,10 +2603,346 @@ namespace BeautifulPotatoExpLauncher
         private int _pollTicks;
         private ListKind _pollKind = ListKind.Internet;
 
-        private Queue<uint> _appQueue = new Queue<uint>();
+        // ----------------------------------------------- the 10,000 cap ----
+        //
+        // Steam truncates ANY ONE request at 10,000 servers, and DayZ has far
+        // more than that. Nothing can raise the cap - but it applies per
+        // REQUEST, so several narrower requests together reach past it.
+        //
+        // MEASURED, 20 September 2026, against the live master list:
+        //
+        //     one plain query .................  4,997 servers with details
+        //     plus per-map queries ............  9,644   (+4,647)
+        //     plus populated-only .............  12,337  (+2,693)
+        //     plus modded .....................  12,597    (+260)
+        //     plus first-person ...............  18,502  (+5,905)
+        //
+        // Nearly four times the servers, out of the same list Steam was already
+        // willing to give - it simply will not give it all at once.
+        //
+        // The extra passes only run when the plain query actually hits the cap,
+        // so a narrow search still finishes in one round trip.
+        private struct SweepPass
+        {
+            public uint App;
+            public string Label;
+
+            /// <summary>The map this pass asked for, or null for a tag pass.</summary>
+            public string Map;
+
+            /// <summary>Narrowing added on top of the player's own filters.</summary>
+            public List<KeyValuePair<string, string>> Extra;
+
+            public SweepPass(uint app, string label, params string[] keyValuePairs)
+            {
+                App = app;
+                Label = label;
+                Map = null;
+                Extra = new List<KeyValuePair<string, string>>();
+                for (int i = 0; i + 1 < keyValuePairs.Length; i += 2)
+                {
+                    Extra.Add(new KeyValuePair<string, string>(keyValuePairs[i], keyValuePairs[i + 1]));
+                    if (keyValuePairs[i] == "map") Map = keyValuePairs[i + 1];
+                }
+            }
+        }
+
+        private Queue<SweepPass> _appQueue = new Queue<SweepPass>();
         private readonly List<BrowserServer> _merged = new List<BrowserServer>();
         private readonly HashSet<string> _mergedKeys = new HashSet<string>();
+        private SweepPass _pollPass;
         private uint _pollApp;
+
+        /// <summary>Set once the extra passes are queued, so they are queued once.</summary>
+        private bool _deepSweepQueued;
+
+        /// <summary>
+        /// Coming within a whisker of Steam's 10,000 means the list was cut short.
+        /// </summary>
+        private const int NearlyCapped = 9900;
+
+        /// <summary>
+        /// The extra requests to make when the plain one came back truncated.
+        ///
+        /// The three tag passes come first because they contributed the most in
+        /// the measurement above, so a sweep the player cuts short has still
+        /// gained the most it could. Then the maps.
+        ///
+        /// HOW MANY MAPS
+        ///   An ordinary refresh takes a SLICE of the known maps - all of them
+        ///   would take twenty minutes and nobody wants that on every refresh.
+        ///   The slice moves on each time, so consecutive refreshes cover
+        ///   different maps and the index fills in over a few sessions. BUILD
+        ///   INDEX takes the lot in one go for a player who wants it now.
+        ///
+        /// WHERE THE MAPS COME FROM
+        ///   Servers already seen, remembered permanently in maps.txt. DayZ
+        ///   gains community maps constantly and a hard-coded list would be
+        ///   wrong within a month - and several names guessed by hand returned
+        ///   nothing at all, which is a wasted round trip every single refresh.
+        /// </summary>
+        private List<SweepPass> DeepSweepPasses(uint app, bool everyMap)
+        {
+            var passes = new List<SweepPass>
+            {
+                new SweepPass(app, "first-person", "gametagsand", "no3rd"),
+                new SweepPass(app, "populated",    "empty",       "1"),
+                new SweepPass(app, "modded",       "gametagsand", "mod")
+            };
+
+            var maps = KnownMaps();
+
+            // Maps Steam has twice told us nothing about. They are REAL maps
+            // with real servers on them - Steam's map filter simply does not
+            // match what those servers report - so asking again is a round trip
+            // that reliably returns zero. They stay in the index; they just
+            // stop costing time on every build.
+            var barren = ServerStore.BarrenMaps();
+            if (barren.Count > 0)
+            {
+                int was = maps.Count;
+                maps = maps.Where(m => !barren.Contains(m)).ToList();
+                if (was != maps.Count)
+                    Log("  Skipping " + (was - maps.Count)
+                        + " map(s) that have returned nothing twice running.");
+            }
+
+            if (maps.Count == 0) return passes;
+
+            int take = everyMap ? maps.Count : Math.Min(MapsPerRefresh, maps.Count);
+
+            for (int i = 0; i < take; i++)
+            {
+                string map = maps[(_mapCursor + i) % maps.Count];
+                passes.Add(new SweepPass(app, "map " + map, "map", map));
+            }
+
+            // ASKING TWICE IS NOT WASTED.
+            //
+            // Steam does not return the same servers for the same query. Asked
+            // for chernarusplus three times in a row it returned 3701, 3702 and
+            // 3702 servers - but the second run added 289 the first had never
+            // mentioned, and the third another 223. It hands back a slice, not
+            // the list, and the slice moves.
+            //
+            // So a build repeats the busiest maps. Diminishing, but real, and
+            // it is the only thing that actually works: combining a map with a
+            // second filter - no3rd, full, mod - returns ZERO from Steam, so
+            // there is no cleverer query to write. The index fills by asking
+            // again, which is also why rebuilding it is worth doing.
+            if (everyMap)
+            {
+                int busiest = Math.Min(MapsToRepeat, maps.Count);
+                for (int pass = 2; pass <= RepeatBusiestMaps; pass++)
+                    for (int i = 0; i < busiest; i++)
+                        passes.Add(new SweepPass(app, "map " + maps[i] + " (again #" + pass + ")",
+                                                 "map", maps[i]));
+            }
+
+            // Where the next ordinary refresh picks up.
+            _mapCursor = maps.Count == 0 ? 0 : (_mapCursor + take) % maps.Count;
+            return passes;
+        }
+
+        /// <summary>
+        /// Every map ever seen, busiest first.
+        ///
+        /// Busiest first matters because a partial sweep is the normal case:
+        /// the maps carrying thousands of servers are the ones the cap is
+        /// hiding, and they should be asked about before a map with four.
+        /// </summary>
+        private List<string> KnownMaps()
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string m in ServerStore.LoadKnownMaps())
+                counts[m] = 0;
+
+            foreach (var srv in _cache)
+            {
+                string m = (srv.Map ?? "").Trim();
+                if (m.Length == 0) continue;
+                int n;
+                counts[m] = counts.TryGetValue(m, out n) ? n + 1 : 1;
+            }
+
+            return counts.OrderByDescending(k => k.Value)
+                         .ThenBy(k => k.Key, StringComparer.OrdinalIgnoreCase)
+                         .Select(k => k.Key)
+                         .ToList();
+        }
+
+        /// <summary>Maps asked about on an ordinary refresh, before the cursor moves on.</summary>
+        private const int MapsPerRefresh = 12;
+
+        /// <summary>How many of the busiest maps a full build asks about repeatedly.</summary>
+        private const int MapsToRepeat = 6;
+
+        /// <summary>Total times a build asks about those maps. Measured: run 2
+        /// found 289 servers run 1 missed, run 3 another 223.</summary>
+        private const int RepeatBusiestMaps = 3;
+
+        private int _mapCursor;
+
+        /// <summary>Set by BUILD INDEX: this sweep takes every known map.</summary>
+        private bool _buildingIndex;
+
+        /// <summary>What one pass of a sweep actually brought back.</summary>
+        private sealed class PassResult
+        {
+            public string Label;
+            public string Map;      // null for the tag passes
+            public int Returned;
+            public int New;
+        }
+
+        private readonly List<PassResult> _sweepResults = new List<PassResult>();
+
+        /// <summary>
+        /// Prints what every pass contributed, worst last.
+        ///
+        /// This is the only way to tell whether a map is worth asking about.
+        /// Several real DayZ maps return NOTHING from Steam's map filter even
+        /// though servers run them, and without this the sweep just felt slow
+        /// for no visible reason.
+        /// </summary>
+        // The breakdown of WHY servers were screened out is deliberately not
+        // logged any more.
+        //
+        // The log is visible in the launcher, and the launcher is public. Every
+        // line describing a rule - what a slot count has to be, how many
+        // servers on one address is too many - is a line telling a redirect
+        // farm precisely what to change to get back in. The counts alone say
+        // whether the screening is working; the reasons are written to the
+        // local diagnostics folder instead, which never leaves the machine.
+
+        private void ReportSweep()
+        {
+            if (_sweepResults.Count == 0) return;
+
+            Log("");
+            Log("  ---- sweep results: " + _sweepResults.Count + " passes ----");
+            Log(string.Format("  {0,-28} {1,8} {2,8}", "pass", "returned", "new"));
+
+            int empty = 0;
+            foreach (var r in _sweepResults.OrderByDescending(r => r.New).ThenBy(r => r.Label))
+            {
+                if (r.Returned == 0) { empty++; continue; }
+                Log(string.Format("  {0,-28} {1,8} {2,8}", r.Label, r.Returned, r.New));
+            }
+
+            // What the repeats were worth on their own, since that is the part
+            // that looks like wasted time and is not.
+            var repeats = _sweepResults.Where(r => r.Label.Contains("(again")).ToList();
+            if (repeats.Count > 0)
+                Log("  repeat passes alone found " + repeats.Sum(r => r.New)
+                    + " server(s) the first pass missed.");
+
+            if (empty > 0)
+            {
+                var names = _sweepResults.Where(r => r.Returned == 0)
+                                         .Select(r => r.Label)
+                                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase);
+                Log("  " + empty + " pass(es) returned nothing at all: "
+                    + string.Join(", ", names.ToArray()));
+            }
+
+            Log("  ---- total " + _mergedKeys.Count + " unique servers ----");
+            Log("");
+
+            // Remember what each map gave, so a map that has twice returned
+            // nothing can stop costing a round trip on every build.
+            try
+            {
+                // The BEST reading for each map, not the last. A map asked
+                // about three times must not be judged on whichever run
+                // happened to come back thin.
+                var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var r in _sweepResults)
+                {
+                    if (r.Map == null) continue;
+                    int had;
+                    if (!counts.TryGetValue(r.Map, out had) || r.Returned > had)
+                        counts[r.Map] = r.Returned;
+                }
+                ServerStore.RecordMapCounts(counts);
+            }
+            catch { }
+
+            _sweepResults.Clear();
+        }
+
+        /// <summary>
+        /// Files away every map in the current list, so the next sweep can ask
+        /// about maps this one only just discovered.
+        /// </summary>
+        private void RememberMapsSeen()
+        {
+            try
+            {
+                int added = ServerStore.RememberMaps(_cache.Select(c => c.Map));
+                if (added > 0) Log("  Map index: " + added + " new map(s) learnt, "
+                                   + ServerStore.LoadKnownMaps().Count + " known.");
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Sweeps every known map in one run rather than a slice.
+        ///
+        /// This is the "build me the whole list now" button. It takes a few
+        /// minutes and the list fills as it goes, so it is not modal and the
+        /// player can keep searching while it runs.
+        /// </summary>
+        private void BuildIndexNow()
+        {
+            if (!IsSteamTab(_tab))
+            {
+                _status.Text = "Switch to the Community or Official tab to build the index.";
+                return;
+            }
+
+            if (_pollTimer.Enabled)
+            {
+                Log("A server query is already running - not starting another.");
+                return;
+            }
+
+            int maps = KnownMaps().Count;
+            if (MessageBox.Show(
+                    "Ask Steam for every one of the " + maps + " maps the launcher knows about?"
+                    + "\r\n\r\nThis reaches past Steam's 10,000-server limit and builds the full "
+                    + "list, but it takes several minutes. The list fills as it goes and you can "
+                    + "keep using the launcher while it runs.",
+                    "Build server index", MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+
+            _buildingIndex = true;
+            _mapCursor = 0;
+            RefreshCurrent(true);
+        }
+
+        /// <summary>
+        /// The player's own filters plus whatever narrowing this pass adds.
+        ///
+        /// A pass never REPLACES a filter the player set. If they have already
+        /// asked for one map, the map passes are pointless and their choice
+        /// wins - their filter is the reason the list is small enough not to
+        /// need sweeping in the first place.
+        /// </summary>
+        private List<KeyValuePair<string, string>> FiltersFor(SweepPass pass, ListKind kind)
+        {
+            var f = kind == ListKind.Internet
+                  ? _filters.ToSteamFilters()
+                  : new List<KeyValuePair<string, string>>();
+
+            if (pass.Extra != null)
+                foreach (var kv in pass.Extra)
+                    if (!f.Any(x => x.Key == kv.Key)) f.Add(kv);
+
+            return f;
+        }
 
         private static string BuildLabel(uint app)
         {
@@ -1806,6 +2950,10 @@ namespace BeautifulPotatoExpLauncher
         }
 
         private static readonly TimeSpan CacheFreshFor = TimeSpan.FromMinutes(1);
+
+        /// <summary>How often the arriving list is actually redrawn.</summary>
+        private static readonly TimeSpan RenderEvery = TimeSpan.FromMilliseconds(2500);
+        private DateTime _lastRenderAt = DateTime.MinValue;
 
         private const int InternetPollMs = 700;
         private const int SmallListPollMs = 250;
@@ -1841,9 +2989,18 @@ namespace BeautifulPotatoExpLauncher
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             foreach (var srv in _browser) _lastSeen[srv.Endpoint] = now;
 
-            if (raw != _lastRawCount || done)
+            // Steam's count creeps up continuously while a list is arriving.
+            // Re-rendering on every change meant a full repaint several times a
+            // second; once every couple of seconds keeps the list visibly
+            // filling without the flicker.
+            bool worthRendering = done
+                || (raw != _lastRawCount
+                    && (DateTime.UtcNow - _lastRenderAt) >= RenderEvery);
+
+            if (worthRendering)
             {
                 _lastRawCount = raw;
+                _lastRenderAt = DateTime.UtcNow;
                 _lastShownCount = RenderFromCache();
             }
 
@@ -1851,40 +3008,89 @@ namespace BeautifulPotatoExpLauncher
 
             if (!done) return;
 
+            int before = _mergedKeys.Count;
+            foreach (var srv in _browser)
+                if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
+            int gained = _mergedKeys.Count - before;
+
+            Log("  " + _pollPass.Label + ": " + _browser.Count + " returned, " + gained + " new"
+                + (raw >= NearlyCapped ? "  (TRUNCATED at Steam's cap)" : ""));
+
+            _sweepResults.Add(new PassResult
+            {
+                Label = _pollPass.Label,
+                Map = _pollPass.Map,
+                Returned = _browser.Count,
+                New = gained
+            });
+
+            // The list came back full, which means it was cut short. Ask again
+            // in narrower slices - see SweepPass for what that is worth.
+            // Maps discovered by THIS pass are available to the passes queued
+            // below it, so a new community map starts being indexed the same
+            // run it is first seen.
+            RememberMapsSeen();
+
+            if ((raw >= NearlyCapped || _buildingIndex) && !_deepSweepQueued
+                && _pollKind == ListKind.Internet && _appQueue.Count == 0)
+            {
+                _deepSweepQueued = true;
+                var extra = DeepSweepPasses(_pollApp, _buildingIndex);
+                foreach (var ep in extra) _appQueue.Enqueue(ep);
+
+                Log(_buildingIndex
+                    ? "  BUILD INDEX: sweeping every known map - " + extra.Count + " passes."
+                    : "  Steam capped that list at " + raw + ". Sweeping it in "
+                      + extra.Count + " narrower passes to reach past the cap.");
+            }
+
             if (_appQueue.Count > 0)
             {
-                foreach (var srv in _browser)
-                    if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
-
-                uint next = _appQueue.Dequeue();
-                Log("  " + BuildLabel(_pollApp) + ": " + _browser.Count
-                    + " servers. Now asking for " + BuildLabel(next) + "...");
-
-                var nextFilters = _pollKind == ListKind.Internet
-                                ? _filters.ToSteamFilters()
-                                : new List<KeyValuePair<string, string>>();
+                var next = _appQueue.Dequeue();
+                var nextFilters = FiltersFor(next, _pollKind);
                 _lastSteamFilterKey = SteamFilterKey(nextFilters);
 
-                if (SteamServerList.Start(_pollKind, next, nextFilters))
+                if (SteamServerList.Start(_pollKind, next.App, nextFilters))
                 {
-                    _pollApp = next;
+                    _pollPass = next;
+                    _pollApp = next.App;
                     _pollTicks = 0;
                     _stableTicks = 0;
                     _lastRawCount = -1;
+
+                    UpdateStatus((_buildingIndex ? "BUILDING SERVER INDEX - " : "sweeping - ")
+                                 + next.Label + ", " + _appQueue.Count + " passes left...");
                     return;
                 }
 
-                Log("  Steam refused the " + BuildLabel(next) + " query; showing what we have.");
+                Log("  Steam refused the " + next.Label + " query; showing what we have.");
             }
 
             _pollTimer.Stop();
             _appendWhileLoading = false;
-            Log("Master list cached: " + combined.Count
-                + " servers. Searching now filters this list instantly.");
 
+            // The list was left in arrival order while it loaded so nothing
+            // moved under the player. Now that it has stopped growing, put it
+            // in order once.
+            ResortNow(true);
+
+            ReportSweep();
+
+            // The evidence goes to a local file rather than the log. See
+            // Diagnostics for why.
+            Diagnostics.WriteServerList(combined, Flagged, _serversPerIp);
+            Log("  Diagnostics written to " + Diagnostics.Folder);
+            _buildingIndex = false;
+            RememberMapsSeen();
+
+            Log("Master list cached: " + combined.Count + " servers across "
+                + ServerStore.LoadKnownMaps().Count
+                + " known maps. Searching now filters this list instantly.");
+
+            _indexByEndpoint.Clear();
+            _indexDirty = true;
             ServerStore.SaveList(CacheKey, combined, _lastSeen);
-            if (raw >= 10000)
-                UpdateStatus("Steam caps this at 10,000 - narrow it with FILTERS then REFRESH.");
+            _indexDirty = false;
         }
 
         private List<BrowserServer> Combine(List<BrowserServer> current)
@@ -1937,7 +3143,19 @@ namespace BeautifulPotatoExpLauncher
                 rows.Add(row);
             }
 
-            SortRows(rows);
+            // WHILE A LIST IS LOADING, NOTHING ALREADY ON SCREEN MOVES.
+            //
+            // Sorting every render meant a server arriving with 40 players
+            // shoved its way into the middle and pushed everything below it
+            // down a row - under the pointer, mid-click. Arrivals are appended
+            // to the end instead, so the rows being read stay exactly where
+            // they are. Pressing a column header or RESORT LIST puts the list
+            // in order on demand, and the finished list sorts itself once.
+            if (_appendWhileLoading && _rows != null && _rows.Count > 0)
+                rows = KeepOrderThenAppend(rows);
+            else
+                SortRows(rows);
+
             SetRows(rows, _selectedEndpoint);
             return rows.Count;
         }
@@ -2024,6 +3242,67 @@ namespace BeautifulPotatoExpLauncher
             _farmIps.Clear();
             _farmGroups.Clear();
 
+            // Plain count of servers per address. The farm rules below look for
+            // patterns; this is just the crowd size, which is what a sentinel
+            // slot count has to be weighed against.
+            _serversPerIp.Clear();
+            _sentinelOnlyIps.Clear();
+
+            var sentinelCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var srv in cache)
+            {
+                if (srv == null || string.IsNullOrEmpty(srv.Host)) continue;
+
+                int n;
+                _serversPerIp[srv.Host] = _serversPerIp.TryGetValue(srv.Host, out n) ? n + 1 : 1;
+
+                if (SlotsUnreported(srv.MaxPlayers))
+                {
+                    int k;
+                    sentinelCount[srv.Host] = sentinelCount.TryGetValue(srv.Host, out k) ? k + 1 : 1;
+                }
+            }
+
+            // THE SAME NAME ON MANY DIFFERENT ADDRESSES.
+            //
+            // A popular server group gets impersonated wholesale: one browse
+            // found "KarmaKrew Chernarus #1 EU" on THIRTY separate addresses.
+            // Only one of them is the real server.
+            //
+            // This cannot condemn on its own, because the genuine server is one
+            // of the thirty - flagging every copy punishes the victim along
+            // with the imposters. It is paired with a test for which copy looks
+            // real, in ImpersonatedCopy below.
+            _addressesPerName.Clear();
+            var seen = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var srv in cache)
+            {
+                if (srv == null || string.IsNullOrWhiteSpace(srv.Name)
+                    || string.IsNullOrEmpty(srv.Host)) continue;
+
+                string name = srv.Name.Trim();
+                HashSet<string> hosts;
+                if (!seen.TryGetValue(name, out hosts))
+                {
+                    hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    seen[name] = hosts;
+                }
+                hosts.Add(srv.Host);
+            }
+            foreach (var kv in seen) _addressesPerName[kv.Key] = kv.Value.Count;
+
+            // An address is "sentinel only" when every server on it reports a
+            // sentinel capacity and there is more than one of them. One server
+            // reporting 127 is a server with nothing to say; six of them on one
+            // address, all saying nothing, is a generator.
+            foreach (var kv in sentinelCount)
+            {
+                int total;
+                if (!_serversPerIp.TryGetValue(kv.Key, out total)) continue;
+                if (total >= 2 && kv.Value == total) _sentinelOnlyIps.Add(kv.Key);
+            }
+
             // One address, the same name over and over. Counted FIRST, because
             // every rule below collapses names into a set and therefore cannot
             // see a repeat at all - twenty identical names look like one.
@@ -2084,7 +3363,7 @@ namespace BeautifulPotatoExpLauncher
                     }
                 }
 
-                if (s.MaxPlayers > MaxRealisticSlots)
+                if (ImpossibleCapacity(s))
                 {
                     int nearFull;
                     ipsNearFull.TryGetValue(s.Host, out nearFull);
@@ -2165,7 +3444,7 @@ namespace BeautifulPotatoExpLauncher
                     }
                 }
 
-                if (s.MaxPlayers > MaxRealisticSlots)
+                if (ImpossibleCapacity(s))
                 {
                     int nearFull;
                     netNearFull.TryGetValue(net, out nearFull);
@@ -2208,6 +3487,46 @@ namespace BeautifulPotatoExpLauncher
                 _farmSubnets.Remove(ok);
                 _farmGroups.RemoveWhere(g => g.StartsWith(ok + "\u0000", StringComparison.OrdinalIgnoreCase));
             }
+
+            // GUILT BY ADDRESS, worked out AFTER every other rule has run.
+            //
+            // A generator does not always finish the job: among a hundred
+            // obvious fabrications it leaves two or three entries with a
+            // plausible capacity and a plausible player count, and those slip
+            // through every test that looks at one server at a time.
+            //
+            // But they are sitting on an address whose entire population has
+            // just been condemned. An address running five or more servers of
+            // which most are fabrications is not a host with a few bad
+            // neighbours - it is the generator, and the survivors are its work
+            // too. Requires five so that a small real host with one odd entry
+            // is never swept up, and a clear majority so that a shared address
+            // is not condemned by its worst tenant.
+            _mostlyFakeIps.Clear();
+
+            var perIpTotal = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var perIpFake = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var srv in cache)
+            {
+                if (srv == null || string.IsNullOrEmpty(srv.Host)) continue;
+
+                int t;
+                perIpTotal[srv.Host] = perIpTotal.TryGetValue(srv.Host, out t) ? t + 1 : 1;
+
+                if (FakeReason(srv) == null) continue;
+                int f;
+                perIpFake[srv.Host] = perIpFake.TryGetValue(srv.Host, out f) ? f + 1 : 1;
+            }
+
+            foreach (var kv in perIpFake)
+            {
+                int total;
+                if (!perIpTotal.TryGetValue(kv.Key, out total)) continue;
+                if (total < MostlyFakeMinServers) continue;
+                if (kv.Value * 100 >= total * MostlyFakePercent) _mostlyFakeIps.Add(kv.Key);
+            }
+
         }
 
         private string FakeReason(BrowserServer s)
@@ -2219,9 +3538,24 @@ namespace BeautifulPotatoExpLauncher
             if (_allowed.Contains(s.Host) ||
                 _allowed.Contains(BrowserFilters.Subnet24(s.Host))) return null;
 
-            if (s.MaxPlayers > MaxRealisticSlots)
-                return "claims " + s.MaxPlayers + " slots (DayZ maximum realistic capacity is "
-                     + MaxRealisticSlots + ")";
+            if (ImpossibleCapacity(s))
+            {
+                if (s.MaxPlayers == 255) return "reports 255 slots";
+                if (!SlotsUnreported(s.MaxPlayers))
+                    return "claims " + s.MaxPlayers + " slots (DayZ maximum realistic capacity is "
+                         + MaxRealisticSlots + ")";
+                if (s.Players == s.MaxPlayers)
+                    return "claims to be exactly full at " + s.MaxPlayers + "/" + s.MaxPlayers;
+                if (_sentinelOnlyIps.Contains(s.Host ?? ""))
+                    return "every server on " + s.Host + " reports no real slot count";
+                return "reports no real slot count (" + s.MaxPlayers + ") and shares "
+                     + s.Host + " with " + _serversPerIp[s.Host] + " servers";
+            }
+
+            if (ImpersonatedCopy(s))
+                return "\"" + s.Name.Trim() + "\" also appears on "
+                     + (_addressesPerName[s.Name.Trim()] - 1) + " other address(es), and this "
+                     + "copy does not look like the original";
 
             if (_farmGroups.Contains(GroupKey(s.Host, s.Name)))
                 return "address " + s.Host + " runs " + BrowserFilters.FarmSameNamePerIp
@@ -2233,6 +3567,13 @@ namespace BeautifulPotatoExpLauncher
             string net = BrowserFilters.Subnet24(s.Host);
             if (_farmSubnets.Contains(net))
                 return "subnet " + net + ".x is a redirect farm";
+
+            // Deliberately last, and deliberately reading a set built during the
+            // PREVIOUS scan rather than anything computed here - the set is
+            // populated by calling this method, and a rule that consulted its
+            // own output would chase its tail.
+            if (_mostlyFakeIps.Contains(s.Host ?? ""))
+                return "most of what runs on " + s.Host + " is fabricated";
 
             return null;
         }
@@ -2251,11 +3592,24 @@ namespace BeautifulPotatoExpLauncher
             }
         }
 
+        /// <summary>One A2S attempt, never throwing.</summary>
+        private static ServerInfo Ask(Row row)
+        {
+            try { return A2S.GetInfoAt(row.Host, row.EffectiveQueryPort, 1200); }
+            catch { return new ServerInfo { Error = "query failed" }; }
+        }
+
         private void PingLoop()
         {
             while (!_closing)
             {
                 Row row = null;
+
+                // Rows the player can SEE are urgent; the rest are filler. The
+                // difference decides whether this worker may also spend a
+                // second query reading the server's mod list - see below.
+                bool urgent = false;
+
                 lock (_pingLock)
                 {
                     foreach (var candidate in _pingWanted)
@@ -2263,6 +3617,7 @@ namespace BeautifulPotatoExpLauncher
                         if (_pingBusy.Contains(candidate.Endpoint)) continue;
                         if (_asked.Contains(candidate.Endpoint)) continue;
                         row = candidate;
+                        urgent = true;
                         break;
                     }
 
@@ -2283,9 +3638,44 @@ namespace BeautifulPotatoExpLauncher
 
                 if (row == null) { Thread.Sleep(200); continue; }
 
-                ServerInfo info;
-                try { info = A2S.GetInfoAt(row.Host, row.EffectiveQueryPort, 1200); }
-                catch { info = new ServerInfo { Error = "query failed" }; }
+                // ASK TWICE BEFORE GIVING UP.
+                //
+                // A2S is UDP, and a query is two round trips - the challenge,
+                // then the answer - so there are four packets to lose. Measured
+                // against a live server 370ms away: it answered 15 times out of
+                // 16 and dropped one, with the timeout making no difference.
+                // That server was being shown as OFFLINE with 73 players on it.
+                //
+                // A single retry takes a ~6% miss down to well under 1%, and
+                // costs nothing for the servers that answer first time.
+                ServerInfo info = Ask(row);
+                if (!info.Online && !_closing) info = Ask(row);
+
+                // WHILE WE HAVE ITS ATTENTION, ASK WHAT IT RUNS.
+                //
+                // A mod list only comes from A2S_RULES, and it used to be asked
+                // only when somebody clicked a server - so the launcher knew
+                // the mods of FOURTEEN servers out of twelve thousand and
+                // filtering by mod matched almost nothing.
+                //
+                // NEVER on an urgent row. A row the player is looking at must
+                // get its ping and nothing else; the extra query would add
+                // ~85 ms to something they are watching. Mod lists are only
+                // collected on the background sweep, where nobody is waiting.
+                //
+                // Measured cost of a full pass: 228 ms per server blended
+                // (83 ms when a server answers, 1.2 s for the 13% that never
+                // do), about five minutes across the whole index on sixteen
+                // workers, 16 MB down, 0.4 MB up.
+                if (!urgent && info.Online && _sweepModLists && KnownModsFor(row) == null)
+                {
+                    try
+                    {
+                        var rules = A2S.GetRulesAt(row.Host, row.EffectiveQueryPort, 1800);
+                        if (rules != null) RememberServerMods(row.Endpoint, rules);
+                    }
+                    catch { }
+                }
 
                 lock (_pingLock) { _pingBusy.Remove(row.Endpoint); }
 
@@ -2294,6 +3684,153 @@ namespace BeautifulPotatoExpLauncher
                 try { BeginInvoke((Action)(() => ApplyLive(captured, result))); }
                 catch (InvalidOperationException) { return; }
             }
+        }
+
+        /// <summary>
+        /// True when this list is the same servers in the same order as the one
+        /// already on screen. Compared by endpoint, which is what identifies a
+        /// server - the row objects themselves are rebuilt each render.
+        /// </summary>
+        /// <summary>
+        /// Inserts the notice above the block of unconfigured servers.
+        ///
+        /// Those servers sort to the bottom and stay there, and without a
+        /// marker the list just appears to trail off into junk - people scroll
+        /// into them and assume the launcher is broken. A blank gap and a line
+        /// of large text says what they are looking at.
+        ///
+        /// Done here rather than in the sort so that every path gets it: the
+        /// full sort, the append-while-loading path, and the favourites tab.
+        /// </summary>
+        private List<Row> WithHeadings(List<Row> rows)
+        {
+            if (rows == null || rows.Count == 0) return rows;
+
+            // Strip any notice already in the list before adding one.
+            //
+            // The append-while-loading path hands back the list that is on
+            // screen, which has already been decorated - so without this, every
+            // render inserted another notice and another pair of blank rows
+            // until the list was mostly gaps.
+            //
+            // Into a COPY, never in place: the caller owns that list and may
+            // still be holding it, and quietly shortening someone else's list
+            // is how a count comes out wrong three screens away.
+            bool alreadyDecorated = false;
+            foreach (var r in rows)
+                if (r.IsHeading) { alreadyDecorated = true; break; }
+
+            if (alreadyDecorated)
+            {
+                var plain = new List<Row>(rows.Count);
+                foreach (var r in rows)
+                    if (!r.IsHeading) plain.Add(r);
+                rows = plain;
+            }
+
+            int first = -1;
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (!Unconfigured(rows[i])) continue;
+                first = i;
+                break;
+            }
+
+            // Nothing unconfigured, or the whole list is - in which case a
+            // heading at row zero helps nobody.
+            if (first <= 0) return rows;
+
+            var result = new List<Row>(rows.Count + HeadingGap + 1);
+            for (int i = 0; i < first; i++) result.Add(rows[i]);
+
+            // Blank rows first, so the notice is not crowded against the last
+            // real server.
+            for (int i = 0; i < HeadingGap; i++)
+                result.Add(new Row { Heading = "", Host = "", Port = -(i + 1) });
+
+            result.Add(new Row
+            {
+                Heading = "THESE SERVERS APPEAR TO NOT BE CONFIGURED YET",
+                Host = "",
+                Port = -99
+            });
+
+            for (int i = first; i < rows.Count; i++) result.Add(rows[i]);
+            return result;
+        }
+
+        /// <summary>Blank rows above the notice.</summary>
+        private const int HeadingGap = 2;
+
+        /// <summary>
+        /// Widens the Name column to fit the longest name on screen.
+        ///
+        /// MEASURES ONLY WHAT IS VISIBLE. Measuring twelve thousand strings on
+        /// every render would cost more than the render; the rows in view are
+        /// at most a few dozen and they are the only ones whose truncation
+        /// anyone can see. Scrolling re-measures, so a longer name further down
+        /// widens it when it arrives.
+        ///
+        /// Bounded at both ends: never narrower than the original width, and
+        /// never so wide it pushes Players and Ping off the right edge.
+        /// </summary>
+        private void FitNameColumn()
+        {
+            if (_list == null || _list.Columns.Count <= ColName) return;
+            if (_rows == null || _rows.Count == 0) return;
+
+            try
+            {
+                int first = _list.TopItem != null ? _list.TopItem.Index : 0;
+                if (first < 0) first = 0;
+
+                int rowHeight = Math.Max(1, _list.TopItem != null ? _list.TopItem.Bounds.Height : 18);
+                int visible = Math.Max(10, _list.ClientSize.Height / rowHeight + 4);
+                int last = Math.Min(_rows.Count, first + visible);
+
+                int widest = 0;
+                using (var g = _list.CreateGraphics())
+                {
+                    for (int i = first; i < last; i++)
+                    {
+                        var r = _rows[i];
+                        if (r.IsHeading || string.IsNullOrEmpty(r.Name)) continue;
+
+                        int w = (int)Math.Ceiling(g.MeasureString(r.Name, _list.Font).Width);
+                        if (w > widest) widest = w;
+                    }
+                }
+
+                if (widest == 0) return;
+
+                // A little air after the text, and a ceiling so the columns
+                // that matter for choosing a server stay on screen.
+                int want = widest + 18;
+                int ceiling = Math.Max(NameColumnMin, _list.ClientSize.Width - 420);
+
+                want = Math.Max(NameColumnMin, Math.Min(want, ceiling));
+
+                // Only touch it when it actually moved - setting Width forces a
+                // repaint of the whole list.
+                if (Math.Abs(_list.Columns[ColName].Width - want) > 4)
+                    _list.Columns[ColName].Width = want;
+            }
+            catch { }
+        }
+
+        /// <summary>The Name column never shrinks below the width it was designed at.</summary>
+        private const int NameColumnMin = 244;
+
+        private bool SameOrder(List<Row> rows)
+        {
+            if (_rows == null || rows == null) return false;
+            if (_rows.Count != rows.Count || rows.Count == 0) return false;
+            if (_list.VirtualListSize != rows.Count) return false;
+
+            for (int i = 0; i < rows.Count; i++)
+                if (!string.Equals(_rows[i].Endpoint, rows[i].Endpoint,
+                                   StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
         }
 
         private void Enqueue(IEnumerable<Row> rows, bool force)
@@ -2310,11 +3847,28 @@ namespace BeautifulPotatoExpLauncher
             StartPingPool();
         }
 
+        /// <summary>
+        /// Worth spending a query on.
+        ///
+        /// A server still carrying its host's stock name has never been set up.
+        /// Pinging thousands of them costs real time on every sweep and tells
+        /// nobody anything, so they are listed but never queried - they sit at
+        /// the bottom with a blank status, which is the honest answer.
+        /// </summary>
+        private static bool Pingable(Row r)
+        {
+            return r != null && !r.IsHeading && !Unconfigured(r);
+        }
+
         private void SweepAll(List<Row> rows)
         {
+            // The background sweep walks the whole list, so this is where
+            // skipping the stock names saves the most.
+            var worth = rows.Where(Pingable).ToList();
+
             lock (_pingLock)
             {
-                _pingAll = rows;
+                _pingAll = worth;
                 _sweep = 0;
             }
             StartPingPool();
@@ -2333,8 +3887,13 @@ namespace BeautifulPotatoExpLauncher
             int end = Math.Min(_rows.Count, top + perPage + 4);
 
             var want = new List<Row>(end - top);
-            for (int i = Math.Max(0, top); i < end; i++) want.Add(_rows[i]);
+            for (int i = Math.Max(0, top); i < end; i++)
+                if (Pingable(_rows[i])) want.Add(_rows[i]);
             Enqueue(want, false);
+
+            // New rows are in view, so the longest visible name may have
+            // changed.
+            FitNameColumn();
         }
 
         private void ApplyLive(Row row, ServerInfo info)
@@ -2342,33 +3901,139 @@ namespace BeautifulPotatoExpLauncher
             _live[row.Endpoint] = info;
             _checked++;
             Apply(row, info);
+
+            // The index is what the player searches, so what the server SAYS
+            // about itself has to go back into it. Steam's browser copy of a
+            // name can be hours stale; the server's own reply cannot. Without
+            // this a rename showed up for a moment and was then overwritten by
+            // the next render, and was never saved.
+            UpdateIndexFrom(row.Endpoint, info);
+
+            // Only this one row is repainted. NOT a re-render and NOT a re-sort:
+            // a server renaming itself, filling up or going quiet must change
+            // the line the player is reading, never move it out from under them.
             Redraw(row.Endpoint);
 
             if (IsSteamTab(_tab)) UpdateStatus(null);
 
-            if (!info.Online)
-            {
-                _resortTimer.Stop();
-                _resortTimer.Start();
-            }
+            // Offline servers DO sort to the bottom - but only once the sweep
+            // has gone quiet.
+            //
+            // Sorting the moment each one is found took every row below it up
+            // one, mid-read and mid-click, which is exactly what must not
+            // happen. Waiting until nothing is left to check lets the list
+            // settle once, when the player has stopped watching rows arrive.
+            if (!info.Online && !_idleSort.Enabled) _idleSort.Start();
 
             if (!IsSteamTab(_tab)) FinishMine();
         }
 
+        /// <summary>
+        /// Folds a server's own answer back into the cached index.
+        ///
+        /// The index exists so that searching is instant - it is answered from
+        /// memory, never from the network. That only holds up if what is in it
+        /// is what the server currently says, so every live reply is written
+        /// back here and saved with the rest.
+        /// </summary>
+        private void UpdateIndexFrom(string endpoint, ServerInfo info)
+        {
+            if (info == null || !info.Online || string.IsNullOrEmpty(endpoint)) return;
+
+            BrowserServer entry;
+            if (!_indexByEndpoint.TryGetValue(endpoint, out entry))
+            {
+                entry = _cache.FirstOrDefault(
+                    c => string.Equals(c.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase));
+                if (entry == null) return;
+                _indexByEndpoint[endpoint] = entry;
+            }
+
+            bool changed = false;
+
+            // Deliberately not logged. A refresh re-checks thousands of
+            // servers and any number of them will have been renamed since they
+            // were last seen; a line each buries the sweep totals, which are
+            // the part worth reading. The row updates on screen regardless.
+            if (!string.IsNullOrEmpty(info.Name) && entry.Name != info.Name)
+            {
+                entry.Name = info.Name;
+                changed = true;
+            }
+
+            if (!string.IsNullOrEmpty(info.Map) && entry.Map != info.Map) { entry.Map = info.Map; changed = true; }
+            if (entry.Players != info.Players) { entry.Players = info.Players; changed = true; }
+            if (entry.MaxPlayers != info.MaxPlayers) { entry.MaxPlayers = info.MaxPlayers; changed = true; }
+            if (info.Keywords != null && entry.Tags != info.Keywords) { entry.Tags = info.Keywords; changed = true; }
+            if (entry.Password != info.Password) { entry.Password = info.Password; changed = true; }
+            // A2S reports the app id as 64-bit, Steam's browser as 32-bit. Only
+            // ever 221100 or 1024020 in practice, so the narrowing is safe, but
+            // it is checked rather than assumed.
+            if (info.AppId != 0 && info.AppId <= uint.MaxValue && entry.AppId != (uint)info.AppId)
+            {
+                entry.AppId = (uint)info.AppId;
+                changed = true;
+            }
+
+            if (changed) _indexDirty = true;
+        }
+
+        /// <summary>Endpoint to its entry in the index, so a reply is not a linear scan.</summary>
+        private readonly Dictionary<string, BrowserServer> _indexByEndpoint =
+            new Dictionary<string, BrowserServer>(StringComparer.OrdinalIgnoreCase);
+
+        private bool _indexDirty;
+
+        /// <summary>
+        /// Writes the index to disk if anything has changed since last time.
+        /// Cheap when nothing has, which is why it can run on a timer.
+        /// </summary>
+        private void SaveIndex()
+        {
+            if (!_indexDirty) return;
+            try
+            {
+                var cache = _cache;
+                if (cache == null || cache.Count == 0) return;
+
+                ServerStore.SaveList(CacheKey, cache, _lastSeen);
+                _indexDirty = false;
+            }
+            catch { }
+        }
+
         private void UpdateStatus(string suffix)
         {
-            int online = 0, done = 0;
+            int online = 0, done = 0, servers = 0;
             foreach (var r in _rows)
             {
+                if (r.IsHeading) continue;        // the notice is not a server
+                servers++;
                 if (r.Online.HasValue) done++;
                 if (r.Online == true) online++;
             }
 
-            string text = _rows.Count + " servers";
+            // A build takes minutes, so it says so before anything else -
+            // a status line that only counts servers looks like it has hung.
+            string text = "";
+            if (_buildingIndex) text = "BUILDING SERVER INDEX  -  ";
+            else if (_deepSweepQueued && _pollTimer.Enabled) text = "Indexing  -  ";
+
+            text += servers + " servers";
             if (_hiddenFakes > 0) text += "  (" + _hiddenFakes + " fake hidden)";
+
+            // A mod filter can only match servers whose mods have been read, so
+            // say how far along that is. Without it the filter looks broken: it
+            // matches almost nothing at first and nothing says it is working.
+            if (_filters.RequiredMods.Count > 0)
+            {
+                text += string.Format("  -  mod lists read for {0} of {1}{2}",
+                                      ModListsKnown(), _cache.Count,
+                                      _sweepModLists && PingsOutstanding ? ", still reading..." : "");
+            }
             if (done > 0)
                 text += string.Format("  -  {0} checked, {1} online{2}",
-                                      done, online, done >= _rows.Count ? " (all checked)" : "");
+                                      done, online, done >= servers ? " (all checked)" : "");
             if (!string.IsNullOrEmpty(suffix)) text += "   " + suffix;
             _status.Text = text;
         }
@@ -2455,12 +4120,23 @@ namespace BeautifulPotatoExpLauncher
                 _filters.Address = _fAddr?.Text ?? "";
             }
 
-            _filters.Map = _fMap?.Text ?? "";
+            string mapText = _fMap == null ? "" : (_fMap.Text ?? "").Trim();
+            if (mapText.Equals("(any map)", StringComparison.OrdinalIgnoreCase)) mapText = "";
+            _filters.Map = mapText;
             _filters.Search = _search?.Text ?? "";
+            ReadCountryFilter();
             int ping;
             _filters.MaxPing = int.TryParse(_fPing?.Text, out ping) ? ping : 0;
-            _filters.PlayersMode = (PlayersMode)(_cbPlayers?.SelectedIndex ?? 0);
-            _filters.TimeMode = (TimeMode)(_cbTime?.SelectedIndex ?? 0);
+            if (_playerRange != null)
+            {
+                _filters.MinPlayers = _playerRange.Low;
+                _filters.MaxPlayersWanted = _playerRange.High;
+            }
+            if (_timeRange != null)
+            {
+                _filters.MinHour = _timeRange.Low;
+                _filters.MaxHour = _timeRange.High;
+            }
             _filters.ThirdPersonMode = (TriState)(_segThird?.SelectedIndex ?? 0);
             _filters.ModsMode = (TriState)(_segMods?.SelectedIndex ?? 0);
             _filters.NoPassword = _chkNoPass?.Checked ?? false;
@@ -2474,15 +4150,840 @@ namespace BeautifulPotatoExpLauncher
             if (_fName != null) _fName.Text = "";
             if (_fAddr != null) _fAddr.Text = "";
             if (_fMap != null) _fMap.Text = "";
+            if (_fCountry != null) _fCountry.Text = "";
+
+            // The region buttons keep their state in the filters, not in
+            // themselves, so clearing means clearing both and repainting.
+            _filters.Regions.Clear();
+            _filters.HiddenRegions.Clear();
+            _filters.Countries.Clear();
+            _filters.HiddenCountries.Clear();
+            PaintRegionButtons();
+
+            _filters.RequiredMods.Clear();
+            PublishRequiredMods();
+            if (_modFilter != null) _modFilter.Clear();
+            _modSweepTimer.Stop();
+
             if (_fPing != null) _fPing.Text = "";
-            if (_cbPlayers != null) _cbPlayers.SelectedIndex = 0;
-            if (_cbTime != null) _cbTime.SelectedIndex = 0;
+            if (_playerRange != null)
+                _playerRange.SetRange(0, BrowserFilters.PlayerCeiling);
+
+            _filters.MinPlayers = 0;
+            _filters.MaxPlayersWanted = BrowserFilters.PlayerCeiling;
+            _filters.GameModes.Clear();
+            PaintGameModeButtons();
+            if (_timeRange != null) _timeRange.SetRange(0, 24);
+            _filters.MinHour = 0;
+            _filters.MaxHour = 24;
             if (_segThird != null) _segThird.SelectedIndex = 0;
             if (_segMods != null) _segMods.SelectedIndex = 0;
             if (_chkNoPass != null) _chkNoPass.Checked = false;
             if (_chkHideFull != null) _chkHideFull.Checked = false;
             if (_chkHideEmpty != null) _chkHideEmpty.Checked = false;
             if (_chkHideFakes != null) _chkHideFakes.Checked = true;
+        }
+
+        /// <summary>
+        /// Puts every map currently in the list into the dropdown.
+        ///
+        /// Built from the cache rather than a hard-coded list: DayZ gains maps
+        /// constantly and a fixed list would be wrong within a month.
+        /// </summary>
+        private void FillMapChoices()
+        {
+            if (_fMap == null || _fMap.DroppedDown) return;
+
+            try
+            {
+                var maps = _cache
+                    .Select(s2 => (s2.Map ?? "").Trim())
+                    .Where(m => m.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                // Rebuilding while the list is open would close it, so only
+                // touch it when the contents have actually changed.
+                if (_fMap.Items.Count == maps.Length + 1) return;
+
+                var all = new string[maps.Length + 1];
+                all[0] = "(any map)";
+                Array.Copy(maps, 0, all, 1, maps.Length);
+
+                RefillCombo(_fMap, all, _fMap.Text);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// One small tri-state button per region.
+        ///
+        /// Off means the region is not mentioned at all, which is different
+        /// from excluded: with nothing picked every region shows, and the
+        /// moment one is picked the rest are implicitly out. Excluded is the
+        /// third state, for "everywhere except here".
+        /// </summary>
+        private void BuildRegionButtons(Control parent, int x, int y)
+        {
+            _regionButtons.Clear();
+
+            foreach (var region in IpRegion.All)
+            {
+                var b = new Button
+                {
+                    Text = ShortName(region),
+                    Bounds = new Rectangle(x, y, 34, 23),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = Panel2,
+                    ForeColor = Color.Gainsboro,
+                    Font = new Font("Segoe UI", 7.5f, FontStyle.Bold),
+                    Tag = region,
+                    TabStop = false
+                };
+                b.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
+
+                var captured = region;
+                b.Click += (s2, e2) =>
+                {
+                    CycleRegion(captured);
+                    PaintRegionButtons();
+                    QueueFilter();
+                };
+
+                new ToolTip().SetToolTip(b, IpRegion.Name(region)
+                    + " - click to show only this, again to hide it, again for neither.");
+
+                parent.Controls.Add(b);
+                _regionButtons[region] = b;
+                x += 36;
+            }
+
+            PaintRegionButtons();
+        }
+
+        /// <summary>Short enough to fit on a 34px button.</summary>
+        private static string ShortName(WorldRegion r)
+        {
+            switch (r)
+            {
+                case WorldRegion.NorthAmerica: return "NA";
+                case WorldRegion.SouthAmerica: return "SA";
+                case WorldRegion.Europe:       return "EU";
+                case WorldRegion.Asia:         return "AS";
+                case WorldRegion.Oceania:      return "OC";
+                case WorldRegion.MiddleEast:   return "ME";
+                case WorldRegion.Africa:       return "AF";
+                default:                       return "??";
+            }
+        }
+
+        private readonly Dictionary<WorldRegion, Button> _regionButtons =
+            new Dictionary<WorldRegion, Button>();
+
+        private void CycleRegion(WorldRegion r)
+        {
+            if (_filters.Regions.Contains(r))
+            {
+                _filters.Regions.Remove(r);
+                _filters.HiddenRegions.Add(r);
+            }
+            else if (_filters.HiddenRegions.Contains(r))
+            {
+                _filters.HiddenRegions.Remove(r);
+            }
+            else
+            {
+                _filters.Regions.Add(r);
+            }
+        }
+
+        private void PaintRegionButtons()
+        {
+            foreach (var kv in _regionButtons)
+            {
+                bool shown = _filters.Regions.Contains(kv.Key);
+                bool hidden = _filters.HiddenRegions.Contains(kv.Key);
+
+                kv.Value.BackColor = shown ? Color.FromArgb(60, 95, 60)
+                                   : hidden ? Color.FromArgb(95, 55, 55)
+                                   : Panel2;
+                kv.Value.ForeColor = shown || hidden ? Color.White : Color.Gainsboro;
+                kv.Value.FlatAppearance.BorderColor = shown ? Color.FromArgb(90, 140, 90)
+                                                    : hidden ? Color.FromArgb(150, 80, 80)
+                                                    : Color.FromArgb(75, 75, 82);
+            }
+        }
+
+        /// <summary>
+        /// Puts the countries actually present into the dropdown, busiest
+        /// first, so the list is the handful that matter rather than 239.
+        /// </summary>
+        private void FillCountryChoices()
+        {
+            if (_fCountry == null || _fCountry.DroppedDown) return;
+
+            try
+            {
+                var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var srv in _cache)
+                {
+                    string cc = IpRegion.Country(srv.Host);
+                    if (cc.Length == 0) continue;
+                    int n;
+                    counts[cc] = counts.TryGetValue(cc, out n) ? n + 1 : 1;
+                }
+
+                var ordered = counts.OrderByDescending(k => k.Value)
+                                    .Select(k => k.Key + "   (" + k.Value + ")")
+                                    .ToArray();
+
+                if (_fCountry.Items.Count == ordered.Length + 1) return;
+
+                var all = new string[ordered.Length + 1];
+                all[0] = "(any country)";
+                Array.Copy(ordered, 0, all, 1, ordered.Length);
+
+                RefillCombo(_fCountry, all, _fCountry.Text);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Reads the country box: codes separated by commas, a leading minus
+        /// meaning "hide this one".
+        /// </summary>
+        private void ReadCountryFilter()
+        {
+            _filters.Countries.Clear();
+            _filters.HiddenCountries.Clear();
+
+            string text = _fCountry == null ? "" : (_fCountry.Text ?? "").Trim();
+            if (text.Length == 0
+                || text.StartsWith("(any", StringComparison.OrdinalIgnoreCase)) return;
+
+            foreach (string piece in text.Split(',', ';', ' '))
+            {
+                string t = piece.Trim();
+                if (t.Length == 0) continue;
+
+                bool exclude = t[0] == '-' || t[0] == '!';
+                if (exclude) t = t.Substring(1).Trim();
+
+                // The dropdown shows "US   (2084)"; keep only the code.
+                int space = t.IndexOf(' ');
+                if (space > 0) t = t.Substring(0, space);
+
+                if (t.Length != 2) continue;
+
+                if (exclude) _filters.HiddenCountries.Add(t);
+                else _filters.Countries.Add(t);
+            }
+        }
+
+        /// <summary>
+        /// Lights the FILTERS button while the panel is open.
+        ///
+        /// Without it the button looks the same either way, and the only clue
+        /// that filters exist at all is a panel the player has to remember
+        /// opening.
+        /// </summary>
+        private void PaintFilterToggle()
+        {
+            if (_filterToggle == null) return;
+
+            bool open = _filterPanel != null && _filterPanel.Visible;
+
+            _filterToggle.BackColor = open ? Color.FromArgb(60, 95, 60) : Panel2;
+            _filterToggle.ForeColor = open ? Color.White : Color.Gainsboro;
+            _filterToggle.FlatAppearance.BorderColor = open
+                ? Color.FromArgb(100, 150, 100)
+                : Color.FromArgb(75, 75, 82);
+            _filterToggle.Text = open ? "FILTERS \u25B2" : "FILTERS \u25BC";
+        }
+
+        /// <summary>
+        /// The chip list changed, so rebuild the filter from it.
+        ///
+        /// Rebuilt wholesale rather than added to or removed from: the control
+        /// owns the entries, and mirroring its edits one at a time is how the
+        /// two drift apart.
+        /// </summary>
+        private void ModFilterChanged()
+        {
+            _filters.RequiredMods.Clear();
+            foreach (string m in _modFilter.Entries) _filters.RequiredMods.Add(m);
+            PublishRequiredMods();
+
+            if (_filters.RequiredMods.Count > 0)
+            {
+                lock (_modListLock) _newModMatches = true;   // render once on the way in
+                StartModSweep();
+            }
+
+            QueueFilter();
+        }
+
+        /// <summary>
+        /// Sends the sweep round again for servers whose mods are still
+        /// unknown, and re-renders every few seconds so matches appear as they
+        /// are found.
+        /// </summary>
+        private void StartModSweep()
+        {
+            _sweepModLists = true;
+
+            // Only servers with no mod list yet are re-asked. Clearing the
+            // whole "already asked" set would re-ping thousands of servers that
+            // were answered seconds ago - the point is to fill the gaps, not to
+            // start over.
+            lock (_pingLock)
+            {
+                var again = new List<string>();
+                foreach (var r in _rows)
+                    if (!r.IsHeading && KnownModsFor(r.Endpoint) == null) again.Add(r.Endpoint);
+                foreach (string ep in again) _asked.Remove(ep);
+            }
+
+            SweepAll(_rows);
+            _modSweepTimer.Start();
+        }
+
+        /// <summary>
+        /// Warms the mod index and starts collecting, a little after the window
+        /// has settled.
+        ///
+        /// DELIBERATELY LATE. The first thing a player does is look at the list
+        /// and type in the search box, and both have to be instant. Reading a
+        /// seven megabyte index and starting twelve thousand queries while that
+        /// is happening would be felt. A few seconds later, nothing is.
+        /// </summary>
+        private void BeginBackgroundModIndex()
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    // Off the UI thread: this parses the whole file and builds
+                    // the popularity tally once, so opening the dropdown never
+                    // has to walk it.
+                    int known;
+                    lock (_modListLock)
+                    {
+                        known = ServerMods.Count;
+
+                        _modPopularity.Clear();
+                        foreach (var kv in ServerMods)
+                            foreach (string m in kv.Value)
+                            {
+                                int n;
+                                _modPopularity[m] = _modPopularity.TryGetValue(m, out n) ? n + 1 : 1;
+                            }
+                    }
+
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (_closing) return;
+                        Log("Mod index: " + known + " server(s) already known. "
+                            + "Reading the rest in the background.");
+
+                        // The panel may already be open and showing empty
+                        // lists - fill them now that there is something to put
+                        // in them.
+                        RefreshFilterChoices();
+
+                        StartModSweep();
+                    }));
+                }
+                catch { }
+            });
+        }
+
+        /// <summary>
+        /// Every mod the launcher has ever seen a server ask for, commonest
+        /// first - which puts the mods worth filtering on at the top rather
+        /// than burying them among one-server curiosities.
+        /// </summary>
+        private void FillModChoices()
+        {
+            // Never while it is open - see RefreshFilterChoices for why.
+            if (_fMod == null || _fMod.DroppedDown) return;
+
+            try
+            {
+                // WHY THIS USED TO TAKE SECONDS
+                //
+                //   1. It counted every mod of every server - 370,000 entries -
+                //      WHILE HOLDING the lock that sixteen sweep workers are
+                //      taking constantly. The click waited its turn behind
+                //      them, over and over.
+                //   2. It then handed a ComboBox three thousand items with
+                //      AutoCompleteSource.ListItems set, and WinForms rebuilds
+                //      its autocomplete index every time the collection
+                //      changes. That alone is worth seconds.
+                //
+                // Now the tally is kept up to date as mod lists arrive, so this
+                // copies a small dictionary under a brief lock and sorts it
+                // outside. The list is capped, because nobody scrolls three
+                // thousand entries - and the box is editable, so anything not
+                // shown can still be typed.
+                KeyValuePair<string, int>[] tally;
+                lock (_modListLock)
+                {
+                    tally = _modPopularity.ToArray();
+                }
+
+                var ordered = tally
+                    .OrderByDescending(k => k.Value)
+                    .ThenBy(k => k.Key, StringComparer.OrdinalIgnoreCase)
+                    .Take(ModChoicesShown)
+                    .Select(k => k.Key + "   (" + k.Value + " servers)")
+                    .ToArray();
+
+                // Rebuilding an unchanged list would pay the autocomplete cost
+                // for nothing.
+                if (_fMod.Items.Count == ordered.Length && _modChoiceCount == tally.Length) return;
+                _modChoiceCount = tally.Length;
+
+                // Belt and braces: nothing this method does should be able to
+                // reach AddModFilter, but rebuilding a live ComboBox raises
+                // several events and one more guard costs nothing.
+                if (_fillingModChoices) return;
+                _fillingModChoices = true;
+
+                string typed = _fMod.Text;
+                try { RefillCombo(_fMod, ordered, typed); }
+                finally { _fillingModChoices = false; }
+            }
+            catch { _fillingModChoices = false; }
+        }
+
+        private bool _fillingModChoices;
+
+        /// <summary>
+        /// Replaces a combo's items without killing the process.
+        ///
+        /// WHY THIS IS NOT JUST Items.Clear() + AddRange()
+        ///   A ComboBox with AutoCompleteMode set and AutoCompleteSource of
+        ///   ListItems hands its list to the Windows shell autocomplete COM
+        ///   object. Rebuilding Items while that is attached can fault inside
+        ///   the unmanaged object - and an access violation there is not a .NET
+        ///   exception. There is no stack trace, no handler runs, the log gets
+        ///   no entry and the launcher simply vanishes. Which is exactly what
+        ///   clicking the mod dropdown did, with nothing in launcher.log to
+        ///   show for it.
+        ///
+        ///   Detaching autocomplete first makes it an ordinary list update, and
+        ///   reattaching afterwards rebuilds the index once against the final
+        ///   contents rather than against a list being mutated underneath it.
+        /// </summary>
+        private static void RefillCombo(ComboBox box, string[] items, string keepText)
+        {
+            if (box == null) return;
+
+            var mode = box.AutoCompleteMode;
+            var source = box.AutoCompleteSource;
+
+            try
+            {
+                box.AutoCompleteMode = AutoCompleteMode.None;
+                box.AutoCompleteSource = AutoCompleteSource.None;
+
+                box.BeginUpdate();
+                box.Items.Clear();
+                if (items != null && items.Length > 0) box.Items.AddRange(items);
+                box.EndUpdate();
+
+                box.Text = keepText ?? "";
+            }
+            finally
+            {
+                box.AutoCompleteMode = mode;
+                box.AutoCompleteSource = source;
+            }
+        }
+
+        /// <summary>
+        /// How many mods the dropdown offers. The rest are still filterable by
+        /// typing - this is about what is worth scrolling, and about keeping
+        /// WinForms' autocomplete index small enough to build instantly.
+        /// </summary>
+        private const int ModChoicesShown = 400;
+
+        private int _modChoiceCount = -1;
+
+        /// <summary>
+        /// How many servers run each mod, kept current as lists arrive rather
+        /// than counted from scratch when the dropdown opens.
+        /// </summary>
+        private readonly Dictionary<string, int> _modPopularity =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        // ------------------------------------------------ known server mods --
+        //
+        // What each server was last seen asking for. Read from disk at startup
+        // so the mod filter is useful immediately, and added to every time a
+        // server answers an A2S_RULES query.
+
+        private readonly object _modListLock = new object();
+
+        private Dictionary<string, List<string>> _serverMods;
+
+        private Dictionary<string, List<string>> ServerMods
+        {
+            get
+            {
+                lock (_modListLock)
+                {
+                    if (_serverMods == null) _serverMods = ServerStore.LoadServerMods();
+                    return _serverMods;
+                }
+            }
+        }
+
+        private bool _serverModsDirty;
+
+        /// <summary>The mods a server is known to run, or null if never asked.</summary>
+        private List<string> KnownModsFor(BrowserServer s)
+        {
+            return s == null ? null : KnownModsFor(s.Endpoint);
+        }
+
+        private List<string> KnownModsFor(Row r)
+        {
+            return r == null ? null : KnownModsFor(r.Endpoint);
+        }
+
+        private List<string> KnownModsFor(string endpoint)
+        {
+            if (string.IsNullOrEmpty(endpoint)) return null;
+
+            lock (_modListLock)
+            {
+                List<string> mods;
+                return ServerMods.TryGetValue(endpoint, out mods) ? mods : null;
+            }
+        }
+
+        /// <summary>
+        /// Whether the background sweep also reads mod lists.
+        ///
+        /// On from startup, because a mod filter is useless if it starts empty
+        /// and only begins learning once somebody uses it. It costs nothing the
+        /// player can feel: it is confined to the background sweep, which was
+        /// already walking the same servers.
+        /// </summary>
+        private bool _sweepModLists = true;
+
+        /// <summary>
+        /// Set when a server whose mods were just read satisfies the current
+        /// filter - the only event that can add a row to a mod-filtered list.
+        /// </summary>
+        private bool _newModMatches;
+
+        /// <summary>
+        /// The mods being filtered on, as a snapshot the worker threads can
+        /// read safely.
+        ///
+        /// THIS IS WHY IT EXISTS: the workers used to enumerate
+        /// _filters.RequiredMods directly while the player was adding and
+        /// removing entries on the UI thread. A HashSet being modified during
+        /// enumeration throws InvalidOperationException, and an unhandled
+        /// exception on a background thread TERMINATES THE PROCESS - no dialog,
+        /// no catch, the launcher just vanishes. Reproduced in 59,000
+        /// iterations.
+        ///
+        /// The reference is swapped whole, never mutated, so a worker either
+        /// sees the old array or the new one and both are complete.
+        /// </summary>
+        private volatile string[] _requiredModsSnapshot = new string[0];
+
+        /// <summary>Republishes the snapshot. UI thread only.</summary>
+        private void PublishRequiredMods()
+        {
+            var copy = new string[_filters.RequiredMods.Count];
+            _filters.RequiredMods.CopyTo(copy);
+            _requiredModsSnapshot = copy;
+        }
+
+        /// <summary>Whether one mod list satisfies every mod the player asked for.</summary>
+        private bool MatchesRequiredMods(List<string> mods)
+        {
+            if (mods == null) return false;
+
+            var wanted = _requiredModsSnapshot;      // one atomic read
+            if (wanted.Length == 0) return false;
+
+            foreach (string want in wanted)
+            {
+                bool found = false;
+                foreach (string has in mods)
+                {
+                    if (has.IndexOf(want, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    found = true;
+                    break;
+                }
+                if (!found) return false;
+            }
+            return true;
+        }
+
+        /// <summary>How many servers in the current list have a known mod list.</summary>
+        private int ModListsKnown()
+        {
+            int n = 0;
+            lock (_modListLock)
+            {
+                foreach (var r in _rows)
+                    if (!r.IsHeading && ServerMods.ContainsKey(r.Endpoint)) n++;
+            }
+            return n;
+        }
+
+        /// <summary>Files away what a server just told us it runs.</summary>
+        private void RememberServerMods(string endpoint, ServerRules rules)
+        {
+            if (string.IsNullOrEmpty(endpoint) || rules == null) return;
+
+            // The description arrives on the same reply as the mod list, so it
+            // is filed here rather than costing a second query. Game mode
+            // filtering reads it.
+            if (!string.IsNullOrWhiteSpace(rules.Description))
+            {
+                lock (_modListLock)
+                {
+                    ServerDescriptions[endpoint] = rules.Description.Trim();
+                    _serverModsDirty = true;
+                }
+            }
+
+            if (rules.Mods == null) return;
+
+            var names = new List<string>();
+            foreach (var m in rules.Mods)
+                if (m != null && !string.IsNullOrWhiteSpace(m.Name)) names.Add(m.Name.Trim());
+
+            if (names.Count == 0) return;
+
+            lock (_modListLock)
+            {
+                // Replacing a server's list means un-counting the old one, or
+                // a server re-queried twice would count twice.
+                List<string> before;
+                if (ServerMods.TryGetValue(endpoint, out before))
+                    foreach (string m in before)
+                    {
+                        int n;
+                        if (_modPopularity.TryGetValue(m, out n))
+                        {
+                            if (n <= 1) _modPopularity.Remove(m);
+                            else _modPopularity[m] = n - 1;
+                        }
+                    }
+
+                ServerMods[endpoint] = names;
+
+                foreach (string m in names)
+                {
+                    int n;
+                    _modPopularity[m] = _modPopularity.TryGetValue(m, out n) ? n + 1 : 1;
+                }
+
+                _serverModsDirty = true;
+
+                // Does THIS server satisfy the filter the player has set? The
+                // list is right here, so the answer costs nothing, and it is
+                // the only thing that can make the visible set change.
+                if (!_newModMatches && _requiredModsSnapshot.Length > 0
+                    && MatchesRequiredMods(names)) _newModMatches = true;
+            }
+        }
+
+        /// <summary>
+        /// Writes the mod index to disk, on a background thread.
+        ///
+        /// MEASURED: 60 ms and 8.5 MB at full size. That ran on the UI thread
+        /// every three seconds while the sweep was active, holding the lock the
+        /// mod dropdown needs - so opening that dropdown queued behind a file
+        /// write. The snapshot is taken under the lock, which is quick; the
+        /// writing happens outside it and off the thread that draws.
+        /// </summary>
+        private void SaveServerMods()
+        {
+            Dictionary<string, List<string>> snapshot;
+
+            lock (_modListLock)
+            {
+                if (!_serverModsDirty || _serverMods == null) return;
+                if (_savingServerMods) return;          // one writer is enough
+
+                snapshot = new Dictionary<string, List<string>>(_serverMods, StringComparer.OrdinalIgnoreCase);
+                _serverModsDirty = false;
+                _savingServerMods = true;
+            }
+
+            Dictionary<string, string> descSnapshot;
+            lock (_modListLock)
+                descSnapshot = new Dictionary<string, string>(ServerDescriptions, StringComparer.OrdinalIgnoreCase);
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    ServerStore.SaveServerMods(snapshot);
+                    ServerStore.SaveServerDescriptions(descSnapshot);
+                }
+                catch { }
+                finally { lock (_modListLock) _savingServerMods = false; }
+            });
+        }
+
+        private bool _savingServerMods;
+
+        /// <summary>
+        /// Two rows of toggles for the way a server says it plays.
+        ///
+        /// These match against the server NAME, because DayZ publishes nothing
+        /// about game mode - a PvE server announces itself in its title and
+        /// nowhere else. Several are selectable at once and they read as OR:
+        /// "PvE or Trader" is a sensible ask, "PvE and Trader and Hardcore"
+        /// usually is not, and would return nothing.
+        /// </summary>
+        private int BuildGameModeButtons(Control parent, int x, int y)
+        {
+            _modeButtons.Clear();
+
+            string[] row1 = { "PVP", "PVE", "RP", "TRADER", "AI", "NO KOS", "KOS" };
+            string[] row2 = { "HARDCORE", "DEATHMATCH", "PVP ZONES" };
+
+            int top = y;
+            foreach (string[] row in new[] { row1, row2 })
+            {
+                int cx = x;
+                foreach (string mode in row)
+                {
+                    // Sized to the word so "DEATHMATCH" is not clipped and
+                    // "AI" is not a slab of empty button.
+                    int w = Math.Max(38, TextRenderer.MeasureText(mode,
+                        new Font("Segoe UI", 7.5f, FontStyle.Bold)).Width + 14);
+
+                    var b = new Button
+                    {
+                        Text = mode,
+                        Bounds = new Rectangle(cx, top, w, 22),
+                        FlatStyle = FlatStyle.Flat,
+                        Font = new Font("Segoe UI", 7.5f, FontStyle.Bold),
+                        Tag = mode,
+                        TabStop = false
+                    };
+
+                    string captured = mode;
+                    b.Click += (s2, e2) =>
+                    {
+                        if (_filters.GameModes.Contains(captured)) _filters.GameModes.Remove(captured);
+                        else _filters.GameModes.Add(captured);
+
+                        PaintGameModeButtons();
+                        QueueFilter();
+                    };
+
+                    parent.Controls.Add(b);
+                    _modeButtons[mode] = b;
+                    cx += w + 4;
+                }
+                top += 25;
+            }
+
+            PaintGameModeButtons();
+            return top + 4;
+        }
+
+        /// <summary>
+        /// The description a server gave when it was last queried, or null.
+        /// </summary>
+        private string KnownDescriptionFor(BrowserServer s)
+        {
+            if (s == null) return null;
+
+            lock (_modListLock)
+            {
+                string d;
+                return ServerDescriptions.TryGetValue(s.Endpoint, out d) ? d : null;
+            }
+        }
+
+        private Dictionary<string, string> _serverDescriptions;
+
+        private Dictionary<string, string> ServerDescriptions
+        {
+            get
+            {
+                if (_serverDescriptions == null)
+                    _serverDescriptions = ServerStore.LoadServerDescriptions();
+                return _serverDescriptions;
+            }
+        }
+
+        private readonly Dictionary<string, Button> _modeButtons =
+            new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
+
+        private void PaintGameModeButtons()
+        {
+            foreach (var kv in _modeButtons)
+            {
+                bool on = _filters.GameModes.Contains(kv.Key);
+
+                kv.Value.BackColor = on ? Color.FromArgb(60, 120, 60) : Panel2;
+                kv.Value.ForeColor = on ? Color.White : Color.FromArgb(150, 150, 158);
+                kv.Value.FlatAppearance.BorderColor = on
+                    ? Color.FromArgb(110, 180, 110)
+                    : Color.FromArgb(70, 70, 78);
+            }
+        }
+
+        /// <summary>
+        /// Fills every dropdown in the filter panel from what is known now.
+        ///
+        /// WHY NOT ON DropDown, WHICH IS THE OBVIOUS PLACE
+        ///   Rebuilding a ComboBox's Items from inside its own DropDown event
+        ///   means the list is being replaced at the exact moment Windows is
+        ///   opening it. Click twice quickly and the second open lands in the
+        ///   middle of the first rebuild - and because the shell autocomplete
+        ///   object is unmanaged, the failure is an access violation, not an
+        ///   exception: no stack trace, nothing in the log, the launcher just
+        ///   disappears.
+        ///
+        ///   So the lists are built BEFORE anyone can click them - when the
+        ///   panel is opened, and again as new data arrives while it is open.
+        ///   By the time a dropdown is clicked there is nothing left to do.
+        ///
+        /// Skips any list that is currently open, because replacing the items
+        /// under an open dropdown is the thing being avoided.
+        /// </summary>
+        /// <summary>
+        /// Starts the mod index load immediately if the startup delay has not
+        /// elapsed yet. Harmless to call repeatedly - the load itself only
+        /// happens once.
+        /// </summary>
+        private void WarmModIndexNow()
+        {
+            if (!_modIndexStart.Enabled) return;      // already started or done
+
+            _modIndexStart.Stop();
+            BeginBackgroundModIndex();
+        }
+
+        private void RefreshFilterChoices()
+        {
+            if (_filterPanel == null || !_filterPanel.Visible) return;
+
+            try
+            {
+                if (_fMap != null && !_fMap.DroppedDown) FillMapChoices();
+                if (_fCountry != null && !_fCountry.DroppedDown) FillCountryChoices();
+                if (_fMod != null && !_fMod.DroppedDown) FillModChoices();
+            }
+            catch { }
         }
 
         private void QueueFilter()
@@ -2667,7 +5168,11 @@ namespace BeautifulPotatoExpLauncher
             lock (_modLock)
             {
                 _modLoading.Remove(row.Endpoint);
-                if (rules != null) _modCache[row.Endpoint] = rules;
+                if (rules != null)
+                {
+                    _modCache[row.Endpoint] = rules;
+                    RememberServerMods(row.Endpoint, rules);
+                }
             }
 
             try
@@ -2700,9 +5205,24 @@ namespace BeautifulPotatoExpLauncher
                 if (rules.Mods != null)
                 {
                     string steamPath = FindSteam();
+                    int shown = 0;
+
                     foreach (var mod in rules.Mods)
+                    {
+                        if (!ModFindMatches(mod)) continue;
                         _mods.Items.Add(MakeModRow(mod, steamPath));
+                        shown++;
+                    }
+
+                    // Say so when the list is being narrowed, otherwise a
+                    // forgotten search looks like a server that lost its mods.
+                    if (_modFind != null && _modFind.Count > 0)
+                        _modsHeader.Text = string.Format(
+                            "Content required by {0}  -  showing {1} of {2} mods matching your search",
+                            row.Name, shown, modCount);
                 }
+
+                FillModFindChoices(rules);
 
                 _desc.Clear();
                 if (!string.IsNullOrEmpty(rules.Description))
@@ -2714,6 +5234,58 @@ namespace BeautifulPotatoExpLauncher
             {
                 _mods.EndUpdate();
             }
+        }
+
+        /// <summary>
+        /// Stocks the Find mod dropdown with every mod this server runs.
+        ///
+        /// ALWAYS the full list, never narrowed by what is already typed or
+        /// added - the dropdown is how you find out what is on the server, so
+        /// hiding entries from it defeats the point. Called whenever the panel
+        /// is populated, which is the only time the answer changes.
+        /// </summary>
+        private void FillModFindChoices(ServerRules rules)
+        {
+            if (_modFind == null || _modFind.Box.DroppedDown) return;
+
+            try
+            {
+                string[] names = rules == null || rules.Mods == null
+                    ? new string[0]
+                    : rules.Mods.Where(m => m != null && !string.IsNullOrWhiteSpace(m.Name))
+                                .Select(m => m.Name.Trim())
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                                .ToArray();
+
+                RefillCombo(_modFind.Box, names, _modFind.Box.Text);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Whether a mod matches what is being searched for in the panel.
+        ///
+        /// ANY of the terms, not all - a row is one mod and cannot be two
+        /// things at once, so requiring every term would always show nothing.
+        /// That is the opposite of the Has Mods filter, where each term is a
+        /// separate demand on one SERVER.
+        /// </summary>
+        private bool ModFindMatches(Mod mod)
+        {
+            if (_modFind == null || _modFind.Count == 0) return true;
+            if (mod == null) return false;
+
+            string name = (mod.Name ?? "").ToLowerInvariant();
+            string id = mod.WorkshopId.ToString();
+
+            foreach (string want in _modFind.Entries)
+            {
+                string w = want.ToLowerInvariant();
+                if (name.IndexOf(w, StringComparison.Ordinal) >= 0) return true;
+                if (id.IndexOf(w, StringComparison.Ordinal) >= 0) return true;
+            }
+            return false;
         }
 
         /// <summary>A time span in the largest unit that still reads naturally.</summary>
@@ -2754,7 +5326,10 @@ namespace BeautifulPotatoExpLauncher
                     m.Name,
                     "Local",
                     found != null ? "installed (local)" : "NOT FOUND in your mod folders",
-                    "Repair", "Sub", "Remove", "Info"
+                    // Blank, not greyed-out words: Steam has no item here to
+                    // repair, subscribe to or remove, so offering the words at
+                    // all only invites a click that can do nothing.
+                    "", "", "", "Info"
                 })
                 {
                     Tag = m,
@@ -2770,11 +5345,6 @@ namespace BeautifulPotatoExpLauncher
                 localRow.SubItems[MColId].ForeColor = Color.FromArgb(150, 150, 158);
                 localRow.SubItems[MColStatus].ForeColor = lc;
 
-                // Repair and Sub mean nothing without a workshop item.
-                var off = Color.FromArgb(90, 90, 96);
-                localRow.SubItems[MColRepair].ForeColor = off;
-                localRow.SubItems[MColSub].ForeColor = off;
-                localRow.SubItems[MColRemove].ForeColor = off;
                 localRow.SubItems[MColInfo].ForeColor = Color.FromArgb(120, 150, 190);
                 return localRow;
             }
@@ -2786,7 +5356,7 @@ namespace BeautifulPotatoExpLauncher
             string status;
             Color colour;
             if (broken) { status = "BROKEN - files present but no meta.cpp"; colour = Color.FromArgb(230, 130, 130); }
-            else if (!have) { status = "MISSING - will be downloaded"; colour = Color.FromArgb(220, 190, 120); }
+            else if (!have) { status = "NOT installed"; colour = Color.FromArgb(220, 190, 120); }
             else if (stale)
             {
                 TimeSpan behind = steam == null ? TimeSpan.Zero : SteamWorkshop.StaleBy(steam, m.WorkshopId);
@@ -2820,6 +5390,55 @@ namespace BeautifulPotatoExpLauncher
             return it;
         }
 
+        /// <summary>
+        /// Drops every cached judgement about what is installed, and redraws
+        /// the mod panel from disk.
+        ///
+        /// Called once a download has actually finished. Nothing here is
+        /// expensive - the panel is at most a few dozen rows - but the order
+        /// matters: forget the paths, invalidate the index, THEN repopulate, or
+        /// the fresh scan is answered from the stale caches.
+        /// </summary>
+        private void RefreshInstalledState()
+        {
+            try
+            {
+                SteamWorkshop.ForgetItemPaths();
+                ModIndex.Invalidate();
+
+                if (_modsShownFor != null) ShowMods(true);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Workshop items downloading because the player pressed Repair, and
+        /// the timer that notices when they land.
+        /// </summary>
+        private readonly HashSet<ulong> _awaitingDownload = new HashSet<ulong>();
+        private readonly System.Windows.Forms.Timer _downloadWatch = new System.Windows.Forms.Timer();
+
+        /// <summary>
+        /// Watches one item until Steam has it on disk, then refreshes the
+        /// panel. Steam gives no completion callback we can rely on from here -
+        /// a forged callback vtable was tried and proven not to deliver - so
+        /// this asks, every couple of seconds, until the answer changes.
+        /// </summary>
+        private void WatchDownload(ulong id)
+        {
+            if (id == 0) return;
+
+            _awaitingDownload.Add(id);
+
+            if (!_downloadWatch.Enabled)
+            {
+                _downloadWatchTicks = 0;
+                _downloadWatch.Start();
+            }
+        }
+
+        private int _downloadWatchTicks;
+
         private void OnModClick(object sender, MouseEventArgs e)
         {
             var hit = _mods.HitTest(e.Location);
@@ -2841,6 +5460,11 @@ namespace BeautifulPotatoExpLauncher
 
             if (col != MColRepair && col != MColSub && col != MColRemove) return;
 
+            // Every one of these asks Steam about a workshop item. A mod loaded
+            // from the server's own disk has none, and passing 0 would act on
+            // nothing at all.
+            if (mod.IsLocal || mod.WorkshopId == 0) return;
+
             string steam = FindSteam();
             string gameDir = steam == null ? null
                 : (FindGameDir(steam, A2S.ExperimentalAppId) ?? FindGameDir(steam, A2S.StableAppId));
@@ -2857,6 +5481,7 @@ namespace BeautifulPotatoExpLauncher
                 // otherwise ask Steam to download an item it does not own.
                 SteamWorkshop.Subscribe(mod.WorkshopId);
                 SteamWorkshop.ForceDownload(mod.WorkshopId);
+                WatchDownload(mod.WorkshopId);
                 Log("Repairing " + mod.Name + " (" + mod.WorkshopId + ") - Steam is re-downloading it.");
                 hit.Item.SubItems[MColStatus].Text = "repairing...";
             }
@@ -3062,6 +5687,13 @@ private void Launch(Row srv)
                     }
                 }
                 Log("All mods are present now.");
+
+                // The panel still says "NOT installed" for everything that just
+                // arrived: those rows were built from a scan taken before the
+                // download. Both caches have to be dropped first - the path
+                // cache because the folders did not exist when it was filled,
+                // and the library index because it counted them as missing.
+                RefreshInstalledState();
             }
 
             // Short mod paths. Absolute !Workshop paths run ~90 characters each;
@@ -3503,14 +6135,48 @@ private static ServerRules QueryModsChecked(Row row)
             catch { }
         }
 
+        /// <summary>
+        /// One of the launcher's own images.
+        ///
+        /// FROM INSIDE THE EXECUTABLE FIRST. These are embedded resources - the
+        /// csproj puts them there with an explicit LogicalName - and nothing
+        /// copies an assets folder next to the exe. This used to look only on
+        /// disk, find nothing, and quietly return a 1x1 bitmap, which is why
+        /// the logos were simply absent rather than broken-looking.
+        ///
+        /// The disk fallback stays for running out of a source tree, where the
+        /// folder does exist beside the build.
+        /// </summary>
         private static Image LoadImage(string file)
         {
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using (var stream = asm.GetManifestResourceStream(file))
+                {
+                    // Copied out before the stream closes: Image.FromStream
+                    // keeps reading from it lazily, and a disposed stream makes
+                    // the image throw the first time it is drawn.
+                    if (stream != null)
+                    {
+                        using (var copy = new MemoryStream())
+                        {
+                            stream.CopyTo(copy);
+                            copy.Position = 0;
+                            return Image.FromStream(copy);
+                        }
+                    }
+                }
+            }
+            catch { }
+
             try
             {
                 string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", file);
                 if (File.Exists(path)) return Image.FromFile(path);
             }
             catch { }
+
             return new Bitmap(1, 1);
         }
 
@@ -3538,7 +6204,17 @@ private static ServerRules QueryModsChecked(Row row)
             _visTimer.Stop();
             _typeTimer.Stop();
             _modRecheck.Stop();
-            _resortTimer.Stop();
+            _saveTimer.Stop();
+            _idleSort.Stop();
+            _modSweepTimer.Stop();
+            _modIndexStart.Stop();
+            _choicesTimer.Stop();
+            _downloadWatch.Stop();
+
+            // Whatever the index has learnt this session is kept, including
+            // from a build that never finished.
+            SaveIndex();
+            SaveServerMods();
 
             RememberWindow();
             RememberAllSplits();

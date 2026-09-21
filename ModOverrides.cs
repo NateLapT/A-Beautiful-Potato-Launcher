@@ -17,7 +17,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     /// <summary>What the player decided about one required mod.</summary>
     internal sealed class ModOverride

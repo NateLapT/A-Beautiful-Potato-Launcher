@@ -29,7 +29,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     /// <summary>What the manager knows about one installed mod.</summary>
     internal sealed class ModEntry
@@ -56,8 +56,44 @@ namespace BeautifulPotatoExpLauncher
 
         public bool HasMeta;
 
-        /// <summary>The folder holds loadable content - an addons directory.</summary>
+        /// <summary>
+        /// The folder holds something DayZ could load: an addons directory with
+        /// files in it, packed or not.
+        /// </summary>
         public bool HasContent = true;
+
+        /// <summary>
+        /// Why this mod is in the state it is, in words, for the tooltip.
+        /// </summary>
+        public string StatusDetail(string steamPath)
+        {
+            string st = Status(steamPath);
+
+            switch (st)
+            {
+                case "Unpacked":
+                    return "This mod has no meta.cpp, so Steam did not install it as a package - "
+                         + "but its addons folder does contain content.\r\n\r\n"
+                         + "That is what an extracted or hand-built mod looks like. It is not "
+                         + "damaged, and Repair would replace your copy with the workshop one.";
+
+                case "Corrupt":
+                    return IsLocal
+                        ? "This folder has no loadable content - no addons directory with files "
+                          + "in it.\r\n\r\nIt is either an empty folder or an unfinished copy."
+                        : "Steam has no meta.cpp for this mod AND the folder has no content, "
+                          + "which means the download never finished.\r\n\r\n"
+                          + "Repair re-downloads it. REPAIR CORRUPTED does all of these at once.";
+
+                case "Needs update":
+                    return "The workshop copy is newer than the one on disk. Repair downloads it.";
+
+                default:
+                    return IsLocal
+                        ? "Installed by hand rather than through the workshop, and ready to load."
+                        : "Installed, complete, and up to date.";
+            }
+        }
         public bool HasKeysFolder;
         public int KeyFileCount;
         public int PboCount;
@@ -131,9 +167,17 @@ namespace BeautifulPotatoExpLauncher
             // into the index without that (see AddLocal).
             if (IsLocal) return HasContent ? "Ready" : "Corrupt";
 
-            // For a workshop mod the manifest IS the test: Steam writes it last,
-            // so its absence means the install never finished.
-            if (!HasMeta) return "Corrupt";
+            // NO meta.cpp, BUT THE CONTENT IS THERE = UNPACKED, NOT BROKEN.
+            //
+            // Steam writes meta.cpp last, so its absence usually does mean a
+            // half-finished download. Not always: a mod extracted for editing
+            // has an addons folder full of loose source - .paa, .rvmat, .p3d,
+            // .cpp - and no manifest, because it never came down as a package.
+            // Measured on this machine: all 15 workshop folders without a
+            // meta.cpp were of exactly that kind, several hundred MB each, and
+            // calling them "Corrupt" told the owner their own working copies
+            // were broken.
+            if (!HasMeta) return HasContent ? "Unpacked" : "Corrupt";
 
             try
             {
@@ -351,6 +395,12 @@ namespace BeautifulPotatoExpLauncher
                         // Cheap, and links can appear or vanish without the mod
                         // folder itself changing.
                         known.LinkFolder = WorkshopLinks.LinkFolder(steamPath, id) ?? "";
+
+                        // A retained entry from an older index has this set to
+                        // its default of true, which would call an empty folder
+                        // "Unpacked". Only the no-manifest case needs checking.
+                        if (!known.HasMeta) known.HasContent = HasAddons(dir);
+
                         if (string.IsNullOrEmpty(known.Name) || known.Name == id.ToString())
                         {
                             string ln = WorkshopLinks.LinkName(steamPath, id);
@@ -366,7 +416,12 @@ namespace BeautifulPotatoExpLauncher
                         Folder = dir,
                         HasMeta = hasMeta,
                         InstalledAt = written,
-                        LastLoaded = known != null ? known.LastLoaded : DateTime.MinValue
+                        LastLoaded = known != null ? known.LastLoaded : DateTime.MinValue,
+
+                        // Only worth asking when there is no manifest, since
+                        // that is the only case where it changes the verdict -
+                        // and it is a directory check, not a walk.
+                        HasContent = hasMeta || HasAddons(dir)
                     };
                     if (hasMeta) ReadMeta(meta, e);
 

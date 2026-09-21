@@ -24,7 +24,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal static class WorkshopLinks
     {
@@ -88,6 +88,27 @@ namespace BeautifulPotatoExpLauncher
         }
 
         /// <summary>The "@Name" folder for a mod, or null if it has no link.</summary>
+        /// <summary>
+        /// The !Workshop folder DayZ loads mods from - the one whose entries are
+        /// named after the mods rather than numbered. Null when it does not
+        /// exist, in which case the caller falls back to the raw workshop path.
+        /// </summary>
+        public static string Root(string steamPath)
+        {
+            if (string.IsNullOrEmpty(steamPath)) return null;
+
+            foreach (string game in new[] { "DayZ", "DayZ Exp" })
+            {
+                try
+                {
+                    string p = Path.Combine(steamPath, "steamapps", "common", game, "!Workshop");
+                    if (Directory.Exists(p)) return p;
+                }
+                catch { }
+            }
+            return null;
+        }
+
         public static string LinkFolder(string steamPath, ulong id)
         {
             string dir;

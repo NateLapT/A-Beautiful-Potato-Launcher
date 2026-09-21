@@ -29,7 +29,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal sealed class ServerInfo
     {

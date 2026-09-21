@@ -38,7 +38,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     /// <summary>One row from the master list.</summary>
     internal sealed class BrowserServer

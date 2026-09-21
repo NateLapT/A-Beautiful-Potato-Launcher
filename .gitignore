@@ -1,5 +1,28 @@
-# Ignore a specific folder
-assets/
+# Screenshots and working images stay out of the repository.
+#
+# Written as "assets/*" rather than "assets/" so that individual files can be
+# let back in below - git will not re-include anything inside a directory it has
+# excluded outright, so the trailing-slash form makes the exception impossible.
+assets/*
+
+# ...except the IP -> country table, which is an embedded resource. Without it
+# the build fails on a fresh clone. 1.4 MB, rebuilt by tools/build-ip-table.ps1.
+!assets/ip-country.bin
+
+# Build output
+bin/
+obj/
+dist/
+
+# Local diagnostics: dumps of the browsed server list and everything the
+# screening rules caught, written beside the exe. These must NOT be published -
+# the screened list is a description of exactly what the launcher looks for,
+# and anyone running a redirect farm would read it as a checklist.
+serverdata/
+**/serverdata/
 
 # Example for nested folders
 # path/to/my_folder/
+
+# Registry source files for the IP table (27 MB, re-downloadable)
+tools/ip-cache/

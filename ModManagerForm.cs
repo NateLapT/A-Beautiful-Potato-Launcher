@@ -24,7 +24,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal sealed class ModManagerForm : Form
     {
@@ -47,7 +47,11 @@ namespace BeautifulPotatoExpLauncher
         private ListView _list;
         private TextBox _search;
         private Label _status, _detailTitle;
+
+        /// <summary>Why the selected mod is in the state it is, wrapped.</summary>
+        private Label _statusDetail;
         private Panel _detail;
+        private Splitter _grip;
         private PictureBox _image;
         private ListView _facts;
         private System.Windows.Forms.Timer _typeTimer = new System.Windows.Forms.Timer();
@@ -82,6 +86,18 @@ namespace BeautifulPotatoExpLauncher
 
             _typeTimer.Interval = 200;
             _typeTimer.Tick += (s, e) => { _typeTimer.Stop(); ApplyFilter(); };
+
+            // Escape closes the window. KeyPreview is what makes it work from
+            // anywhere inside - without it the key only arrives when the form
+            // itself has focus, which it never does once a list or search box
+            // has taken it.
+            KeyPreview = true;
+            KeyDown += (s, e) =>
+            {
+                if (e.KeyCode != Keys.Escape) return;
+                e.Handled = true;
+                Close();
+            };
 
             Shown += (s, e) => Start();
             FormClosing += (s, e) => { _closing = true; ModIndex.Save(); };
@@ -123,6 +139,7 @@ namespace BeautifulPotatoExpLauncher
             };
             _search.TextChanged += (s, e) => { _typeTimer.Stop(); _typeTimer.Start(); };
             top.Controls.Add(_search);
+            ClearBox.AddTo(_search);
 
             var rescan = MakeButton("RESCAN", new Rectangle(394, 6, 92, 25), Panel2);
             rescan.Click += (s, e) => Rescan();
@@ -153,11 +170,38 @@ namespace BeautifulPotatoExpLauncher
             _detail = new Panel { Dock = DockStyle.Right, Width = 330, BackColor = Panel, Padding = new Padding(10) };
             Controls.Add(_detail);
 
+            // A drag handle down the LEFT edge of the detail panel - the join
+            // between the mod list and the panel.
+            //
+            // The two facts worth reading here are paths, the mod's folder and
+            // the workshop folder it links to, and at a fixed 330px both were
+            // cut off with no way to see the rest.
+            //
+            // DOCK ORDER MATTERS, and getting it wrong is silent. WinForms docks
+            // in reverse z-order: the HIGHEST child index is placed first and
+            // ends up outermost. Added normally, the splitter took a higher
+            // index than the panel and docked outside it - a dead strip against
+            // the window edge with nothing to drag. It is pushed to a lower
+            // index than the panel below, which puts it inside, between the
+            // panel and the list, where it belongs.
+            _grip = new Splitter
+            {
+                Dock = DockStyle.Right,
+                Width = 7,
+                // Visibly a handle rather than a gap, so it can be found.
+                BackColor = Color.FromArgb(70, 70, 78),
+                MinExtra = 360,       // the list never shrinks below this
+                MinSize = 260,        // nor the detail panel below this
+                Cursor = Cursors.VSplit
+            };
+            Controls.Add(_grip);
+
             _image = new PictureBox
             {
                 Bounds = new Rectangle(10, 10, 310, 150),
                 SizeMode = PictureBoxSizeMode.Zoom,
-                BackColor = Panel2
+                BackColor = Panel2,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             _detail.Controls.Add(_image);
 
@@ -167,7 +211,8 @@ namespace BeautifulPotatoExpLauncher
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 UseMnemonic = false,          // a "&" in a mod name is not a shortcut
-                Text = "Select a mod"
+                Text = "Select a mod",
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             _detail.Controls.Add(_detailTitle);
 
@@ -180,11 +225,37 @@ namespace BeautifulPotatoExpLauncher
                 BackColor = Panel,
                 ForeColor = Color.Gainsboro,
                 BorderStyle = BorderStyle.FixedSingle,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+                       | AnchorStyles.Right | AnchorStyles.Bottom
             };
             _facts.Columns.Add("", 96);
             _facts.Columns.Add("", 208);
+            ListViewTweaks.Smooth(_facts);
             _detail.Controls.Add(_facts);
+
+            // The value column takes whatever width the panel is given, which
+            // is the entire point of being able to drag it wider.
+            _detail.Resize += (s, e) => FitFactColumns();
+            _facts.Resize += (s, e) => FitFactColumns();
+
+            // The explanation of the status, under the facts and above the
+            // buttons. AutoSize with a maximum width is what makes it wrap:
+            // without the cap it grows sideways forever instead of downwards.
+            _statusDetail = new Label
+            {
+                Bounds = new Rectangle(10, 548, 310, 60),
+                MaximumSize = new Size(310, 0),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(150, 150, 158),
+                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            };
+            _detail.Controls.Add(_statusDetail);
+
+            _detail.Resize += (s, e) =>
+            {
+                int room = Math.Max(120, _detail.ClientSize.Width - 20);
+                _statusDetail.MaximumSize = new Size(room, 0);
+            };
 
             int by = 556;
             var repair = MakeButton("Repair", new Rectangle(10, by, 74, 27), Panel2);
@@ -216,7 +287,8 @@ namespace BeautifulPotatoExpLauncher
                 BackColor = Panel,
                 ForeColor = Color.Gainsboro,
                 BorderStyle = BorderStyle.FixedSingle,
-                HideSelection = false
+                HideSelection = false,
+                ShowItemToolTips = true
             };
             _list.Columns.Add("Mod Name", 300);
             _list.Columns.Add("Workshop ID", 100);
@@ -230,8 +302,21 @@ namespace BeautifulPotatoExpLauncher
             _list.SelectedIndexChanged += (s, e) => ShowDetail();
             _list.MouseClick += OnListClick;
             _list.ColumnClick += OnColumnClick;
+            ListViewTweaks.Smooth(_list);
+
+            // Repair and Remove are cells the player clicks, so say so. A local
+            // mod has neither - Steam did not install it and cannot touch it -
+            // and those cells are left blank, which HandOverColumns skips.
+            UiCursors.HandOverColumns(_list, (item, col) => RowAt(item.Index) != null,
+                                      ColRepair, ColRemove);
             Controls.Add(_list);
+
+            // Innermost first: the list fills what is left, the grip sits just
+            // inside the detail panel, and the panel holds the right edge.
             Controls.SetChildIndex(_list, 0);
+            Controls.SetChildIndex(_grip, 1);
+
+            FitFactColumns();
         }
 
         private Button MakeButton(string text, Rectangle bounds, Color back)
@@ -399,12 +484,20 @@ namespace BeautifulPotatoExpLauncher
                 m.InstalledAt == DateTime.MinValue ? "" : m.InstalledAt.ToLocalTime().ToString("yyyy-MM-dd"),
                 m.LastLoaded == DateTime.MinValue ? "never" : m.LastLoaded.ToLocalTime().ToString("yyyy-MM-dd"),
                 m.SizeText,
-                "Repair",
-                "Remove"
+                // Steam owns neither of these actions for a hand-installed mod:
+                // there is nothing to re-download and no subscription to drop.
+                m.IsLocal ? "" : "Repair",
+                m.IsLocal ? "" : "Remove"
             })
             { UseItemStyleForSubItems = false };
 
-            Color c = status == "Corrupt" ? Bad : status == "Needs update" ? Warn : Good;
+            // Unpacked is its own colour: it is not an error, but it is not the
+            // ordinary case either, and the owner should be able to pick those
+            // folders out at a glance.
+            Color c = status == "Corrupt" ? Bad
+                    : status == "Needs update" ? Warn
+                    : status == "Unpacked" ? Color.FromArgb(120, 170, 220)
+                    : Good;
             it.SubItems[ColName].ForeColor = c;
             it.SubItems[ColStatus].ForeColor = c;
             it.SubItems[ColId].ForeColor = Dim;
@@ -413,7 +506,23 @@ namespace BeautifulPotatoExpLauncher
             it.SubItems[ColSize].ForeColor = Dim;
             it.SubItems[ColRepair].ForeColor = Link;
             it.SubItems[ColRemove].ForeColor = Bad;
+
+            // Hovering a row says why it is in that state. The list already has
+            // ShowItemToolTips on for this.
+            it.ToolTipText = m.StatusDetail(_steam);
+
             e.Item = it;
+        }
+
+        /// <summary>
+        /// The mod drawn at a row, or null when that row offers no Steam
+        /// action. Used by the cursor tracking, which has only the item.
+        /// </summary>
+        private ModEntry RowAt(int index)
+        {
+            if (index < 0 || index >= _shown.Count) return null;
+            var m = _shown[index];
+            return m.IsLocal ? null : m;
         }
 
         private void OnListClick(object sender, MouseEventArgs e)
@@ -424,6 +533,11 @@ namespace BeautifulPotatoExpLauncher
             if (hit.Item.Index < 0 || hit.Item.Index >= _shown.Count) return;
 
             _selected = _shown[hit.Item.Index];
+
+            // A local mod has no workshop id, so asking Steam to repair or
+            // remove it would act on item 0 - which is nothing at all.
+            if (_selected.IsLocal) return;
+
             if (col == ColRepair) RepairSelected();
             else if (col == ColRemove) RemoveSelected();
         }
@@ -436,6 +550,8 @@ namespace BeautifulPotatoExpLauncher
             _selected = sel >= 0 && sel < _shown.Count ? _shown[sel] : null;
 
             _facts.Items.Clear();
+            if (_statusDetail != null) _statusDetail.Text = "";
+
             if (_selected == null)
             {
                 _detailTitle.Text = "Select a mod";
@@ -460,6 +576,12 @@ namespace BeautifulPotatoExpLauncher
                 ? "never" : m.LastLoaded.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm"));
             Fact("File Size", m.SizeBytes < 0 ? "measuring..." : m.SizeText);
             Fact("Status", m.Status(_steam));
+
+            // NOT a Fact row. A ListView cell is one line, and this explanation
+            // is a paragraph - as a cell it ran off the side of the window with
+            // no way to read the rest of it. It goes in the wrapping label
+            // below the table instead.
+            _statusDetail.Text = m.StatusDetail(_steam);
             Fact("Content", m.PboCount + (m.PboCount == 1 ? " pbo" : " pbos"));
             Fact("Key (signed)", m.Signed
                 ? "Signed (" + m.SignatureCount + (m.SignatureCount == 1 ? " signature)" : " signatures)")
@@ -471,6 +593,21 @@ namespace BeautifulPotatoExpLauncher
             Fact("Workshop folder", m.Folder);
 
             ShowImage(m);
+        }
+
+        /// <summary>
+        /// Sizes the facts table to the panel: a fixed label column, and the
+        /// value column taking the rest. Called whenever the panel is dragged.
+        /// </summary>
+        private void FitFactColumns()
+        {
+            if (_facts == null || _facts.Columns.Count < 2) return;
+            try
+            {
+                int room = _facts.ClientSize.Width - _facts.Columns[0].Width - 4;
+                if (room > 60) _facts.Columns[1].Width = room;
+            }
+            catch { }
         }
 
         private void Fact(string key, string value)
@@ -613,6 +750,11 @@ namespace BeautifulPotatoExpLauncher
         ///
         /// No confirmation: these are already broken, the player can see that
         /// in the list, and the fix is the only sensible thing to do with them.
+        /// </summary>
+        /// <summary>
+        /// Only genuinely broken installs. An "Unpacked" mod is somebody's
+        /// working copy, and repairing it would replace it with the workshop
+        /// version - destroying local edits.
         /// </summary>
         private void RepairCorrupted()
         {

@@ -19,7 +19,7 @@
 
 using System.Collections.Generic;
 
-namespace BeautifulPotatoExpLauncher
+namespace ABeautifulPotatoLauncher
 {
     internal enum TriState { Any = 0, Enabled = 1, Disabled = 2 }
     internal enum PlayersMode { Any = 0, NotEmpty = 1, NotFull = 2, Empty = 3 }
@@ -33,12 +33,54 @@ namespace BeautifulPotatoExpLauncher
         public string Search = "";
         public int MaxPing;                    // 0 = any
         public PlayersMode Players = PlayersMode.Any;
+
+        /// <summary>
+        /// The player-count range the player is after. 0..PlayerCeiling means
+        /// "any", and is the normal case, so it must cost nothing to check.
+        /// </summary>
+        public int MinPlayers;
+        public int MaxPlayersWanted = PlayerCeiling;
+
+        /// <summary>
+        /// The top of the slider. 127 because that is the largest value the
+        /// player-count byte can carry - see the sentinel note in MainForm.
+        /// </summary>
+        public const int PlayerCeiling = 127;
+
+        public bool AnyPlayerRange
+        {
+            get { return MinPlayers <= 0 && MaxPlayersWanted >= PlayerCeiling; }
+        }
+
+        /// <summary>
+        /// Game modes, matched against the server NAME.
+        ///
+        /// DayZ has no field for any of this - a server saying it is PvE says
+        /// so in its name and nowhere else - so these are substring tests. Each
+        /// mode carries several spellings because communities do not agree on
+        /// one: "RP" and "roleplay" are the same request, as are "AI" and
+        /// "bots".
+        /// </summary>
+        public readonly HashSet<string> GameModes =
+            new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
         public PlayersMode PlayersMode
         {
             get { return Players; }
             set { Players = value; }
         }
         public TimeMode GameTime = TimeMode.Any;
+
+        /// <summary>
+        /// The in-game clock range being asked for, in hours. 0..24 means any.
+        ///
+        /// A RANGE rather than day/night because "day" is not the same question
+        /// everywhere - someone wanting dusk wants 18:00 to 24:00, and no
+        /// two-way switch can say that.
+        /// </summary>
+        public int MinHour;
+        public int MaxHour = 24;
+
+        public bool AnyGameTime { get { return MinHour <= 0 && MaxHour >= 24; } }
         public TimeMode TimeMode
         {
             get { return GameTime; }
@@ -224,9 +266,237 @@ namespace BeautifulPotatoExpLauncher
         }
 
         /// <summary>The rest, applied to each row after it arrives.</summary>
+        /// <summary>
+        /// Regions to show. Empty means every region - the normal case, and the
+        /// one that must cost nothing to check.
+        /// </summary>
+        public readonly HashSet<WorldRegion> Regions = new HashSet<WorldRegion>();
+
+        /// <summary>
+        /// Regions to hide. Applied after <see cref="Regions"/>, so a player can
+        /// say "Europe, but not Russia" by picking the region and excluding the
+        /// country - the two lists answer different questions.
+        /// </summary>
+        public readonly HashSet<WorldRegion> HiddenRegions = new HashSet<WorldRegion>();
+
+        /// <summary>Country codes to show; empty means all of them.</summary>
+        public readonly HashSet<string> Countries =
+            new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Country codes to hide, whatever the region says.</summary>
+        public readonly HashSet<string> HiddenCountries =
+            new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+        public bool AnyRegionFilter
+        {
+            get
+            {
+                return Regions.Count > 0 || HiddenRegions.Count > 0
+                    || Countries.Count > 0 || HiddenCountries.Count > 0;
+            }
+        }
+
+        /// <summary>
+        /// Whether a server survives the region and country filters.
+        ///
+        /// Hiding beats showing: if a country is in both lists the player has
+        /// said "not this one" more specifically than "this region", and the
+        /// more specific instruction is the one they meant.
+        /// </summary>
+        private bool PassesRegion(BrowserServer s)
+        {
+            if (!AnyRegionFilter) return true;
+
+            string cc = IpRegion.Country(s.Host);
+            WorldRegion region = IpRegion.RegionOf(cc);
+
+            if (HiddenCountries.Count > 0 && cc.Length > 0 && HiddenCountries.Contains(cc))
+                return false;
+
+            if (HiddenRegions.Count > 0 && HiddenRegions.Contains(region)) return false;
+
+            // An explicit country list wins over the region list: asking for
+            // Germany and for Asia should show both, not neither.
+            bool wanted = Countries.Count == 0 && Regions.Count == 0;
+            if (!wanted && Countries.Count > 0 && cc.Length > 0 && Countries.Contains(cc)) wanted = true;
+            if (!wanted && Regions.Count > 0 && Regions.Contains(region)) wanted = true;
+
+            return wanted;
+        }
+
+        /// <summary>
+        /// Mods a server must be running, by name. Empty means no mod filter.
+        /// </summary>
+        public readonly HashSet<string> RequiredMods =
+            new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Looks up the mods a server is known to run. Set by the form, because
+        /// the filter has no business owning that cache. Returns null when the
+        /// server has never been asked.
+        /// </summary>
+        public System.Func<BrowserServer, List<string>> KnownMods;
+
+        /// <summary>
+        /// Whether a server runs everything the player asked for.
+        ///
+        /// A server we have never queried returns null rather than an empty
+        /// list, and is EXCLUDED - saying "runs @Gunplay" about a server whose
+        /// mods are unknown would be a guess. The sweep fills these in as it
+        /// goes, so the list grows while the filter is on rather than being
+        /// wrong up front.
+        /// </summary>
+        private bool PassesMods(BrowserServer s)
+        {
+            if (RequiredMods.Count == 0) return true;
+            if (KnownMods == null) return false;
+
+            var mods = KnownMods(s);
+            if (mods == null || mods.Count == 0) return false;
+
+            foreach (string want in RequiredMods)
+            {
+                bool found = false;
+                foreach (string has in mods)
+                {
+                    if (has.IndexOf(want, System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    found = true;
+                    break;
+                }
+                if (!found) return false;
+            }
+            return true;
+        }
+
+        private bool PassesPlayerRange(BrowserServer s)
+        {
+            if (AnyPlayerRange) return true;
+
+            if (s.Players < MinPlayers) return false;
+
+            // The top of the slider means "and above", so a server with more
+            // players than the ceiling is still wanted.
+            if (MaxPlayersWanted < PlayerCeiling && s.Players > MaxPlayersWanted) return false;
+
+            return true;
+        }
+
+        /// <summary>The words each game mode is known by, in server names.</summary>
+        private static readonly Dictionary<string, string[]> ModeWords =
+            new Dictionary<string, string[]>(System.StringComparer.OrdinalIgnoreCase)
+            {
+                { "PVP",        new[] { "pvp" } },
+                { "PVE",        new[] { "pve" } },
+                { "RP",         new[] { "roleplay", "role play", "rp" } },
+                { "TRADER",     new[] { "trader", "traders", "trading" } },
+                { "AI",         new[] { "ai", "bot", "bots" } },
+                { "NO KOS",     new[] { "no kos", "nokos", "no-kos" } },
+                { "KOS",        new[] { "kos" } },
+                { "HARDCORE",   new[] { "hardcore", "hard core" } },
+                { "DEATHMATCH", new[] { "deathmatch", "death match", "dm", "tdm" } },
+                { "PVP ZONES",  new[] { "pvp zone", "pvpzone", "pvp zones" } },
+            };
+
+        /// <summary>
+        /// Whether a name contains this word as a WORD, not as a fragment.
+        ///
+        /// Server names are a soup of brackets and pipes, so the boundary is
+        /// "not a letter or digit" rather than whitespace: "|RP|", "[RP]" and
+        /// "Enoch RP" all count, and "Warp Zone Gaming" does not. That last one
+        /// is a real server which a plain substring test filed under roleplay,
+        /// because "warp " contains "rp ".
+        /// </summary>
+        private static bool ContainsWord(string haystack, string word)
+        {
+            int at = 0;
+            while (true)
+            {
+                int i = haystack.IndexOf(word, at, System.StringComparison.Ordinal);
+                if (i < 0) return false;
+
+                bool leftOk = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
+                int after = i + word.Length;
+                bool rightOk = after >= haystack.Length || !char.IsLetterOrDigit(haystack[after]);
+
+                if (leftOk && rightOk) return true;
+                at = i + 1;
+            }
+        }
+
+        public static string[] AllGameModes
+        {
+            get
+            {
+                return new[] { "PVP", "PVE", "RP", "TRADER", "AI", "NO KOS", "KOS",
+                               "HARDCORE", "DEATHMATCH", "PVP ZONES" };
+            }
+        }
+
+        /// <summary>
+        /// The server's description, when one has been read. Set by the form;
+        /// null when that server has never been queried.
+        /// </summary>
+        public System.Func<BrowserServer, string> KnownDescription;
+
+        /// <summary>
+        /// Whether a server claims EVERY selected mode.
+        ///
+        /// ALL, not any. Toggling HARDCORE and NO KOS is a request for a
+        /// hardcore server that does not allow kill-on-sight - a server
+        /// advertising "HARDCORE PVP Zones KOS" satisfies the first and
+        /// contradicts the second, so it is not what was asked for and is not
+        /// shown. Each toggle narrows.
+        ///
+        /// Matched against the name AND the description, because plenty of
+        /// servers put the rules in the description and keep the name short.
+        /// The description only exists for servers that have been queried; when
+        /// there is none, the name alone decides.
+        /// </summary>
+        private bool PassesGameModes(BrowserServer s)
+        {
+            if (GameModes.Count == 0) return true;
+
+            string text = (s.Name ?? "").ToLowerInvariant();
+
+            if (KnownDescription != null)
+            {
+                string d = KnownDescription(s);
+                if (!string.IsNullOrEmpty(d)) text += " " + d.ToLowerInvariant();
+            }
+
+            if (text.Length == 0) return false;
+
+            foreach (string mode in GameModes)
+            {
+                string[] words;
+                if (!ModeWords.TryGetValue(mode, out words)) continue;
+
+                // "KOS" and "NO KOS" share three letters and mean opposite
+                // things, so a server advertising NO KOS never satisfies KOS.
+                if (mode == "KOS" && ContainsWord(text, "no kos")) return false;
+
+                bool found = false;
+                foreach (string w in words)
+                {
+                    if (!ContainsWord(text, w)) continue;
+                    found = true;
+                    break;
+                }
+
+                // One miss is enough: every toggle has to be satisfied.
+                if (!found) return false;
+            }
+            return true;
+        }
+
         public bool Matches(BrowserServer s)
         {
             if (s == null) return false;
+
+            if (!PassesRegion(s)) return false;
+            if (!PassesMods(s)) return false;
+            if (!PassesPlayerRange(s)) return false;
+            if (!PassesGameModes(s)) return false;
 
             if (!string.IsNullOrEmpty(Name.Trim()) &&
                 s.Name.IndexOf(Name.Trim(), System.StringComparison.OrdinalIgnoreCase) < 0)
@@ -263,13 +533,17 @@ namespace BeautifulPotatoExpLauncher
             if (Official == TriState.Enabled && !IsOfficial(s)) return false;
             if (Official == TriState.Disabled && IsOfficial(s)) return false;
 
-            if (GameTime != TimeMode.Any)
+            if (!AnyGameTime)
             {
                 int h = s.GameHour;
+
+                // A server that does not publish its clock cannot satisfy a
+                // time filter; saying otherwise would be a guess.
                 if (h < 0) return false;
-                bool day = h >= 6 && h < 19;
-                if (GameTime == TimeMode.Day && !day) return false;
-                if (GameTime == TimeMode.Night && day) return false;
+
+                // The top of the slider is 24, which is midnight again - so a
+                // range ending there includes hour 23 and everything below it.
+                if (h < MinHour || h >= MaxHour) return false;
             }
 
             return true;
@@ -358,7 +632,7 @@ namespace BeautifulPotatoExpLauncher
             get
             {
                 return Name.Trim().Length > 0 || Address.Trim().Length > 0 || Map.Trim().Length > 0
-                    || MaxPing > 0 || Players != PlayersMode.Any || GameTime != TimeMode.Any
+                    || MaxPing > 0 || Players != PlayersMode.Any || !AnyGameTime
                     || ThirdPerson != TriState.Any || Mods != TriState.Any
                     || Official != TriState.Any
                     || NoPassword || HideFull || HideEmpty;
@@ -371,6 +645,8 @@ namespace BeautifulPotatoExpLauncher
             MaxPing = 0;
             Players = PlayersMode.Any;
             GameTime = TimeMode.Any;
+            MinHour = 0;
+            MaxHour = 24;
             ThirdPerson = Mods = TriState.Any;
             NoPassword = HideFull = HideEmpty = false;
         }
