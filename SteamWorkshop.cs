@@ -80,20 +80,32 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
+        /// <summary>
+        /// The id exactly as the server sent it.
+        ///
+        /// THIS USED TO SUBTRACT 2 and that was wrong. The theory was that DayZ
+        /// emits a stray low-byte tag shifting ids by +2, so anything ending in
+        /// 0x02 was "corrected" - which silently broke one workshop id in every
+        /// 256.
+        ///
+        /// Checked against Steam's own catalogue:
+        ///
+        ///     3805561602  EXISTS - "Fill Direct From Pumps"
+        ///     3805561600  does not exist        <- what we rewrote it to
+        ///     1797720066  does not exist        <- the case that inspired the rule
+        ///     1797720064  EXISTS - "WindstridesClothingPack"
+        ///
+        /// So the drift is real for SOME records and not others, and there is
+        /// no way to tell them apart from the number alone. Guessing corrupts
+        /// good ids to fix bad ones at the same rate.
+        ///
+        /// The id is therefore taken at face value - the wire bytes are right,
+        /// verified by hand against this server's packet - and a mismatch is
+        /// resolved where it can actually be checked: see VerifyExists, used
+        /// when something is about to be downloaded.
+        /// </summary>
         private static ulong NormalizeWorkshopId(ulong workshopId)
         {
-            if (workshopId == 0) return 0;
-
-            // DayZ sometimes emits a stray low-byte tag in the packed mod-record
-            // that shifts the published workshop id by +2. The raw packet can
-            // therefore contain values like 1797720066 instead of the real
-            // published id 1797720064. Normalize only the unmistakable drift.
-            if ((workshopId & 0xFF) == 0x02 && workshopId >= 100000)
-            {
-                ulong corrected = workshopId - 2;
-                if (corrected >= 100000 && corrected <= 4000000000UL)
-                    return corrected;
-            }
             return workshopId;
         }
 
@@ -173,6 +185,102 @@ namespace ABeautifulPotatoLauncher
 
     internal static class SteamWorkshop
     {
+        /// <summary>
+        /// Asks Steam's public catalogue whether an id exists, and if it does
+        /// not, whether id-2 does.
+        ///
+        /// Only called before a download, where being wrong is visible and a
+        /// round trip is affordable. Returns the id to actually use.
+        /// </summary>
+        public static ulong ResolveDownloadId(ulong id, Action<string> log)
+        {
+            if (id == 0) return 0;
+
+            lock (ResolvedIds)
+            {
+                ulong known;
+                if (ResolvedIds.TryGetValue(id, out known)) return known;
+            }
+
+            ulong use = id;
+            try
+            {
+                bool exists = PublishedItemExists(id);
+
+                if (!exists && id > 2)
+                {
+                    // The +2 drift, confirmed rather than assumed.
+                    if (PublishedItemExists(id - 2))
+                    {
+                        use = id - 2;
+                        if (log != null)
+                            log("  Workshop id " + id + " does not exist; using " + use + ".");
+                    }
+                    else if (log != null)
+                    {
+                        log("  Workshop id " + id + " is not in Steam's catalogue.");
+                    }
+                }
+            }
+            catch
+            {
+                // Offline, or Steam is unreachable. Use what the server said -
+                // guessing is what got this wrong in the first place.
+            }
+
+            lock (ResolvedIds) ResolvedIds[id] = use;
+            return use;
+        }
+
+        private static readonly Dictionary<ulong, ulong> ResolvedIds = new Dictionary<ulong, ulong>();
+
+        /// <summary>Whether Steam's catalogue has this published file.</summary>
+        private static bool PublishedItemExists(ulong id)
+        {
+            var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(
+                "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/");
+
+            req.Method = "POST";
+            req.ContentType = "application/x-www-form-urlencoded";
+            req.UserAgent = "ABeautifulPotatoLauncher";
+            req.Timeout = 8000;
+
+            byte[] body = Encoding.UTF8.GetBytes("itemcount=1&publishedfileids%5B0%5D=" + id);
+            req.ContentLength = body.Length;
+            using (var stream = req.GetRequestStream()) stream.Write(body, 0, body.Length);
+
+            using (var response = req.GetResponse())
+            using (var reader = new StreamReader(response.GetResponseStream()))
+            {
+                string json = reader.ReadToEnd();
+
+                // No JSON parser on net48 worth pulling in for one field.
+                //
+                // The ITEM's result, not the call's. The reply is
+                //   {"response":{"result":1,...,"publishedfiledetails":[{...,"result":9}]}}
+                // and the outer "result":1 only says the request succeeded. Reading
+                // that one reported every id as existing, including ones Steam had
+                // just said were gone.
+                int list = json.IndexOf("publishedfiledetails", StringComparison.Ordinal);
+                if (list < 0) return false;
+
+                int at = json.IndexOf("\"result\"", list, StringComparison.Ordinal);
+                if (at < 0) return false;
+
+                int colon = json.IndexOf(':', at);
+                if (colon < 0) return false;
+
+                int end = colon + 1;
+                while (end < json.Length && (json[end] == ' ')) end++;
+
+                int start = end;
+                while (end < json.Length && char.IsDigit(json[end])) end++;
+
+                int result;
+                return int.TryParse(json.Substring(start, end - start), out result) && result == 1;
+            }
+        }
+
         // Workshop content for DayZ. Experimental shares it - the files live
         // under the stable app's id no matter which build you run.
         public const uint DayZAppId = 221100;
@@ -982,7 +1090,75 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>See StaleBy for why this is a day and not a second.</summary>
-        public static readonly TimeSpan StaleTolerance = TimeSpan.FromDays(1);
+        /// <summary>
+        /// How far out of step the timestamps may be before a mod is treated
+        /// as out of date. FIVE MINUTES - it used to be a day.
+        ///
+        /// The day existed because the workshop's "updated" time also moves
+        /// when only a description or picture is edited, and a tight tolerance
+        /// flagged those every time. But a day also hid real updates: a mod
+        /// republished at 04:47 and joined at 04:50 was waved through.
+        ///
+        /// The false positives are now dealt with differently - Steam is asked,
+        /// and once it confirms a copy is current for a given publication time
+        /// that is remembered (see ConfirmCurrent) - so the tolerance only has
+        /// to absorb clock drift between here and Steam, not page edits.
+        /// </summary>
+        public static readonly TimeSpan StaleTolerance = TimeSpan.FromMinutes(5);
+
+        // ------------------------------------------- Steam-confirmed copies --
+
+        private static Dictionary<ulong, long> _confirmed;
+        private static readonly object ConfirmedLock = new object();
+
+        private static Dictionary<ulong, long> Confirmed
+        {
+            get
+            {
+                lock (ConfirmedLock)
+                {
+                    if (_confirmed == null) _confirmed = ServerStore.LoadSteamConfirmed();
+                    return _confirmed;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records that Steam, asked directly, said our copy of this mod is the
+        /// latest - as of the publication time we currently know about.
+        ///
+        /// Without this, a mod whose workshop page was edited after we
+        /// downloaded it would read as "out of date" forever: asking Steam
+        /// changes nothing on disk, so the timestamps never move back into
+        /// step. The record is tied to the publication time, so the moment the
+        /// author publishes again it no longer applies and the mod is checked
+        /// afresh.
+        /// </summary>
+        public static void ConfirmCurrent(ulong id)
+        {
+            DateTime published = WorkshopUpdated(id);
+            if (published == DateTime.MinValue) return;
+
+            lock (ConfirmedLock)
+            {
+                Confirmed[id] = published.ToUniversalTime().Ticks;
+                ServerStore.SaveSteamConfirmed(Confirmed);
+            }
+        }
+
+        /// <summary>Steam has vouched for this copy at the current publication time.</summary>
+        public static bool IsConfirmedCurrent(ulong id)
+        {
+            DateTime published = WorkshopUpdated(id);
+            if (published == DateTime.MinValue) return false;
+
+            lock (ConfirmedLock)
+            {
+                long ticks;
+                return Confirmed.TryGetValue(id, out ticks)
+                    && ticks == published.ToUniversalTime().Ticks;
+            }
+        }
 
         /// <summary>
         /// When Steam last WROTE this mod's meta.cpp - which is when it last
@@ -1047,6 +1223,10 @@ namespace ABeautifulPotatoLauncher
             DateTime published = WorkshopUpdated(id);
             if (published == DateTime.MinValue) return TimeSpan.Zero;
             if (steamPath == null) return TimeSpan.Zero;
+
+            // Steam has already looked at this exact release and said we have
+            // it. That outranks any inference from timestamps.
+            if (IsConfirmedCurrent(id)) return TimeSpan.Zero;
 
             // Signal 1: when this machine received the item.
             DateTime installed = InstalledAt(steamPath, id);

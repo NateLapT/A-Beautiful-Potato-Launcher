@@ -52,6 +52,68 @@ namespace ABeautifulPotatoLauncher
         internal static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
         internal static readonly string LogFile = Path.Combine(LogDirectory, "launcher.log");
 
+        /// <summary>The release number, eg. "1.0.0".</summary>
+        internal static string Version
+        {
+            get
+            {
+                string v = Informational;
+                int plus = v.IndexOf('+');
+                return plus > 0 ? v.Substring(0, plus) : v;
+            }
+        }
+
+        /// <summary>
+        /// When this executable was built, from the stamp the project file
+        /// appends to the informational version. MinValue if it is missing.
+        /// </summary>
+        internal static DateTime BuiltUtc
+        {
+            get
+            {
+                string v = Informational;
+                int plus = v.IndexOf('+');
+                if (plus < 0) return DateTime.MinValue;
+
+                DateTime t;
+                return DateTime.TryParseExact(v.Substring(plus + 1), "yyyyMMdd.HHmm",
+                           System.Globalization.CultureInfo.InvariantCulture,
+                           System.Globalization.DateTimeStyles.AssumeUniversal
+                           | System.Globalization.DateTimeStyles.AdjustToUniversal, out t)
+                    ? t : DateTime.MinValue;
+            }
+        }
+
+        /// <summary>"v1.0.0 · 2026-09-21 05:10", local time - the footer text.</summary>
+        internal static string VersionLabel
+        {
+            get
+            {
+                DateTime built = BuiltUtc;
+                return "v" + Version + (built == DateTime.MinValue
+                    ? ""
+                    : "  ·  " + built.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+            }
+        }
+
+        private static string Informational
+        {
+            get
+            {
+                try
+                {
+                    var attr = (System.Reflection.AssemblyInformationalVersionAttribute)
+                        Attribute.GetCustomAttribute(
+                            System.Reflection.Assembly.GetExecutingAssembly(),
+                            typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+                    if (attr != null && !string.IsNullOrEmpty(attr.InformationalVersion))
+                        return attr.InformationalVersion;
+                }
+                catch { }
+                return "0.0.0";
+            }
+        }
+
         [STAThread]
         private static void Main()
         {
@@ -61,7 +123,8 @@ namespace ABeautifulPotatoLauncher
             try
             {
                 File.AppendAllText(LogFile,
-                    "[" + DateTime.Now.ToString("HH:mm:ss") + "] Launcher started" + Environment.NewLine);
+                    "[" + DateTime.Now.ToString("HH:mm:ss") + "] Launcher started - " + VersionLabel
+                    + Environment.NewLine);
             }
             catch { }
 
@@ -998,6 +1061,32 @@ namespace ABeautifulPotatoLauncher
             var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = Panel };
             Controls.Add(bottomBar);
 
+            // The version, just left of Settings: [status][version][Settings]
+            // [Donate]. Right-docked controls are placed in reverse order of
+            // adding, so the one added FIRST sits innermost - which is why this
+            // goes in before Settings rather than after it.
+            // Build time included, because a test build and the one before it
+            // carry the same version number and a bug report needs to say
+            // which one it came from.
+            var version = new Label
+            {
+                Text = Program.VersionLabel,
+                Dock = DockStyle.Right,
+                AutoSize = false,
+                Width = 170,
+                TextAlign = ContentAlignment.MiddleRight,
+                Padding = new Padding(0, 0, 8, 0),
+                BackColor = Panel,
+                ForeColor = Color.FromArgb(150, 150, 158),
+                Font = new Font("Segoe UI", 8f)
+            };
+            new ToolTip().SetToolTip(version,
+                "A Beautiful Potato Launcher " + Program.Version
+                + (Program.BuiltUtc == DateTime.MinValue ? ""
+                   : "\r\nBuilt " + Program.BuiltUtc.ToString("yyyy-MM-dd HH:mm") + " UTC")
+                + "\r\nChanges are listed in CHANGELOG.md.");
+            bottomBar.Controls.Add(version);
+
             var settings = new Button
             {
                 Text = "Settings",
@@ -1012,6 +1101,8 @@ namespace ABeautifulPotatoLauncher
             settings.FlatAppearance.BorderColor = Color.FromArgb(78, 78, 86);
             settings.Click += OnSettings;
             bottomBar.Controls.Add(settings);
+
+
 
             var donate = new Button
             {
@@ -5346,6 +5437,17 @@ namespace ABeautifulPotatoLauncher
 
                 FillModFindChoices(rules);
 
+                // ASK STEAM WHEN THESE WERE LAST PUBLISHED.
+                //
+                // Without it every staleness test silently answers "fine":
+                // StaleBy compares the workshop timestamp against the local
+                // meta.cpp, and with no workshop timestamp it has nothing to
+                // compare and returns zero. So the panel said "installed" for
+                // mods that were months behind, and the Info window left the
+                // "Workshop version" row out altogether - it only knew the
+                // number after a launch had fetched it.
+                PrefetchModTimes(rules);
+
                 _desc.Clear();
                 if (!string.IsNullOrEmpty(rules.Description))
                 {
@@ -5386,6 +5488,90 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>
+        /// Fetches publication times for this server's mods, off the UI thread,
+        /// and repaints the panel once they arrive.
+        ///
+        /// Only ids we have not already asked about - the answers are cached
+        /// for the session, so flicking between servers costs nothing after the
+        /// first look.
+        /// </summary>
+        private void PrefetchModTimes(ServerRules rules)
+        {
+            if (rules == null || rules.Mods == null) return;
+            if (_fetchingModTimes) return;          // one at a time
+
+            // ASKED, not ANSWERED.
+            //
+            // This used to select ids whose publication time was still unknown,
+            // which reads correctly and is a live lock: the fetch finishes, the
+            // panel repopulates, this runs again - and any id Steam did not
+            // answer for is STILL unknown, so it asks again, forever. The panel
+            // flashed continuously and the window could not be clicked.
+            //
+            // Steam has no time for an item it has only just been told about,
+            // which is why installing a mod by hand set it off every time.
+            //
+            // Remembering what was asked ends it: an id is requested once per
+            // session whether or not an answer ever comes back.
+            var want = rules.Mods
+                .Where(m => m != null && m.WorkshopId != 0)
+                .Select(m => m.WorkshopId)
+                .Where(id => !_modTimesAsked.Contains(id))
+                .Distinct()
+                .ToList();
+
+            if (want.Count == 0) return;
+
+            foreach (ulong id in want) _modTimesAsked.Add(id);
+
+            string forServer = _modsShownFor;
+            _fetchingModTimes = true;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    // Quietly: this runs on every server the player clicks, and
+                    // the launch path already narrates its own check.
+                    SteamWorkshop.PrefetchWorkshopTimes(want, null);
+                }
+                catch { }
+                finally { _fetchingModTimes = false; }
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        // Only if they are still looking at the same server -
+                        // otherwise this repaints somebody else's mod list.
+                        if (_closing || _modsShownFor != forServer) return;
+                        RepopulateModsFromCache();
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        /// <summary>
+        /// Workshop ids already requested this session. Membership means
+        /// "asked", not "answered" - see PrefetchModTimes for why that
+        /// distinction is the difference between working and looping.
+        /// </summary>
+        private readonly HashSet<ulong> _modTimesAsked = new HashSet<ulong>();
+
+        private volatile bool _fetchingModTimes;
+
+        /// <summary>
+        /// Forgets what has been asked, so the next panel populate checks
+        /// again. Used after installing a mod by hand, where Steam has just
+        /// learnt about an item it had no timestamp for.
+        /// </summary>
+        public void ForgetModTimeChecks()
+        {
+            _modTimesAsked.Clear();
+        }
+
+        /// <summary>
         /// Whether a mod matches what is being searched for in the panel.
         ///
         /// ANY of the terms, not all - a row is one mod and cannot be two
@@ -5409,6 +5595,167 @@ namespace ABeautifulPotatoLauncher
             }
             return false;
         }
+
+        /// <summary>
+        /// Whether a mod that passed the timestamp check still needs Steam's
+        /// word before joining.
+        ///
+        /// NO when the copy on disk was downloaded AFTER the workshop last
+        /// published - nothing newer can exist, so there is nothing to ask.
+        /// Measured: 862 of 880 installed mods are in that position.
+        ///
+        /// YES when the workshop moved after our download - which is exactly
+        /// a mod republished minutes ago, the case the day of timestamp slack
+        /// lets through - or when either date is unknown.
+        ///
+        /// This matters because Steam answers these one at a time, ~1.4 s
+        /// each: asking about every mod would stall a 76-mod server for well
+        /// over a minute, while asking only about the doubtful ones is about
+        /// two seconds.
+        /// </summary>
+        private static bool InDoubt(string steam, ulong id)
+        {
+            if (SteamWorkshop.IsConfirmedCurrent(id)) return false;
+
+            DateTime published = SteamWorkshop.WorkshopUpdated(id);
+            DateTime downloaded = SteamWorkshop.InstalledAt(steam, id);
+
+            if (published == DateTime.MinValue || downloaded == DateTime.MinValue) return true;
+
+            // More than five minutes out of step, the same line StaleBy draws.
+            return published - downloaded > SteamWorkshop.StaleTolerance;
+        }
+
+        /// <summary>
+        /// Asks Steam to bring every one of these mods up to date, and reports
+        /// which ones it actually had to fetch.
+        ///
+        /// HOW "ALREADY CURRENT" IS TOLD APART FROM "STARTING A DOWNLOAD"
+        ///   Steam flips an item to DownloadPending about 250 ms after the
+        ///   request, whether or not there is anything to fetch, then clears it
+        ///   about a second later when there is not. So an item only counts as
+        ///   settled once it has been through that and come back out - reading
+        ///   it straight away would see the pre-request "Installed" and wave
+        ///   it through. Anything still busy with bytes to transfer is a real
+        ///   update, and goes to the download window to be waited on.
+        ///
+        ///   Anything that has not settled by the deadline is treated as
+        ///   updating too. Joining with a mod that might be stale is the thing
+        ///   this exists to prevent, so the doubtful case errs towards waiting.
+        /// </summary>
+        private List<Mod> VerifyWithSteam(List<Mod> check)
+        {
+            var updating = new List<Mod>();
+            if (check == null || check.Count == 0) return updating;
+
+            Log("");
+            Log("Asking Steam to confirm " + check.Count + " mod(s) are the latest version...");
+
+            var cursor = Cursor;
+            Cursor = Cursors.WaitCursor;
+            _status.Text = "Checking your mods are the latest version...";
+            _status.Refresh();
+
+            try
+            {
+                foreach (var m in check) SteamWorkshop.ForceDownload(m.WorkshopId);
+
+                var pending = new List<Mod>(check);
+                var sawBusy = new HashSet<ulong>();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+
+                // Steam answers these ONE AT A TIME, ~1.4 s each, so a fixed
+                // deadline was wrong: with a dozen doubtful mods the later ones
+                // had not even been reached when it expired, and perfectly
+                // current mods were sent off to be "downloaded". The allowance
+                // grows with the list, up to a ceiling.
+                long deadline = Math.Min(VerifyCeilingMs, VerifyBaseMs + (long)check.Count * VerifyPerModMs);
+
+                while (pending.Count > 0 && clock.ElapsedMilliseconds < deadline)
+                {
+                    System.Threading.Thread.Sleep(250);
+                    SteamWorkshop.RunCallbacks();
+
+                    for (int i = pending.Count - 1; i >= 0; i--)
+                    {
+                        var m = pending[i];
+                        var state = SteamWorkshop.GetState(m.WorkshopId);
+
+                        bool busy = (state & (ItemState.DownloadPending | ItemState.Downloading
+                                              | ItemState.NeedsUpdate)) != 0;
+                        if (busy) sawBusy.Add(m.WorkshopId);
+
+                        long done, total;
+                        bool moving = SteamWorkshop.TryGetProgress(m.WorkshopId, out done, out total)
+                                      && total > 0;
+
+                        if (busy && moving)
+                        {
+                            // Bytes to fetch: there really was a newer version.
+                            Log(string.Format("  [UPDATE]   {0,-12} {1}  - Steam is fetching a newer version",
+                                              m.WorkshopId, m.Name));
+                            updating.Add(m);
+                            pending.RemoveAt(i);
+                            continue;
+                        }
+
+                        bool installed = (state & ItemState.Installed) != 0;
+                        bool settled = !busy && installed
+                                       && (sawBusy.Contains(m.WorkshopId)
+                                           || clock.ElapsedMilliseconds > QuietSettleMs);
+
+                        if (!settled) continue;
+
+                        Log(string.Format("  [current]  {0,-12} {1}", m.WorkshopId, m.Name));
+
+                        // Remember Steam's answer for this release, so a page
+                        // edit does not bring the mod back as "out of date"
+                        // on every connect.
+                        SteamWorkshop.ConfirmCurrent(m.WorkshopId);
+                        pending.RemoveAt(i);
+                    }
+                }
+
+                foreach (var m in pending)
+                {
+                    Log(string.Format("  [WAITING]  {0,-12} {1}  - Steam has not confirmed it; waiting for it",
+                                      m.WorkshopId, m.Name));
+                    updating.Add(m);
+                }
+
+                Log(updating.Count == 0
+                    ? "Steam confirms every mod is the latest version."
+                    : updating.Count + " mod(s) need fetching before joining.");
+            }
+            catch (Exception ex)
+            {
+                // Better to launch on the timestamp verdict than to refuse to
+                // launch at all because Steam hiccupped.
+                Log("  Could not confirm with Steam (" + ex.Message + ") - going by timestamps.");
+            }
+            finally
+            {
+                Cursor = cursor;
+            }
+
+            return updating;
+        }
+
+        /// <summary>
+        /// Time allowed for Steam's confirmation: a base, plus a share per mod
+        /// because Steam takes them in turn (~1.4 s each, measured), capped so
+        /// a Steam client that has stopped answering cannot hold Connect
+        /// hostage.
+        /// </summary>
+        private const int VerifyBaseMs = 4000;
+        private const int VerifyPerModMs = 2500;
+        private const int VerifyCeilingMs = 90000;
+
+        /// <summary>
+        /// If Steam never visibly flips an item to pending, it is taken as
+        /// current after this long rather than waiting out the full deadline.
+        /// </summary>
+        private const int QuietSettleMs = 3000;
 
         /// <summary>A time span in the largest unit that still reads naturally.</summary>
         private static string Age(TimeSpan t)
@@ -5733,6 +6080,11 @@ private void Launch(Row srv)
             // Anything missing OR out of date gets fetched before launching -
             // joining with a stale mod is a kick waiting to happen.
             var missing = new List<Mod>();
+
+            // Mods the timestamp check passed. They still get asked about - see
+            // VerifyWithSteam - because timestamps cannot see a same-day update.
+            var passed = new List<Mod>();
+
             foreach (var m in mods)
             {
                 // No point fetching something that has been turned off, or that
@@ -5786,14 +6138,45 @@ private void Launch(Row srv)
                 else if (!have) missing.Add(m);
                 else if (stale)
                 {
+                    // More than five minutes out of step. Steam is told to
+                    // update it - the same request VerifyWithSteam makes - and
+                    // it either fetches the newer files or confirms we already
+                    // have them. Going through the verifier rather than straight
+                    // to the download window matters for the second case: an
+                    // already-current mod transfers nothing, and a window
+                    // waiting for bytes that will never come would hang there.
                     TimeSpan behind = SteamWorkshop.StaleBy(steam, m.WorkshopId);
                     if (behind > TimeSpan.Zero)
-                        Log("            local copy is " + Age(behind) + " behind the workshop");
+                        Log("            local copy is " + Age(behind) + " behind the workshop - updating");
                     SteamWorkshop.Subscribe(m.WorkshopId);
-                    SteamWorkshop.ForceDownload(m.WorkshopId);
-                    missing.Add(m);
+                    passed.Add(m);
                 }
                 else if (inFlight) missing.Add(m);       // wait, do not re-request
+                else if (InDoubt(steam, m.WorkshopId)) passed.Add(m);
+            }
+
+            // THE LAST WORD GOES TO STEAM.
+            //
+            // Everything above is inference from timestamps, and timestamps
+            // have a blind spot this launcher's own author walked straight into:
+            // a mod republished at 04:47 and joined at 04:50 is three minutes
+            // behind, and the timestamp rule allows a day of slack - because
+            // the workshop's "updated" time also moves when only a description
+            // or a picture changes, and without the slack every such edit would
+            // force a re-download.
+            //
+            // Steam does not have that problem. It compares the content
+            // manifest it has against the one the workshop is serving, which
+            // changes only when the files do. Asking it costs ~1.4 s for the
+            // whole list at once and, measured, transfers nothing and rewrites
+            // nothing when the copy is already current. So every mod that
+            // passed above is handed to Steam, and anything Steam decides to
+            // fetch joins the download list below.
+            if (passed.Count > 0)
+            {
+                var updating = VerifyWithSteam(passed);
+                foreach (var m in updating)
+                    if (!missing.Contains(m)) missing.Add(m);
             }
 
             if (missing.Count > 0)

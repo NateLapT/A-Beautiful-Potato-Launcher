@@ -13,8 +13,17 @@
     <Product>A Beautiful Potato Launcher</Product>
     <AssemblyTitle>A Beautiful Potato Launcher</AssemblyTitle>
     <Company>A Beautiful Potato</Company>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
+    <!-- THE VERSION. Bump this when cutting a release, and move the
+         [Unreleased] section of CHANGELOG.md under the same number. -->
+    <Version>0.25</Version>
+    <!-- Windows needs four numeric parts here; 0.25 pads to 0.25.0.0. -->
+    <FileVersion>0.25.0.0</FileVersion>
+
+    <!-- The build time, appended to the informational version as
+         "0.25+20260921.0510" (UTC). The version number only changes on a
+         release, but test builds happen many times a day - this is what tells
+         two of them apart in the footer and in a pasted log. -->
+    <SourceRevisionId>$([System.DateTime]::UtcNow.ToString("yyyyMMdd.HHmm"))</SourceRevisionId>
     <Copyright>A Beautiful Potato</Copyright>
     <DebugType>none</DebugType>
     <!-- The reference screenshots live in assets\ too; they are documentation,

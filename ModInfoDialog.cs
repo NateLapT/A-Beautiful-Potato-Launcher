@@ -213,18 +213,68 @@ namespace ABeautifulPotatoLauncher
             // Two dates, because the interesting thing is the GAP between them:
             // when the copy on this disk was published, out of its own meta.cpp,
             // against what the workshop is serving now.
+            // THREE DATES, because two of them are not enough to tell the
+            // story and comparing the wrong pair gives the wrong answer.
+            //
+            //   meta.cpp    what the AUTHOR stamped inside the mod
+            //   downloaded  when Steam actually put this copy on disk
+            //   workshop    when Steam says the item was last published
+            //
+            // The honest test is "downloaded" against "workshop". The meta.cpp
+            // date is the author's own field and plenty of them never bump it
+            // when they republish - measured across 864 mods, seven had a
+            // meta.cpp months behind the workshop while the copy on disk had
+            // been downloaded AFTER the last publication. Those copies are
+            // current; only the label inside is old.
+            //
+            // Judging by meta.cpp alone marked all seven as needing an update,
+            // which is a re-download of something already correct.
             DateTime local = steamPath == null
                 ? DateTime.MinValue
                 : SteamWorkshop.LocalPublishTime(steamPath, mod.WorkshopId);
-            if (local > DateTime.MinValue)
-                add("Installed version", local.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm"));
 
-            // Cache only. Selecting the server already fetched this on a
-            // background thread; asking again here would run a network round
-            // trip on the UI thread and freeze the dialog open.
+            add("Version in meta.cpp", local > DateTime.MinValue
+                ? local.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm")
+                : installed ? "(no date inside this mod)" : "(not installed)");
+
+            DateTime onDisk = steamPath == null
+                ? DateTime.MinValue
+                : SteamWorkshop.InstalledAt(steamPath, mod.WorkshopId);
+
+            add("Downloaded", onDisk > DateTime.MinValue
+                ? onDisk.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm")
+                : "(unknown)");
+
+            // Cache only. Selecting the server fetches this on a background
+            // thread; asking again here would run a network round trip on the
+            // UI thread and freeze the dialog open.
             DateTime published = SteamWorkshop.WorkshopUpdated(mod.WorkshopId);
-            if (published > DateTime.MinValue)
-                add("Workshop version", published.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm"));
+
+            add("Workshop version", published > DateTime.MinValue
+                ? published.ToLocalTime().ToString("dddd d MMMM yyyy, HH:mm")
+                : "(not checked yet - Steam has not answered)");
+
+            // THE SAME FUNCTION THE PANEL AND THE LAUNCH USE.
+            //
+            // This row used to do its own subtraction, which is how the Info
+            // window could say "OUT OF DATE" while the panel showed green and
+            // joining repaired nothing. One verdict, one source.
+            if (published > DateTime.MinValue && steamPath != null)
+            {
+                TimeSpan lag = SteamWorkshop.StaleBy(steamPath, mod.WorkshopId);
+
+                string verdict;
+                if (lag > TimeSpan.Zero)
+                    verdict = "OUT OF DATE by " + Age(lag) + " - will update before joining";
+                else if (local > DateTime.MinValue
+                         && published - local > SteamWorkshop.StaleTolerance)
+                    verdict = "up to date - the copy on disk is newer than the workshop "
+                            + "release, only the version inside the mod is stale";
+                else
+                    verdict = "up to date";
+
+                add("Status of this copy", verdict);
+            }
 
             long size = installed ? SteamWorkshop.SizeOnDisk(steamPath, mod.WorkshopId) : 0;
             if (size > 0) add("File size", (size / 1048576.0).ToString("N1") + " MB");

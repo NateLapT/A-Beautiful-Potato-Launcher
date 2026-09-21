@@ -157,14 +157,21 @@ namespace ABeautifulPotatoLauncher
             unsub.Click += (s, e) => UnsubAll();
             top.Controls.Add(unsub);
 
+            var byId = MakeButton("INSTALL BY ID", new Rectangle(872, 6, 124, 25),
+                                  Color.FromArgb(55, 70, 55));
+            byId.Click += (s, e) => InstallById();
+            top.Controls.Add(byId);
+
             _bulkButtons.Add(_repairBad);
             _bulkButtons.Add(validate);
             _bulkButtons.Add(unsub);
+            _bulkButtons.Add(byId);
 
             var tips = new ToolTip { AutoPopDelay = 15000 };
             tips.SetToolTip(_repairBad, "Re-downloads every mod whose install never finished.");
             tips.SetToolTip(validate, "Asks Steam to re-check every installed mod. This takes a long time.");
             tips.SetToolTip(unsub, "Unsubscribes from EVERY DayZ mod and deletes them from disk.");
+            tips.SetToolTip(byId, "Installs a workshop item by its id, without hunting for it in Steam.");
 
             // ---- detail panel on the right ----
             _detail = new Panel { Dock = DockStyle.Right, Width = 330, BackColor = Panel, Padding = new Padding(10) };
@@ -756,6 +763,109 @@ namespace ABeautifulPotatoLauncher
         /// working copy, and repairing it would replace it with the workshop
         /// version - destroying local edits.
         /// </summary>
+        /// <summary>
+        /// Subscribes to a workshop item by id and downloads it.
+        ///
+        /// Subscribe FIRST. Asking Steam to download an item the account does
+        /// not own is a no-op that reports success, which looks exactly like a
+        /// download that finished instantly - and then the mod is not there.
+        /// </summary>
+        private void InstallById()
+        {
+            if (!EnsureSteam()) return;
+
+            ulong id = InstallByIdDialog.Ask(this);
+            if (id == 0) return;
+
+            // Confirm with Steam that this id is real before subscribing to it.
+            // Subscribing to a nonexistent item succeeds and downloads nothing,
+            // which is indistinguishable from a fast download of a small mod.
+            ulong resolved = SteamWorkshop.ResolveDownloadId(id, null);
+            if (resolved != id)
+            {
+                if (MessageBox.Show(this,
+                        "Steam has no item " + id + ", but " + resolved + " does exist."
+                        + "\r\n\r\nInstall " + resolved + " instead?",
+                        "Check the id", MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+                id = resolved;
+            }
+
+            // Already here? Say so rather than re-downloading it silently.
+            if (SteamWorkshop.IsInstalled(_steam, id))
+            {
+                var existing = _all.FirstOrDefault(m => m.WorkshopId == id);
+                string known = existing != null ? " (" + existing.Name + ")" : "";
+
+                if (MessageBox.Show(this,
+                        "Workshop item " + id + " is already installed" + known + "."
+                        + "\r\n\r\nDownload it again?",
+                        "Already installed", MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                {
+                    Select(id);
+                    return;
+                }
+            }
+
+            if (!SteamWorkshop.Subscribe(id))
+            {
+                MessageBox.Show(this,
+                    "Steam would not accept the subscription for " + id + "."
+                    + "\r\n\r\nCheck the id is right and that Steam is signed in.",
+                    "Could not subscribe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            SteamWorkshop.ForceDownload(id);
+
+            // The download window already knows how to wait on an item and show
+            // progress, so this reuses it rather than growing a second one.
+            using (var dl = new ModDownloadForm(_steam, _gameDir, new[] { new Mod("", id) }))
+            {
+                dl.ShowDialog(this);
+            }
+
+            // The folder is new, so every cached answer about it is wrong.
+            SteamWorkshop.ForgetItemPaths();
+            ModIndex.Invalidate();
+
+            // The main window remembers which workshop ids it has asked Steam
+            // about, and it will have asked about this one BEFORE the item
+            // existed - getting no answer. Clearing that lets the mod panel
+            // pick up the real publication date instead of treating the miss
+            // as final.
+            var main = Owner as MainForm;
+            if (main != null) main.ForgetModTimeChecks();
+
+            Rescan();
+
+            if (SteamWorkshop.IsInstalled(_steam, id))
+            {
+                Select(id);
+                _status.Text = "Installed workshop item " + id + ".";
+            }
+            else
+            {
+                _status.Text = "Workshop item " + id + " did not finish downloading.";
+            }
+        }
+
+        /// <summary>Highlights a mod in the list, if it is there.</summary>
+        private void Select(ulong id)
+        {
+            for (int i = 0; i < _shown.Count; i++)
+            {
+                if (_shown[i].WorkshopId != id) continue;
+
+                _list.SelectedIndices.Clear();
+                _list.SelectedIndices.Add(i);
+                try { _list.EnsureVisible(i); } catch { }
+                return;
+            }
+        }
+
         private void RepairCorrupted()
         {
             var bad = _all.Where(m => m.Status(_steam) == "Corrupt").ToList();

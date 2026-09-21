@@ -2,8 +2,8 @@
 
 All notable changes to A Beautiful Potato Launcher.
 
-**Every change goes in here.** Add an entry under `[Unreleased]` as part of the
-work, not afterwards — an undocumented change is the one nobody can explain in
+**Every change goes in here.** Add an entry under the top (current version)
+section as part of the work, not afterwards — an undocumented change is the one nobody can explain in
 six months.
 
 Format: newest first. Each entry says what changed and, where it matters, *why*
@@ -16,10 +16,25 @@ arbitrary until you know what they were measured against.
 
 ---
 
-## [Unreleased]
+## [0.25] — current build
 
 ### Added
+- **Version number in the footer**, just left of Settings: `v0.25 · 2026-09-21 05:09`.
+  Every build is stamped with its build time (the informational version reads
+  `0.25+20260921.0909`, UTC), because test builds happen many times a day at
+  the same version number and a bug report needs to say which one it came
+  from. The tooltip gives the UTC build time, and the log's "Launcher started"
+  line now records the version too. Version set to **0.25**. To move to the next
+  version, bump `<Version>` in the project file and start a new section above
+  this one.
 - **Changelog.** This file.
+- **Mod Manager: INSTALL BY ID.** Enter a workshop id and the mod is
+  subscribed and downloaded. Accepts a pasted workshop URL as well as a bare
+  number, since the id is usually arrived at by copying the link. Subscribes
+  *before* downloading — asking Steam to download an item the account does not
+  own is a no-op that reports success, which looks exactly like an instant
+  download of nothing. Reuses the existing download window for progress, drops
+  the path and index caches afterwards, and selects the new mod in the list.
 
 ### Changed
 - **The Browse dropdown carries the server list's colours** — Stable green,
@@ -38,6 +53,22 @@ arbitrary until you know what they were measured against.
   than at draw time, so searching "Miami" finds them. Only `MI` is expanded —
   the rest are unambiguous, and every expansion changes what a player sees.
   12 servers affected, country resolution unaffected.
+- **A mod more than 5 minutes out of step with the workshop is updated before
+  joining.** `StaleTolerance` went from a day to five minutes. The day existed
+  to absorb workshop *page* edits, which move the "updated" time without
+  changing any files; that job is now done by remembering Steam's own answer.
+  Once Steam confirms our copy is current for a given publication time it is
+  recorded in `steam-confirmed.tsv`, so a page edit does not bring the mod back
+  as "out of date" on every Connect — and the record lapses the moment the
+  author publishes again. Out-of-step mods go through Steam's check rather than
+  straight to the download window, because an already-current mod transfers
+  nothing and a window waiting for bytes would never finish. Measured: 3 of 880
+  installed mods sent to Steam on the first Connect (3.7 s, none needed
+  fetching), 0 on the second.
+- **Steam's confirmation allows time per mod.** Steam answers one at a time,
+  ~1.4 s each, so the fixed 15 s deadline could expire before later mods were
+  reached and send current ones to be downloaded. It is now 4 s + 2.5 s per
+  mod, capped at 90 s.
 
 ### Fixed
 - **Official servers showed the wrong country.** Bohemia's entire fleet sits in
@@ -47,6 +78,72 @@ arbitrary until you know what they were measured against.
   for these servers only; a community server's name is whatever its owner typed.
   **99 of 181 officials were being mislabelled.** Note the codes are cities:
   **MI is Miami**, not Michigan.
+- **Connect could join with a mod republished minutes earlier.** The timestamp
+  check allows a day of slack, because the workshop's "updated" time also moves
+  when only a description or image changes. A mod author republishing at 04:47
+  and joining at 04:50 sat inside that slack and was waved through. Connect now
+  has **Steam** confirm any mod in doubt: Steam compares the content manifest,
+  which moves only when the files do. Measured: asking about an already-current
+  mod settles in ~1.4 s and transfers **0 bytes, rewrites nothing**; anything
+  Steam decides to fetch joins the download window and is waited on before
+  launching. Steam answers these one at a time, so only doubtful mods are
+  asked — a copy downloaded *after* the workshop last published cannot be
+  behind, and that is 862 of 880 installed mods. Result: 1 of 5 mods asked on
+  the MotoX server, 1.5 s added to Connect. The same check confirmed two mods
+  the timestamp rule was flagging were metadata-edit false positives.
+- **Workshop ids ending in `0x02` were silently corrupted.**
+  `NormalizeWorkshopId` subtracted 2 from any id whose low byte was `0x02`, on
+  the theory that DayZ emits a stray tag shifting ids by +2. That broke one
+  workshop id in every 256 — `3805561602` ("Fill Direct From Pumps") was
+  reported as `3805561600`, which does not exist. Checked against Steam's
+  catalogue:
+
+  | id | exists | title |
+  |---|---|---|
+  | 3805561602 | yes | Fill Direct From Pumps |
+  | 3805561600 | no  | — |
+  | 1797720066 | no  | — |
+  | 1797720064 | yes | WindstridesClothingPack |
+
+  So the drift is real for *some* records and not others, and the number alone
+  cannot tell them apart — guessing corrupted good ids at the same rate it
+  fixed bad ones. The id is now taken exactly as the server sends it (the wire
+  bytes were verified by hand against a live packet), and the ambiguity is
+  resolved where it can actually be checked: `ResolveDownloadId` asks Steam's
+  catalogue before a download and only falls back to `id - 2` when the original
+  genuinely does not exist.
+- **The mod panel refreshed forever after installing a mod by id.** The
+  publication-time prefetch selected ids whose time was still *unknown*, which
+  reads correctly and is a live lock: the fetch finishes, the panel repopulates,
+  and any id Steam did not answer for is still unknown - so it asks again,
+  forever. The panel flashed continuously and the window could not be clicked.
+  A newly installed mod is exactly the case Steam has no time for, which is why
+  INSTALL BY ID set it off every time. Ids are now remembered as **asked**
+  rather than answered, so each is requested once per session; installing by
+  hand clears that list so the new mod still gets checked. Verified: 12
+  populates, 3 requests.
+- **The Mod Info window disagreed with the panel and with the launch check.**
+  Its "Difference" row did its own subtraction of meta.cpp against the workshop
+  date, while the panel and `Launch` use `StaleBy` — so Info could say OUT OF
+  DATE, the panel show green, and joining repair nothing. All three now call
+  `StaleBy`. **The panel was right:** in all 7 disagreements the copy had been
+  *downloaded after* the workshop last published; only the author's own
+  meta.cpp label was stale. Judging by meta.cpp alone would have re-downloaded
+  7 mods that were already correct. The window now shows all three dates —
+  meta.cpp, downloaded, workshop — and says so explicitly when the label is
+  behind but the copy is current.
+- **The mod panel never checked for updates.** `PrefetchWorkshopTimes` was only
+  called from the launch path, so outside a launch the workshop publication
+  dates were unknown — and `StaleBy` compares those against the local meta.cpp,
+  so with nothing to compare it returned "up to date" for everything. Measured:
+  0 of 60 mods had a known workshop date before the fetch, 60 of 60 after. The
+  panel now fetches them in the background when a server is selected and
+  repaints when they arrive.
+- **The Mod Info window hid the timestamps it could not fill.** "Workshop
+  version" was omitted entirely when Steam had not been asked — which looked
+  like the mod had no such date rather than like nobody had checked. Both rows
+  now always appear, with an explicit "(not checked yet)", plus a **Difference**
+  row spelling out the gap.
 - **The Region filter disagreed with the Country column.** `PassesRegion` read
   the address directly instead of the name-first rule, so US official servers
   showed `US` in the column while the Europe filter claimed them. There is now

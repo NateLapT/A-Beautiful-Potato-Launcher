@@ -729,6 +729,43 @@ namespace ABeautifulPotatoLauncher
 
         private static string ModListsFile { get { return Path.Combine(Dir, "server-mods.tsv"); } }
 
+        private static string ConfirmedFile { get { return Path.Combine(Dir, "steam-confirmed.tsv"); } }
+
+        /// <summary>
+        /// workshop id -> the publication time (UTC ticks) at which Steam last
+        /// confirmed our copy was current. See SteamWorkshop.ConfirmCurrent.
+        /// </summary>
+        public static Dictionary<ulong, long> LoadSteamConfirmed()
+        {
+            var result = new Dictionary<ulong, long>();
+            try
+            {
+                if (!File.Exists(ConfirmedFile)) return result;
+                foreach (string line in File.ReadAllLines(ConfirmedFile))
+                {
+                    var f = line.Split('\t');
+                    ulong id; long ticks;
+                    if (f.Length < 2 || !ulong.TryParse(f[0], out id) || !long.TryParse(f[1], out ticks))
+                        continue;
+                    result[id] = ticks;
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        public static void SaveSteamConfirmed(IDictionary<ulong, long> map)
+        {
+            if (map == null) return;
+            try
+            {
+                var sb = new StringBuilder();
+                foreach (var kv in map) sb.Append(kv.Key).Append('\t').Append(kv.Value).AppendLine();
+                File.WriteAllText(ConfirmedFile, sb.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
         /// <summary>endpoint -> the mod names that server asked for.</summary>
         public static Dictionary<string, List<string>> LoadServerMods()
         {
