@@ -1274,6 +1274,23 @@ namespace ABeautifulPotatoLauncher
             apply.Click += (s, e) => RunSteamSearch(true);
             searchArea.Controls.Add(apply);
 
+            // The disclaimer, to the right of SEARCH. Small and dim - it has to
+            // be present, not loud. On a narrow window it ends in "..." and the
+            // full text is in the tooltip.
+            var disclaimer = new Label
+            {
+                Text = Disclaimer,
+                AutoSize = false,
+                AutoEllipsis = true,
+                ForeColor = Color.FromArgb(125, 125, 133),
+                BackColor = Ink,
+                Font = new Font("Segoe UI", 7.25f),
+                TextAlign = ContentAlignment.MiddleLeft,
+                UseMnemonic = false
+            };
+            new ToolTip { AutoPopDelay = 20000 }.SetToolTip(disclaimer, Disclaimer);
+            searchArea.Controls.Add(disclaimer);
+
 
 
             EventHandler layoutSearch = (s, e) =>
@@ -1290,6 +1307,10 @@ namespace ABeautifulPotatoLauncher
                 _searchClear.Bounds = new Rectangle(startX + textWidth - 22, 6, 18, 19);
                 _filterToggle.Bounds = new Rectangle(buttonX, 4, 92, 25);
                 apply.Bounds = new Rectangle(buttonX + 92 + 8, 4, 92, 25);
+
+                int noteX = apply.Right + 14;
+                disclaimer.Bounds = new Rectangle(noteX, 1,
+                    Math.Max(0, searchArea.ClientSize.Width - noteX - 8), 31);
 
 
                 _searchClear.BringToFront();
@@ -1496,15 +1517,34 @@ namespace ABeautifulPotatoLauncher
             };
         }
 
+        /// <summary>
+        /// The launcher is unofficial, and says so wherever the DayZ name or
+        /// logo appears: beside the search bar, and on the DayZ logo itself.
+        /// One copy of the wording so the two can never drift apart.
+        /// </summary>
+        internal const string Disclaimer =
+            "A Beautiful Potato Launcher is an unofficial third-party launcher made by "
+            + "community members for the DayZ community.\r\n"
+            + "It is not endorsed by, affiliated with, or sponsored by Bohemia Interactive a.s. "
+            + "All trademarks are the property of their respective owners.";
+
         private void BuildRail(Panel rail)
         {
-            rail.Controls.Add(new PictureBox
+            var dayzLogo = new PictureBox
             {
                 Image = LoadImage("dayz_logo.png"),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 Bounds = new Rectangle(18, 14, 174, 74),
-                BackColor = Color.Transparent
-            });
+                BackColor = Color.Transparent,
+                AccessibleName = "DayZ",
+                AccessibleDescription = Disclaimer      // what a screen reader announces
+            };
+            rail.Controls.Add(dayzLogo);
+
+            // Hover text. AutoPopDelay raised because the default five seconds
+            // is not long enough to read two sentences.
+            new ToolTip { AutoPopDelay = 20000, InitialDelay = 300 }.SetToolTip(dayzLogo, Disclaimer);
+
             var potato = new PictureBox
             {
                 Image = LoadImage("logo_potato.png"),

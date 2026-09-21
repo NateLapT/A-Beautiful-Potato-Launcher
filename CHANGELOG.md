@@ -37,6 +37,15 @@ arbitrary until you know what they were measured against.
   the path and index caches afterwards, and selects the new mod in the list.
 
 ### Changed
+- **Unofficial-launcher disclaimer.** "A Beautiful Potato Launcher is an
+  unofficial third-party launcher made by community members for the DayZ
+  community. It is not endorsed by, affiliated with, or sponsored by Bohemia
+  Interactive a.s. All trademarks are the property of their respective
+  owners." Shown to the right of SEARCH, and as the hover text (and
+  screen-reader description) of the DayZ logo. One `Disclaimer` constant
+  feeds both so the wording cannot drift. Beside SEARCH it shows in full on
+  windows about 1,500 px wide or more; narrower, it ends in "..." and the
+  full text is in its tooltip.
 - **The Browse dropdown carries the server list's colours** — Stable green,
   Experimental orange, "All servers" plain. Owner-drawn, using the same values
   as the Game column so the two agree at a glance.
