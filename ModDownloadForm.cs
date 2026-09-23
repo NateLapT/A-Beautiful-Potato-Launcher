@@ -287,9 +287,22 @@ namespace ABeautifulPotatoLauncher
 
             if (!_usedApi)
             {
-                _hint.Text = "Steam is not reachable - opening the Workshop pages. "
-                           + "Click Subscribe on each; this window continues by itself.";
-                OpenAllPages();
+                // Say WHY Steam is out of reach when the reason is known.
+                // An elevated Steam refuses to talk to a normal program, and
+                // opening workshop pages will not help: the subscriptions
+                // would be made, but this window still cannot watch them.
+                string levels = Elevation.Short();
+                _hint.Text = levels
+                    ?? ("Steam is not reachable - opening the Workshop pages. "
+                        + "Click Subscribe on each; this window continues by itself.");
+
+                if (levels != null)
+                {
+                    log.Add(Elevation.Describe());
+                    MessageBox.Show(this, Elevation.Mismatch(), "Steam cannot be reached",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                else OpenAllPages();
             }
 
             _timer.Interval = 500;

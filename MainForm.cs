@@ -49,7 +49,10 @@ namespace ABeautifulPotatoLauncher
 {
     internal static class Program
     {
-        internal static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+        // Beside the exe when that is writable, otherwise LocalAppData. See
+        // AppPaths: an exe in Program Files cannot write next to itself, and
+        // that is what makes people think the launcher needs administrator.
+        internal static readonly string LogDirectory = AppPaths.Writable("logs");
         internal static readonly string LogFile = Path.Combine(LogDirectory, "launcher.log");
 
         /// <summary>The release number, eg. "1.0.0".</summary>
@@ -124,6 +127,8 @@ namespace ABeautifulPotatoLauncher
             {
                 File.AppendAllText(LogFile,
                     "[" + DateTime.Now.ToString("HH:mm:ss") + "] Launcher started - " + VersionLabel
+                    + Environment.NewLine
+                    + "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + Elevation.Describe()
                     + Environment.NewLine);
             }
             catch { }
@@ -2747,10 +2752,23 @@ namespace ABeautifulPotatoLauncher
                 _steamReady = SteamServerList.TryInit(gameDir, Log);
                 if (!_steamReady)
                 {
-                    _status.Text = "Steam is not running, so the master server list is unavailable.";
+                    // "Is Steam running?" is the wrong question when Steam is
+                    // running as administrator and we are not: Windows will not
+                    // let the two talk, and no amount of restarting Steam helps
+                    // until the levels match. See Elevation.
+                    string mismatch = Elevation.Mismatch();
+                    Log(Elevation.Describe());
+
+                    _status.Text = mismatch != null
+                        ? "Steam and the launcher are not running at the same level - see the message."
+                        : "Steam is not running, so the master server list is unavailable.";
+
                     MessageBox.Show(
-                        "The community browser needs Steam running.\r\n\r\nStart Steam, then press REFRESH.",
-                        "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        mismatch ?? ("The community browser needs Steam running."
+                                     + Environment.NewLine + Environment.NewLine
+                                     + "Start Steam, then press REFRESH."),
+                        mismatch != null ? "Steam cannot be reached" : "Steam not available",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
             }
@@ -5683,13 +5701,36 @@ namespace ABeautifulPotatoLauncher
         ///   updating too. Joining with a mod that might be stale is the thing
         ///   this exists to prevent, so the doubtful case errs towards waiting.
         /// </summary>
-        private List<Mod> VerifyWithSteam(List<Mod> check)
+        private List<Mod> VerifyWithSteam(List<Mod> check, string gameDir)
         {
             var updating = new List<Mod>();
             if (check == null || check.Count == 0) return updating;
 
             Log("");
             Log("Asking Steam to confirm " + check.Count + " mod(s) are the latest version...");
+
+            // NO STEAM, NO VERDICT.
+            //
+            // This used to go straight to asking, and everything below reads
+            // silence as "still updating" - so when the Steam API was not
+            // connected, every request went nowhere, nothing ever settled, and
+            // all of them came back [WAITING] and were sent to the download
+            // window. Mods that were perfectly up to date, downloaded again,
+            // and a join that could not finish.
+            //
+            // The API is only connected once something has asked for it, and
+            // a player who presses CONNECT without ever pressing REFRESH has
+            // asked for nothing. So it is initialised here, and if it will not
+            // come up the timestamps - which have already passed every mod in
+            // this list - are left to stand.
+            if (!SteamWorkshop.TryInit(gameDir, Log))
+            {
+                Log("  Steam could not be asked, so the timestamps stand: all "
+                    + check.Count + " mod(s) look current, and the join goes ahead.");
+                string levels = Elevation.Short();
+                if (levels != null) Log("  " + levels);
+                return updating;
+            }
 
             var cursor = Cursor;
             Cursor = Cursors.WaitCursor;
@@ -5979,8 +6020,10 @@ namespace ABeautifulPotatoLauncher
                 : (FindGameDir(steam, A2S.ExperimentalAppId) ?? FindGameDir(steam, A2S.StableAppId));
             if (gameDir == null || !SteamWorkshop.TryInit(gameDir, Log))
             {
-                MessageBox.Show("Steam is not available, so mods cannot be changed from here.",
-                                "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                string why = Elevation.Mismatch();
+                MessageBox.Show(why ?? "Steam is not available, so mods cannot be changed from here.",
+                                why != null ? "Steam cannot be reached" : "Steam not available",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -6054,6 +6097,17 @@ private void Launch(Row srv)
                 return;
             }
 
+            // ELEVATION IS RECORDED, NOT ENFORCED.
+            //
+            // A launcher running normally against an elevated Steam can still
+            // reach the Steam API - measured, with Steam started as
+            // administrator: the browser connected and ISteamUGC bound. So
+            // this does not refuse to launch. What it does do is put the state
+            // in the log, because when a join DOES fail - the game refusing to
+            // start, or a download that never arrives - this is the first
+            // thing worth knowing, and the player cannot be asked afterwards.
+            Log(Elevation.Describe());
+
             string steam = FindSteam();
             if (steam == null) throw new Exception("Could not find Steam.");
             Log("Steam : " + steam);
@@ -6074,10 +6128,14 @@ private void Launch(Row srv)
             if (gameDir == null)
             {
                 string[] wanted = live.AppId == A2S.StableAppId ? StableFolders : ExpFolders;
-                throw new Exception("This server runs " + live.GameLabel +
-                                    ", but that build is not installed.\r\n\r\nLooked for: " +
-                                    string.Join(", ", wanted) + "\r\nunder " +
-                                    Path.Combine(steam, "steamapps", "common"));
+                var looked = SteamLibraries.All(steam)
+                    .Select(r => Path.Combine(r, "steamapps", "common"))
+                    .ToArray();
+                throw new Exception("This server runs " + live.GameLabel
+                    + ", but that build is not installed." + Environment.NewLine + Environment.NewLine
+                    + "Looked for: " + string.Join(", ", wanted) + Environment.NewLine
+                    + "in:" + Environment.NewLine + "  "
+                    + string.Join(Environment.NewLine + "  ", looked));
             }
             Log("Game  : " + gameDir);
 
@@ -6214,7 +6272,7 @@ private void Launch(Row srv)
             // fetch joins the download list below.
             if (passed.Count > 0)
             {
-                var updating = VerifyWithSteam(passed);
+                var updating = VerifyWithSteam(passed, gameDir);
                 foreach (var m in updating)
                     if (!missing.Contains(m)) missing.Add(m);
             }
@@ -6330,6 +6388,50 @@ private void Launch(Row srv)
                 throw new Exception(BeExe + " not found in:\r\n" + gameDir +
                                     "\r\n\r\nWithout it BattlEye cannot attach and the server will kick you.");
 
+            // CAN THIS USER ACTUALLY RUN THESE FILES?
+            //
+            // The launcher starts DayZ_BE.exe, and BattlEye in turn starts
+            // DayZ_x64.exe. When the second one is refused, the box the player
+            // sees comes from BattlEye, not from here - "Windows cannot access
+            // the specified device, path, or file", titled with the path to
+            // DayZ_x64.exe - and it looks like a broken installation. It is
+            // usually permissions: files an elevated Steam wrote that the
+            // player's own account cannot read. Checking first means the
+            // launcher gets to explain it instead.
+            foreach (string exe in new[] { bePath, Path.Combine(gameDir, GameExe) })
+            {
+                if (CanRead(exe)) continue;
+
+                string advice = Elevation.Mismatch();
+                throw new Exception(
+                    "Windows will not let your account run:" + Environment.NewLine + Environment.NewLine
+                    + exe + Environment.NewLine + Environment.NewLine
+                    + (advice ?? ("The file is there, but reading it is refused." + Environment.NewLine
+                        + Environment.NewLine
+                        + "Usually one of:" + Environment.NewLine
+                        + "  - anti-virus has quarantined or locked it," + Environment.NewLine
+                        + "  - the game was installed by a Steam running as administrator, so the "
+                        + "files belong to that account. In Steam: DayZ - Properties - Installed "
+                        + "Files - Verify integrity of game files, with Steam started normally.")));
+            }
+
+            // WILL THE GAME BE ABLE TO SEE STEAM?
+            //
+            // DayZ asks SteamAPI_IsSteamRunning() the moment it starts, and
+            // when the answer is no it shows its own box - "Unable to locate a
+            // running instance of Steam" - which says nothing about why and
+            // which the launcher cannot reword, because it belongs to the
+            // game. Asking the same question here, through the same dll the
+            // game will load, means the player gets the reason instead of the
+            // riddle, and gets it before anything is started.
+            if (SteamWorkshop.IsSteamRunning(gameDir) == false)
+            {
+                Log("Steam API: SteamAPI_IsSteamRunning() says no - the game would refuse to start.");
+                Log(Elevation.Describe());
+
+                if (!OfferElevation()) return;     // the player chose to fix it properly
+            }
+
             string full = BeArgs + " -exe " + GameExe + " " + string.Join(" ", args.ToArray());
             Log("");
             Log("Launching through " + BeExe + " so BattlEye attaches:");
@@ -6393,7 +6495,29 @@ private void Launch(Row srv)
             // player counts and refreshing the list for anyone who keeps the
             // launcher open beside the game - which is most of the point of
             // having one.
-            Process.Start(psi);
+            try
+            {
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                // "Windows cannot access the specified device, path, or file"
+                // is what this looks like on the player's screen, and it names
+                // the game exe, so it reads as a broken installation.
+                Log("ERROR: Windows would not start " + psi.FileName + " - " + ex.Message);
+
+                string advice = Elevation.Mismatch();
+                throw new Exception(
+                    "Windows would not start the game:" + Environment.NewLine + Environment.NewLine
+                    + psi.FileName + Environment.NewLine + Environment.NewLine
+                    + (advice ?? ("Windows said: " + ex.Message + Environment.NewLine + Environment.NewLine
+                        + "Usually one of:" + Environment.NewLine
+                        + "  - anti-virus is blocking DayZ_x64.exe," + Environment.NewLine
+                        + "  - the game files were installed by an elevated Steam and your own "
+                        + "account cannot run them - Steam - DayZ - Properties - Installed Files - "
+                        + "Verify integrity puts that right," + Environment.NewLine
+                        + "  - the game folder is on a drive that is no longer attached.")));
+            }
 
             // Remember which mods this server actually used, so the Mod
             // Manager can show when each was last needed. Written now rather
@@ -6404,6 +6528,108 @@ private void Launch(Row srv)
             Log("");
             Log("Started. DayZ takes a minute or two to appear - be patient.");
             _status.Text = "Launched " + srv.Endpoint;
+        }
+
+        /// <summary>
+        /// The game cannot see Steam. Explains why - almost always Steam
+        /// running as administrator while the launcher does not - and offers
+        /// the two ways out.
+        ///
+        /// THE RIGHT FIX IS TO CLOSE STEAM AND START IT NORMALLY, because
+        /// files an elevated Steam writes belong to the administrator account
+        /// and keep causing this. But that is a lot to ask of someone who just
+        /// wants to play, so matching Steam is offered too: the launcher
+        /// restarts elevated, and the game it starts inherits that.
+        ///
+        /// Returns false when nothing should be launched now - either the
+        /// player is going to restart Steam, or the launcher is on its way to
+        /// restarting itself.
+        /// </summary>
+        private bool OfferElevation()
+        {
+            string why = Elevation.Mismatch();
+
+            string text =
+                "DayZ will not start: it cannot see Steam." + Environment.NewLine + Environment.NewLine
+                + (why ?? ("Steam is running, but the game is not being allowed to reach it."
+                           + Environment.NewLine + Environment.NewLine
+                           + "This is almost always because Steam is running as administrator "
+                           + "while the game is not."))
+                + Environment.NewLine + Environment.NewLine
+                + "YES - restart this launcher as administrator, so it matches Steam. The game "
+                + "will start elevated too. Quickest, but everything it downloads keeps "
+                + "belonging to the administrator account." + Environment.NewLine + Environment.NewLine
+                + "NO - leave it. Close Steam completely, start it normally, then press CONNECT "
+                + "again. This is the fix that lasts.";
+
+            var answer = MessageBox.Show(this, text, "The game cannot see Steam",
+                                         MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                                         MessageBoxDefaultButton.Button2);
+
+            if (answer != DialogResult.Yes)
+            {
+                Log("Not launching: the player is restarting Steam normally.");
+                _status.Text = "Close Steam, start it without \"Run as administrator\", then press CONNECT.";
+                return false;
+            }
+
+            if (RestartElevated()) return false;    // this instance is closing
+
+            MessageBox.Show(this,
+                "The launcher was not given administrator rights, so nothing has changed."
+                + Environment.NewLine + Environment.NewLine
+                + "Close Steam completely and start it normally instead - that fixes this "
+                + "without any elevation at all.",
+                "Not restarted", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
+
+        /// <summary>
+        /// Starts a second copy of the launcher elevated and closes this one.
+        /// False when Windows refused or the player dismissed the UAC prompt,
+        /// in which case this instance carries on as it was.
+        /// </summary>
+        private bool RestartElevated()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(Application.ExecutablePath)
+                {
+                    UseShellExecute = true,          // required for the runas verb
+                    Verb = "runas",
+                    WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory
+                };
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                // 1223 is "the operation was cancelled by the user" - the UAC
+                // prompt was dismissed. Anything else is worth the log line.
+                Log("Could not restart as administrator: " + ex.Message);
+                return false;
+            }
+
+            Log("Restarting as administrator to match Steam.");
+            BeginInvoke((Action)Close);
+            return true;
+        }
+
+        /// <summary>
+        /// Whether this account can actually read a file - opened for real
+        /// rather than inferred from the ACL, because a deny can come from
+        /// ownership, from anti-virus or from the file being on a drive that
+        /// has gone away, and only opening it covers all three.
+        /// </summary>
+        private static bool CanRead(string path)
+        {
+            try
+            {
+                using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    return true;
+            }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (IOException) { return false; }
+            catch { return true; }   // anything else is not ours to diagnose
         }
 
         /// <summary>
@@ -6627,11 +6853,33 @@ private static ServerRules QueryModsChecked(Row row)
         /// </summary>
         private static string FindSteam()
         {
+            // Resolving this walks libraryfolders.vdf and touches the disk, and
+            // it is asked for on every selection, every refresh and every
+            // launch. Libraries do not move while the launcher is open, so the
+            // answer is kept for half a minute.
+            if (_steamAnswer != null && (DateTime.UtcNow - _steamAskedAt).TotalSeconds < 30)
+                return _steamAnswer;
+
             string found = FindSteamRaw();
             if (string.IsNullOrEmpty(found)) return found;
-            try { return System.IO.Path.GetFullPath(found); }
-            catch { return found; }
+            try { found = System.IO.Path.GetFullPath(found); }
+            catch { }
+
+            // THE LIBRARY WITH THE GAME IN IT, which is not necessarily where
+            // Steam itself lives. A player with DayZ on a second drive has an
+            // empty steamapps\common under the main install, and the launcher
+            // used to report the game as not installed. Workshop content sits
+            // in the same library as the game, so this fixes the mod folders
+            // too.
+            found = SteamLibraries.WithDayZ(found, StableFolders.Concat(ExpFolders));
+
+            _steamAnswer = found;
+            _steamAskedAt = DateTime.UtcNow;
+            return found;
         }
+
+        private static string _steamAnswer;
+        private static DateTime _steamAskedAt;
 
         private static string FindSteamRaw()
         {
@@ -6639,24 +6887,49 @@ private static ServerRules QueryModsChecked(Row row)
             {
                 using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam"))
                 {
-                    if (key != null) return key.GetValue("SteamPath") as string;
+                    var path = key == null ? null : key.GetValue("SteamPath") as string;
+                    if (!string.IsNullOrWhiteSpace(path)) return path;
                 }
             }
             catch { }
+
+            // HKCU is written when Steam runs as the logged-in user. It is
+            // missing if Steam has been installed but never started, and it is
+            // the WRONG hive when the launcher is started as a different
+            // administrator account - one more way "run as administrator"
+            // makes things worse rather than better. The machine-wide key is
+            // the fallback; reading it needs no elevation either.
+            foreach (string where in new[] { @"Software\Valve\Steam", @"Software\Wow6432Node\Valve\Steam" })
+            {
+                try
+                {
+                    using (var key = Registry.LocalMachine.OpenSubKey(where))
+                    {
+                        var path = key == null ? null : key.GetValue("InstallPath") as string;
+                        if (!string.IsNullOrWhiteSpace(path)) return path;
+                    }
+                }
+                catch { }
+            }
             return null;
         }
 
         private static string FindGameDir(string steamPath, ulong appId)
         {
             if (string.IsNullOrEmpty(steamPath)) return null;
-            string apps = Path.Combine(steamPath, "steamapps", "common");
             string[] targets = appId == A2S.ExperimentalAppId ? ExpFolders : StableFolders;
 
-            foreach (var t in targets)
+            // Every library, not only the main install - see SteamLibraries.
+            // Stable and Experimental can easily sit on different drives.
+            foreach (string root in SteamLibraries.All(steamPath))
             {
-                string candidate = Path.Combine(apps, t);
-                if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, GameExe)))
-                    return candidate;
+                string apps = Path.Combine(root, "steamapps", "common");
+                foreach (var t in targets)
+                {
+                    string candidate = Path.Combine(apps, t);
+                    if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, GameExe)))
+                        return candidate;
+                }
             }
             return null;
         }

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -15,12 +15,12 @@
     <Company>A Beautiful Potato</Company>
     <!-- THE VERSION. Bump this when cutting a release, and move the
          [Unreleased] section of CHANGELOG.md under the same number. -->
-    <Version>0.4</Version>
-    <!-- Windows needs four numeric parts here; 0.25 pads to 0.25.0.0. -->
-    <FileVersion>0.4.0.0</FileVersion>
+    <Version>0.3</Version>
+    <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
+    <FileVersion>0.3.0.0</FileVersion>
 
     <!-- The build time, appended to the informational version as
-         "0.25+20260921.0510" (UTC). The version number only changes on a
+         "0.3+20260921.0510" (UTC). The version number only changes on a
          release, but test builds happen many times a day - this is what tells
          two of them apart in the footer and in a pasted log. -->
     <SourceRevisionId>$([System.DateTime]::UtcNow.ToString("yyyyMMdd.HHmm"))</SourceRevisionId>

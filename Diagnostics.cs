@@ -33,11 +33,11 @@ namespace ABeautifulPotatoLauncher
         {
             get
             {
-                string beside = Path.Combine(
-                    Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".",
-                    "serverdata");
-                Directory.CreateDirectory(beside);
-                return beside;
+                // AppPaths keeps this beside the exe when that folder can
+                // actually be written to, and moves it under LocalAppData when
+                // it cannot - an exe in Program Files, say. Making it
+                // unconditionally beside the exe used to throw here.
+                return AppPaths.Writable("serverdata");
             }
         }
 

@@ -4,6 +4,7 @@
 # let back in below - git will not re-include anything inside a directory it has
 # excluded outright, so the trailing-slash form makes the exception impossible.
 assets/*
+source/
 
 # ...except the IP -> country table, which is an embedded resource. Without it
 # the build fails on a fresh clone. 1.4 MB, rebuilt by tools/build-ip-table.ps1.

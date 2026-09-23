@@ -16,7 +16,112 @@ arbitrary until you know what they were measured against.
 
 ---
 
-## [0.25] — current build
+## [0.3] — current build (pre-release)
+
+### Fixed
+
+- **The launcher no longer re-downloads perfectly good mods when it cannot
+  reach Steam.** Seen in a real log: a player restarted the launcher as
+  administrator, pressed CONNECT without pressing REFRESH first, and all seven
+  of the server's mods - every one of them already `[ok]` on the timestamp
+  check - came back `[WAITING]` and were sent to the download window, which
+  then failed. The Steam API is only initialised when something asks for it,
+  and pressing CONNECT straight after starting the launcher asks for nothing;
+  the verification step then read its own silence as "still updating" for every
+  mod. It now initialises Steam itself, and when Steam cannot be reached it
+  says so and lets the timestamps stand - they had already passed every mod in
+  the list - so the join goes ahead instead of stalling behind a download that
+  was never needed.
+- **The game is found on any Steam library drive, so the launcher no longer
+  needs to be "run as administrator".** It looked for DayZ in exactly one
+  place, `<SteamPath>\steamapps\common`, so anyone whose DayZ sits on a second
+  drive was told the build was not installed - and since the workshop folder
+  was derived from the same root, their mods read as missing too. Steam's
+  `steamapps\libraryfolders.vdf` is now read (see `SteamLibraries.cs`) and every
+  library is searched; the Steam path the rest of the launcher works from is
+  the library that actually holds the game. The vdf is world-readable, so no
+  elevation is involved. Running elevated never fixed this - it only appeared
+  to, because an elevated run usually coincided with other things working.
+  When the build really is absent, the error now lists every folder searched.
+- **Steam's location is also read from the machine-wide registry key** when the
+  per-user one is missing - Steam installed but never started - or when it
+  belongs to a different account, which is exactly what happens when someone
+  right-clicks "Run as administrator" and enters another user's credentials.
+  Both keys are readable without elevation.
+- **The logs and `serverdata` folders fall back to
+  `%LOCALAPPDATA%\A Beautiful Potato Launcher`** when the folder holding the
+  executable cannot be written to - the launcher dropped into `Program Files`,
+  typically. Both used to be created beside the exe unconditionally: the log
+  silently vanished (so "send me your log" produced nothing) and the
+  diagnostics dump threw. Beside the exe is still preferred and still used
+  wherever it works, tested by writing a file rather than by trusting
+  `CreateDirectory`. See `AppPaths.cs`.
+
+### Added
+
+- **"Unable to locate a running instance of Steam" is caught before the game
+  shows it, and explained.** That box is DayZ's own - `DayZ_x64.exe` calls
+  `SteamAPI_IsSteamRunning()` on startup and puts up its own message when the
+  answer is no - so its wording cannot be changed from here. The launcher now
+  asks the same export, through the same `steam_api64.dll` the game will load,
+  before starting anything. **Reproduced and measured:** with Steam started as
+  administrator and the launcher not, `SteamAPI_IsSteamRunning()` returns
+  false - even though `SteamAPI_Init` in the launcher itself still succeeds,
+  which is why the browser works while the game refuses to start.
+- **A choice when that happens, instead of a dead end.** The launcher explains
+  the cause and offers both ways out: *No* - close Steam and start it normally,
+  the fix that lasts, which is what the status bar then says; or *Yes* -
+  restart the launcher as administrator so it matches Steam, with the game
+  inheriting that. The second is quicker and the dialog says what it costs
+  (everything downloaded keeps belonging to the administrator account). "Close
+  Steam and start it normally" is the default button. A dismissed UAC prompt
+  changes nothing and says so.
+- **The launcher tells the player when Steam is running as administrator, and
+  to close it and start it normally.** Reported from the wild: with Steam
+  elevated, launching fails with a Windows box titled with the path to
+  `DayZ_x64.exe` - *"Windows cannot access the specified device, path, or
+  file"* - and mod downloads fail too. Everything an elevated Steam writes, the
+  game and every mod, belongs to the administrator account, and the player's
+  own account can then be refused when it tries to run or update those files.
+  `Elevation.cs` reads both processes' tokens, the advice names the fix (close
+  Steam, start it without "Run as administrator", and Verify Integrity if the
+  files are already owned wrongly), and every log records
+  `Elevation: launcher normal, Steam ADMINISTRATOR`. The reverse - elevated
+  launcher, normal Steam - is called out too, since it leaves
+  administrator-owned files in the player's own mod folders. Detection needs no
+  elevation itself.
+- **A join checks the game can actually be run before starting it.** The
+  Windows box above comes from BattlEye, which starts `DayZ_x64.exe` after the
+  launcher starts `DayZ_BE.exe`, so the launcher never saw the failure and
+  could not explain it. Both executables are now opened for reading first; if
+  either is refused, the launcher says so itself, with the elevation advice
+  when that fits and the ordinary causes (anti-virus, files owned by an
+  elevated install, a drive that has gone away) when it does not.
+
+### Measured
+
+- **A launcher running normally CAN still reach an elevated Steam.** Tested
+  with Steam started as administrator: `SteamAPI_Init` succeeded, ISteamUGC
+  bound and the server browser connected. So an elevation mismatch is recorded
+  in the log and explained when something else fails - it does not block a
+  join, which was the first shape this took and would have stopped players who
+  were working fine.
+
+### Changed
+
+- **Unofficial-launcher disclaimer.** "A Beautiful Potato Launcher is an
+  unofficial third-party launcher made by community members for the DayZ
+  community. It is not endorsed by, affiliated with, or sponsored by Bohemia
+  Interactive a.s. All trademarks are the property of their respective
+  owners." Shown to the right of SEARCH, and as the hover text (and
+  screen-reader description) of the DayZ logo. One `Disclaimer` constant
+  feeds both so the wording cannot drift. Beside SEARCH it shows in full on
+  windows about 1,500 px wide or more; narrower, it ends in "..." and the
+  full text is in its tooltip.
+
+---
+
+## [0.25] — published
 
 ### Added
 - **Version number in the footer**, just left of Settings: `v0.25 · 2026-09-21 05:09`.
@@ -37,15 +142,6 @@ arbitrary until you know what they were measured against.
   the path and index caches afterwards, and selects the new mod in the list.
 
 ### Changed
-- **Unofficial-launcher disclaimer.** "A Beautiful Potato Launcher is an
-  unofficial third-party launcher made by community members for the DayZ
-  community. It is not endorsed by, affiliated with, or sponsored by Bohemia
-  Interactive a.s. All trademarks are the property of their respective
-  owners." Shown to the right of SEARCH, and as the hover text (and
-  screen-reader description) of the DayZ logo. One `Disclaimer` constant
-  feeds both so the wording cannot drift. Beside SEARCH it shows in full on
-  windows about 1,500 px wide or more; narrower, it ends in "..." and the
-  full text is in its tooltip.
 - **The Browse dropdown carries the server list's colours** — Stable green,
   Experimental orange, "All servers" plain. Owner-drawn, using the same values
   as the Game column so the two agree at a glance.
@@ -80,6 +176,9 @@ arbitrary until you know what they were measured against.
   mod, capped at 90 s.
 
 ### Fixed
+
+
+
 - **Official servers showed the wrong country.** Bohemia's entire fleet sits in
   RIPE blocks registered to Germany and Luxembourg, so the registry table filed
   New York, Miami, Sao Paulo and Sydney servers under DE/LU. Their names carry

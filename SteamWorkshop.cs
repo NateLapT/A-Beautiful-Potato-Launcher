@@ -757,7 +757,10 @@ namespace ABeautifulPotatoLauncher
                 var init = Bind<InitFn>("SteamAPI_Init");
                 if (init == null || !init())
                 {
-                    log("Steam API: SteamAPI_Init failed - is Steam running?");
+                    // Name the elevation mismatch here too: this is the line
+                    // that ends up in a player's log, and "is Steam running?"
+                    // reads as nonsense to someone looking straight at Steam.
+                    log("Steam API: SteamAPI_Init failed - is Steam running?  " + Elevation.Describe());
                     return false;
                 }
 
@@ -815,6 +818,43 @@ namespace ABeautifulPotatoLauncher
                 log("Steam API unavailable: " + ex.Message);
                 return false;
             }
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate bool IsRunningFn();
+
+        /// <summary>
+        /// THE EXACT QUESTION THE GAME ASKS.
+        ///
+        /// DayZ_x64.exe calls SteamAPI_IsSteamRunning() on startup and, when it
+        /// comes back false, shows its own box - "Unable to locate a running
+        /// instance of Steam" - which the launcher cannot reword because it is
+        /// not ours. So the same export is called here, through the same
+        /// steam_api64.dll the game will load, BEFORE the game is started.
+        /// Then the launcher gets to explain it instead, while the player is
+        /// still looking at the launcher.
+        ///
+        /// Null when the answer cannot be had at all: no game folder, no dll,
+        /// or an export that is no longer there. Null means "do not claim
+        /// anything", never "broken".
+        /// </summary>
+        public static bool? IsSteamRunning(string gameDir)
+        {
+            try
+            {
+                if (_lib == IntPtr.Zero)
+                {
+                    if (string.IsNullOrEmpty(gameDir)) return null;
+                    string dll = Path.Combine(gameDir, "steam_api64.dll");
+                    if (!File.Exists(dll)) return null;
+                    _lib = LoadLibrary(dll);
+                    if (_lib == IntPtr.Zero) return null;
+                }
+
+                var running = Bind<IsRunningFn>("SteamAPI_IsSteamRunning");
+                return running == null ? (bool?)null : running();
+            }
+            catch { return null; }
         }
 
         private static T Bind<T>(string export) where T : class
