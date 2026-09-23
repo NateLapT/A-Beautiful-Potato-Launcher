@@ -338,6 +338,53 @@ namespace ABeautifulPotatoLauncher
             return roots;
         }
 
+        /// <summary>
+        /// How far below an extra mods folder to look. A player's folder is
+        /// usually mods\@Thing, but a working tree is just as often
+        /// P:\Published\COT\@COT_dzpmtest - so one level is not enough and
+        /// unlimited is a good way to walk into a source tree and stay there.
+        /// </summary>
+        private const int MaxDepth = 4;
+
+        /// <summary>
+        /// Every mod folder at or below this one.
+        ///
+        /// A folder counts as a mod when it is named @Something, or when it
+        /// holds an addons folder or a manifest. Those are not descended into:
+        /// a mod's own addons folder holds no further mods, and stopping there
+        /// keeps this cheap.
+        /// </summary>
+        private static List<string> ModFolders(string root, int depth)
+        {
+            var found = new List<string>();
+            if (depth < 0) return found;
+
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(root); }
+            catch { return found; }          // unreadable folder: not an error here
+
+            foreach (string dir in dirs)
+            {
+                if (IsModFolder(dir)) found.Add(dir);
+                else found.AddRange(ModFolders(dir, depth - 1));
+            }
+            return found;
+        }
+
+        private static bool IsModFolder(string dir)
+        {
+            string leaf = Path.GetFileName(dir) ?? "";
+            if (leaf.StartsWith("@", StringComparison.Ordinal)) return true;
+
+            try
+            {
+                return Directory.Exists(Path.Combine(dir, "addons"))
+                    || File.Exists(Path.Combine(dir, "meta.cpp"))
+                    || File.Exists(Path.Combine(dir, "mod.cpp"));
+            }
+            catch { return false; }
+        }
+
         // -------------------------------------------------------- fast pass --
 
         /// <summary>
@@ -354,10 +401,18 @@ namespace ABeautifulPotatoLauncher
             lock (Lock) { _lastSteamPath = steamPath; _scanned = true; }
             var found = new Dictionary<string, ModEntry>();
 
+            string workshop = string.IsNullOrEmpty(steamPath)
+                ? null : SteamWorkshop.WorkshopRoot(steamPath);
+
             foreach (string root in Roots(steamPath))
             {
+                // Steam's own folder is one flat level of numbered folders, and
+                // walking into those would be pointless work. Anywhere the
+                // player has pointed us is searched properly - see ModFolders.
+                bool deep = !string.Equals(root, workshop, StringComparison.OrdinalIgnoreCase);
+
                 string[] dirs;
-                try { dirs = Directory.GetDirectories(root); }
+                try { dirs = deep ? ModFolders(root, MaxDepth).ToArray() : Directory.GetDirectories(root); }
                 catch { continue; }
 
                 foreach (string dir in dirs)

@@ -193,6 +193,35 @@ namespace ABeautifulPotatoLauncher
         public static bool Available { get { return _mm != IntPtr.Zero && _request != null; } }
 
         /// <summary>
+        /// Drops everything bound to the Steam session, so the next TryInit
+        /// binds it again. Called when the session is being re-opened under a
+        /// different app id (see SteamWorkshop.SwitchApp): the matchmaking
+        /// interface pointer belongs to the old session and reading it
+        /// afterwards is reading freed memory.
+        ///
+        /// The forged response object is deliberately NOT freed. Steam may
+        /// still hold a pointer to it from a query that has not finished
+        /// unwinding, and a few dozen bytes left behind is a far better bargain
+        /// than a callback into memory that has been handed back.
+        /// </summary>
+        public static void Forget()
+        {
+            Stop();          // release the in-flight query while its interface is still valid
+
+            _mm = IntPtr.Zero;
+            _request = null;
+            _requestRecent = null;
+            _requestFriends = null;
+            _requestFavourites = null;
+            _requestLan = null;
+            _count = null;
+            _details = null;
+            _refreshing = null;
+            _cancel = null;
+            _release = null;
+        }
+
+        /// <summary>
         /// Binds ISteamMatchmakingServers. SteamWorkshop.TryInit must have run
         /// first - it is what loads steam_api64.dll and calls SteamAPI_Init.
         /// </summary>
@@ -401,7 +430,10 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static void Stop()
         {
-            if (_active != IntPtr.Zero)
+            // _mm is checked as well as _active: these are calls THROUGH the
+            // matchmaking interface, and making them once the session behind
+            // it has gone is an access violation, not a caught exception.
+            if (_active != IntPtr.Zero && _mm != IntPtr.Zero)
             {
                 try { if (_cancel != null) _cancel(_mm, _active); } catch { }
                 try { if (_release != null) _release(_mm, _active); } catch { }

@@ -877,7 +877,11 @@ namespace ABeautifulPotatoLauncher
 
         public MainForm()
         {
-            Text = "A Beautiful Potato Launcher";
+            // Elevation belongs in the title bar: it changes who owns every
+            // file the launcher and the game write from here on, and it is not
+            // otherwise visible at a glance.
+            Text = "A Beautiful Potato Launcher"
+                 + (Elevation.Self ? "   (elevated User: Administrator)" : "");
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(1180, 800);
             MinimumSize = new Size(1020, 680);
@@ -2620,6 +2624,14 @@ namespace ABeautifulPotatoLauncher
 
             it.BackColor = band;
             for (int i = 0; i < it.SubItems.Count; i++) it.SubItems[i].BackColor = band;
+
+            // A launch is settling. The rows go dark grey to say "not now" -
+            // last, so it overrides every colour set above, and text only: the
+            // banding and the panel behind it are left exactly as they were.
+            if (InLaunchCooldown)
+                for (int i = 0; i < it.SubItems.Count; i++)
+                    it.SubItems[i].ForeColor = RowQuiet;
+
             return it;
         }
 
@@ -5723,7 +5735,7 @@ namespace ABeautifulPotatoLauncher
             // asked for nothing. So it is initialised here, and if it will not
             // come up the timestamps - which have already passed every mod in
             // this list - are left to stand.
-            if (!SteamWorkshop.TryInit(gameDir, Log))
+            if (!SteamWorkshop.EnsureWorkshopApp(gameDir, Log))
             {
                 Log("  Steam could not be asked, so the timestamps stand: all "
                     + check.Count + " mod(s) look current, and the join goes ahead.");
@@ -5870,12 +5882,20 @@ namespace ABeautifulPotatoLauncher
             // nothing to download and nothing to be out of date against.
             if (m.IsLocal)
             {
-                var found = ModIndex.FindLocalByName(m.BareName, steam);
+                // A folder the player pointed at earlier outranks the search:
+                // they have already answered this question once.
+                var chosen = ModOverrides.For(m);
+                string picked = chosen == null ? null : chosen.Folder;
+                bool havePicked = !string.IsNullOrEmpty(picked) && Directory.Exists(picked);
+
+                var found = havePicked ? null : ModIndex.FindLocalByName(m.BareName, steam);
                 var localRow = new ListViewItem(new[]
                 {
                     m.Name,
                     "Local",
-                    found != null ? "installed (local)" : "NOT FOUND in your mod folders",
+                    havePicked ? "installed (you found it)"
+                               : found != null ? "installed (local)"
+                                               : "NOT FOUND - click to say where it is",
                     // Blank, not greyed-out words: Steam has no item here to
                     // repair, subscribe to or remove, so offering the words at
                     // all only invites a click that can do nothing.
@@ -5884,13 +5904,16 @@ namespace ABeautifulPotatoLauncher
                 {
                     Tag = m,
                     UseItemStyleForSubItems = false,
-                    ToolTipText = found != null
-                        ? "Loaded from " + found.Folder
-                        : "This server loads a mod from its own disk. You need a folder called @"
-                          + m.BareName + " in your mod folders."
+                    ToolTipText = havePicked
+                        ? "Loaded from " + picked
+                        : found != null
+                            ? "Loaded from " + found.Folder
+                            : "This server loads a mod from its own disk. Click this row to point "
+                              + "at the @" + m.BareName + " folder, or add the folder that holds it "
+                              + "under Settings - Additional mods folder."
                 };
 
-                Color lc = found != null ? Good : Color.FromArgb(230, 130, 130);
+                Color lc = (found != null || havePicked) ? Good : Color.FromArgb(230, 130, 130);
                 localRow.SubItems[MColName].ForeColor = lc;
                 localRow.SubItems[MColId].ForeColor = Color.FromArgb(150, 150, 158);
                 localRow.SubItems[MColStatus].ForeColor = lc;
@@ -5989,6 +6012,38 @@ namespace ABeautifulPotatoLauncher
 
         private int _downloadWatchTicks;
 
+        /// <summary>
+        /// Asks where a local mod lives and remembers the answer against that
+        /// mod, so it is asked once rather than on every join. Returns the
+        /// folder, or null if the player skipped.
+        ///
+        /// The answer is kept as an ordinary mod override - the same mechanism
+        /// that lets a player point a workshop mod at their own build - so
+        /// nothing new has to understand it: the command line already prefers
+        /// an override folder over anything the search found.
+        /// </summary>
+        private string LocateLocalMod(Mod mod)
+        {
+            if (mod == null) return null;
+
+            var existing = ModOverrides.For(mod);
+            string start = existing != null && !string.IsNullOrEmpty(existing.Folder)
+                ? existing.Folder
+                : ServerStore.LoadExtraModPath();
+
+            string folder = FindModDialog.Ask(this, "@" + mod.BareName, start);
+            if (folder == null) return null;
+
+            ModOverrides.Set(mod, new ModOverride { Enabled = true, Folder = folder });
+            Log("Local mod @" + mod.BareName + " will be loaded from " + folder);
+
+            // The panel is showing the old verdict, and the index may well be
+            // able to see this folder now that it has been named.
+            ModIndex.Invalidate();
+            ShowMods(true);
+            return folder;
+        }
+
         private void OnModClick(object sender, MouseEventArgs e)
         {
             var hit = _mods.HitTest(e.Location);
@@ -6005,6 +6060,16 @@ namespace ABeautifulPotatoLauncher
             {
                 // Reads local files, so it works even with Steam shut.
                 ModInfoDialog.Show(this, mod, FindSteam());
+                return;
+            }
+
+            // A local mod the launcher could not find is the one case where
+            // clicking the status is worth something: it asks where the mod is
+            // and remembers the answer. Everything else on this row acts on a
+            // workshop item, which a local mod does not have.
+            if (mod.IsLocal && col == MColStatus)
+            {
+                LocateLocalMod(mod);
                 return;
             }
 
@@ -6062,8 +6127,83 @@ namespace ABeautifulPotatoLauncher
         }
 
         // ---------------------------------------------------- connections ----
+        /// <summary>
+        /// How long a launch is left alone before another one is allowed.
+        /// Twenty seconds: by then DayZ's own window is on its way up, so a
+        /// player can see for themselves that something is happening and has
+        /// no reason to click again.
+        /// </summary>
+        private static readonly TimeSpan LaunchCooldown = TimeSpan.FromSeconds(20);
+
+        /// <summary>Row text while a launch is settling: dark grey, still legible.</summary>
+        private static readonly Color RowQuiet = Color.FromArgb(88, 88, 94);
+
+        private DateTime _launchQuietUntil = DateTime.MinValue;
+        private System.Windows.Forms.Timer _cooldownTimer;
+
+        private bool InLaunchCooldown { get { return DateTime.UtcNow < _launchQuietUntil; } }
+
+        /// <summary>
+        /// Starts the quiet period after a launch: CONNECT goes dead, the
+        /// server list is greyed so it neither invites nor accepts a click,
+        /// and both come back by themselves.
+        /// </summary>
+        private void BeginLaunchCooldown()
+        {
+            _launchQuietUntil = DateTime.UtcNow + LaunchCooldown;
+
+            _connect.Enabled = false;
+            _connect.Text = "STARTING...";
+
+            // The rows are drawn dark grey while this lasts - see BuildItem.
+            // The list itself is left alone: disabling it changed the whole
+            // panel's colouring, and the double-click it would have blocked is
+            // already refused at the door in OnConnect.
+            _list.Invalidate();
+
+            if (_cooldownTimer == null)
+            {
+                _cooldownTimer = new System.Windows.Forms.Timer { Interval = 500 };
+                _cooldownTimer.Tick += (s, e) => { if (!InLaunchCooldown) EndLaunchCooldown(); };
+            }
+            _cooldownTimer.Start();
+        }
+
+        /// <summary>
+        /// Gives the list and the button back. Called by the clock, and
+        /// straight away when a launch is cancelled - somebody who has just
+        /// cancelled is entitled to pick a different server immediately.
+        /// </summary>
+        private void EndLaunchCooldown()
+        {
+            _launchQuietUntil = DateTime.MinValue;
+            if (_cooldownTimer != null) _cooldownTimer.Stop();
+
+            _connect.Text = "CONNECT";
+            _connect.Enabled = true;
+            _list.Invalidate();             // back to their normal colours
+        }
+
         private void OnConnect(object sender, EventArgs e)
         {
+            // ONE LAUNCH AT A TIME.
+            //
+            // A double-click on the list launches, and so does CONNECT, and
+            // for the first few seconds nothing on screen has changed yet - so
+            // an impatient second click started a SECOND copy of DayZ. That is
+            // worse than it sounds: BattlEye's launcher is still waiting, and
+            // when the first game is closed it starts the game AGAIN.
+            //
+            // Refused silently, on purpose. A dialog here would be one more
+            // thing to click away from someone who is already clicking too
+            // fast, and the launch they asked for is happening regardless.
+            if (InLaunchCooldown)
+            {
+                Log("Ignoring a second launch - one is already starting. "
+                    + "Press CANCEL on the starting window to stop it.");
+                return;
+            }
+
             var row = SelectedRow;
             if (row == null) { MessageBox.Show("Pick a server first."); return; }
 
@@ -6078,7 +6218,9 @@ namespace ABeautifulPotatoLauncher
             }
             finally
             {
-                _connect.Enabled = true;
+                // Not while a launch is settling: the cooldown owns the button
+                // until it ends, and re-enabling here would undo it.
+                if (!InLaunchCooldown) _connect.Enabled = true;
                 Cursor = Cursors.Default;
             }
         }
@@ -6329,11 +6471,23 @@ private void Launch(Row srv)
                     var found = ModIndex.FindLocalByName(m.BareName, steam);
                     if (found == null)
                     {
-                        Log("  [MISSING] " + m.Name + " - not in your mod folders, skipping.");
-                        continue;
+                        // Ask, rather than skip and let the server kick them for
+                        // a mod they do have, just not where the launcher looked.
+                        Log("  [MISSING] " + m.Name + " - not in your mod folders; asking where it is.");
+                        string given = LocateLocalMod(m);
+                        if (given == null)
+                        {
+                            Log("  [SKIPPED] " + m.Name + " - not found, and no folder given.");
+                            continue;
+                        }
+                        source = given;
+                        Log("  [FOUND]   " + m.Name + " -> " + source);
                     }
-                    source = found.Folder;
-                    Log("  [local]   " + m.Name + " -> " + source);
+                    else
+                    {
+                        source = found.Folder;
+                        Log("  [local]   " + m.Name + " -> " + source);
+                    }
                 }
                 else
                 {
@@ -6377,8 +6531,22 @@ private void Launch(Row srv)
                 Log("Password supplied.");
             }
 
+            // A NAME, ALWAYS, AND NEVER "SURVIVOR".
+            //
+            // DayZ takes the name only from the command line, and with none it
+            // calls the player Survivor - as it does everyone else who never
+            // set one. Asked once, on the first join that has no name, and
+            // remembered from then on. Pressing OK with the box empty is a
+            // real answer: it means "you pick".
             string playerName = _name.Text.Trim();
-            if (playerName.Length > 0) args.Add("\"-name=" + playerName + "\"");
+            if (playerName.Length == 0 || NameDialog.IsDefault(playerName))
+            {
+                playerName = NameDialog.Ask(this);
+                _name.Text = playerName;
+                ServerStore.SaveName(playerName);
+                Log("Player name set to " + playerName + " - saved for next time.");
+            }
+            args.Add("\"-name=" + playerName + "\"");
 
             args.Add("-nolauncher");
             args.Add("-world=empty");
@@ -6495,9 +6663,10 @@ private void Launch(Row srv)
             // player counts and refreshing the list for anyone who keeps the
             // launcher open beside the game - which is most of the point of
             // having one.
+            Process started;
             try
             {
-                Process.Start(psi);
+                started = Process.Start(psi);
             }
             catch (Exception ex)
             {
@@ -6519,11 +6688,56 @@ private void Launch(Row srv)
                         + "  - the game folder is on a drive that is no longer attached.")));
             }
 
+            // ONE GAME RUNNING, NOT TWO.
+            //
+            // The launcher's Steam session claims DayZ (221100), because that
+            // is the only way to reach the workshop. Join Experimental and the
+            // game announces 1024020 while the launcher is still announcing
+            // 221100, so Steam shows both as running and adds play time to
+            // both for as long as the launcher is open. The session is moved
+            // onto the build actually being played; it moves back to 221100 by
+            // itself the next time anything needs the workshop.
+            if (live.AppId == A2S.ExperimentalAppId || SteamWorkshop.SessionApp != SteamWorkshop.DayZAppId)
+            {
+                Log("");
+                Log("Moving the launcher's Steam session onto " + live.GameLabel
+                    + " so Steam does not count both builds as running.");
+                SteamWorkshop.SwitchApp((uint)live.AppId, gameDir, Log);
+
+                // NOTHING ON SCREEN SHOULD CHANGE.
+                //
+                // Only the Steam session is re-opened - the launcher itself
+                // never closes, the window does not flicker and no work is
+                // lost. The one thing a player could notice is the browser
+                // going quiet, because its matchmaking interface belonged to
+                // the session that just ended. So it is bound again right
+                // here rather than waiting for the next REFRESH; by the time
+                // the game window appears, live player counts are already
+                // working off the new session.
+                _steamReady = SteamServerList.TryInit(gameDir, Log);
+                if (!_steamReady)
+                    Log("The browser will reconnect to Steam on the next REFRESH.");
+            }
+
             // Remember which mods this server actually used, so the Mod
             // Manager can show when each was last needed. Written now rather
             // than on exit: the launcher is often closed while the game runs.
             try { ModIndex.MarkLoaded(mods.Select(m => m.WorkshopId)); }
             catch { }
+
+            // SAY IT WHERE IT WILL BE SEEN.
+            //
+            // The log line below is the whole of what the launcher used to
+            // tell anyone, and the log panel is small and easy to miss - so
+            // players took the silence for failure and pressed CONNECT again.
+            // Shown modeless: the launcher stays usable behind it, and it
+            // closes itself when the game's process appears.
+            // The list and CONNECT go quiet now, not when Launch returns -
+            // the seconds being guarded against are the ones right here.
+            BeginLaunchCooldown();
+
+            var waiting = new LaunchingForm(srv.Name, GameExe, started, Log, EndLaunchCooldown);
+            waiting.Show(this);
 
             Log("");
             Log("Started. DayZ takes a minute or two to appear - be patient.");
@@ -6965,7 +7179,7 @@ private static ServerRules QueryModsChecked(Row row)
         /// The disk fallback stays for running out of a source tree, where the
         /// folder does exist beside the build.
         /// </summary>
-        private static Image LoadImage(string file)
+        internal static Image LoadImage(string file)
         {
             try
             {

@@ -15,9 +15,9 @@
     <Company>A Beautiful Potato</Company>
     <!-- THE VERSION. Bump this when cutting a release, and move the
          [Unreleased] section of CHANGELOG.md under the same number. -->
-    <Version>0.3</Version>
+    <Version>0.5</Version>
     <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
-    <FileVersion>0.3.0.0</FileVersion>
+    <FileVersion>0.5.0.0</FileVersion>
 
     <!-- The build time, appended to the informational version as
          "0.3+20260921.0510" (UTC). The version number only changes on a

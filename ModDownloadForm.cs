@@ -276,7 +276,7 @@ namespace ABeautifulPotatoLauncher
         private void OnShown(object sender, EventArgs e)
         {
             var log = new List<string>();
-            _usedApi = SteamWorkshop.TryInit(_gameDir, log.Add);
+            _usedApi = SteamWorkshop.EnsureWorkshopApp(_gameDir, log.Add);
 
             if (_usedApi)
             {

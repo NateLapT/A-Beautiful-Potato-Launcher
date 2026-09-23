@@ -707,6 +707,17 @@ namespace ABeautifulPotatoLauncher
         private static IntPtr _utils = IntPtr.Zero;
         private static bool _initialised;
 
+        /// <summary>
+        /// The app this launcher's own Steam session is claiming to be.
+        ///
+        /// It starts as DayZ (221100) because that is the app that owns the
+        /// workshop content - there is no other way to subscribe to a mod.
+        /// It moves to Experimental once an Experimental server has been
+        /// joined, so that Steam is not told two different DayZ apps are
+        /// running at once. See SwitchApp.
+        /// </summary>
+        private static uint _sessionApp = DayZAppId;
+
         private static CreateDetailsQueryFn _createDetails;
         private static SendQueryFn _sendQuery;
         private static GetQueryResultFn _queryResult;
@@ -723,6 +734,79 @@ namespace ABeautifulPotatoLauncher
         private static InstallInfoFn _installInfo;
 
         public static bool Available { get { return _initialised && _ugc != IntPtr.Zero; } }
+
+        /// <summary>The app id this launcher's Steam session currently claims.</summary>
+        public static uint SessionApp { get { return _sessionApp; } }
+
+        /// <summary>
+        /// Re-opens the Steam session as a different app.
+        ///
+        /// WHY: the launcher has to claim DayZ (221100) to reach the workshop,
+        /// and it deliberately keeps that session open while it runs. Join an
+        /// Experimental server and the game announces itself as 1024020 while
+        /// the launcher is still announcing 221100 - so Steam sees both DayZ
+        /// and DayZ Experimental running, and adds play time to both. Moving
+        /// the launcher's session onto the app the player is actually playing
+        /// leaves one game running, which is the truth.
+        ///
+        /// There is no way to change the id of a live session, so it is shut
+        /// down and opened again. Everything bound to the old session dies
+        /// with it, which is why every delegate is dropped here and the server
+        /// browser is told to forget its interface pointer - using either
+        /// afterwards would be reading freed memory.
+        /// </summary>
+        public static bool SwitchApp(uint appId, string gameDir, Action<string> log)
+        {
+            if (_sessionApp == appId && _initialised) return Available;
+
+            // ORDER MATTERS, AND GETTING IT WRONG KILLS THE PROCESS.
+            //
+            // The browser has to let go of its query and its interface BEFORE
+            // the session is shut down. Doing it the other way round means
+            // cancelling and releasing a query through an interface whose
+            // session no longer exists - a native access violation, which
+            // .NET does not turn into an exception: the launcher simply
+            // vanished, mid-line, with no crash entry in the log.
+            //
+            // It survived every test until a REFRESH happened to be in flight,
+            // because with no query active there was nothing to release.
+            SteamServerList.Forget();
+
+            if (_initialised)
+            {
+                try { if (_shutdown != null) _shutdown(); }
+                catch { }
+                log("Steam API: closing the session as app " + _sessionApp + ".");
+            }
+
+            _initialised = false;
+            _ugc = IntPtr.Zero;
+            _utils = IntPtr.Zero;
+            _shutdown = null; _runCallbacks = null;
+            _subscribe = null; _unsubscribe = null; _getState = null;
+            _download = null; _downloadInfo = null; _installInfo = null;
+            _createDetails = null; _sendQuery = null; _queryResult = null;
+            _releaseQuery = null; _callDone = null;
+
+            _sessionApp = appId;
+
+            bool ok = TryInit(gameDir, log);
+            log(ok ? "Steam API: session re-opened as app " + appId + "."
+                   : "Steam API: could not re-open the session as app " + appId + ".");
+            return ok;
+        }
+
+        /// <summary>
+        /// Puts the session back on DayZ (221100) if it has been moved. Every
+        /// workshop operation needs this: the mods belong to 221100, whichever
+        /// build is being played.
+        /// </summary>
+        public static bool EnsureWorkshopApp(string gameDir, Action<string> log)
+        {
+            return _sessionApp == DayZAppId && _initialised
+                ? TryInit(gameDir, log)
+                : SwitchApp(DayZAppId, gameDir, log);
+        }
 
         /// <summary>
         /// Loads DayZ's own steam_api64.dll and initialises the Steam API as
@@ -743,9 +827,10 @@ namespace ABeautifulPotatoLauncher
                 }
 
                 // SteamAPI_Init reads these, so they must be set BEFORE it runs.
-                // 221100 is DayZ - the app that owns the workshop content.
-                Environment.SetEnvironmentVariable("SteamAppId", DayZAppId.ToString());
-                Environment.SetEnvironmentVariable("SteamGameId", DayZAppId.ToString());
+                // 221100 is DayZ - the app that owns the workshop content - and
+                // that is where a session starts, but it can be moved later.
+                Environment.SetEnvironmentVariable("SteamAppId", _sessionApp.ToString());
+                Environment.SetEnvironmentVariable("SteamGameId", _sessionApp.ToString());
 
                 _lib = LoadLibrary(dll);
                 if (_lib == IntPtr.Zero)

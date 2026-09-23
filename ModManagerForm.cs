@@ -716,7 +716,7 @@ namespace ABeautifulPotatoLauncher
         {
             var m = _selected;
             if (m == null) return;
-            if (!SteamWorkshop.TryInit(_gameDir, s => { }))
+            if (!SteamWorkshop.EnsureWorkshopApp(_gameDir, s => { }))
             {
                 MessageBox.Show("Steam is not available, so mods cannot be changed from here.",
                                 "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -740,7 +740,7 @@ namespace ABeautifulPotatoLauncher
                     "Remove mod", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
 
-            if (!SteamWorkshop.TryInit(_gameDir, s => { }))
+            if (!SteamWorkshop.EnsureWorkshopApp(_gameDir, s => { }))
             {
                 MessageBox.Show("Steam is not available, so mods cannot be changed from here.",
                                 "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1023,7 +1023,7 @@ namespace ABeautifulPotatoLauncher
         /// <summary>Steam has to be reachable before any of this can work.</summary>
         private bool EnsureSteam()
         {
-            if (SteamWorkshop.TryInit(_gameDir, s => { })) return true;
+            if (SteamWorkshop.EnsureWorkshopApp(_gameDir, s => { })) return true;
             MessageBox.Show(this, "Steam is not available, so mods cannot be changed from here.",
                             "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return false;

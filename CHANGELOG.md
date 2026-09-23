@@ -20,6 +20,90 @@ arbitrary until you know what they were measured against.
 
 ### Fixed
 
+- **A server could be launched twice by clicking too fast.** Double-clicking a
+  row launches, and so does CONNECT, and for the first few seconds nothing on
+  screen has changed - so an impatient second click started a second copy of
+  DayZ. The damage outlives the mistake: BattlEye's launcher is still waiting
+  on the second one, so closing the first game makes it start the game AGAIN.
+  A launch now buys twenty seconds of quiet. Another launch in that window is
+  refused **silently** - a dialog would be one more thing to click away from
+  someone already clicking too fast, and the launch they asked for is happening
+  anyway - with the reason written to the log. CONNECT reads "STARTING..." and
+  the server rows are drawn dark grey to say "not now". Only the text: the row
+  banding and the panel behind it are untouched, and the list stays live so it
+  can still be scrolled - the double-click it would otherwise have swallowed is
+  already refused at the door. Twenty seconds because DayZ's own window is on
+  its way up by then. Pressing CANCEL ends the quiet period immediately:
+  somebody who has just cancelled is entitled to pick another server at once.
+  Tested on the real members: quiet for a measured 20.0 s, CONNECT disabled
+  throughout and restored by itself, row text 88,88,94 during and 220,220,220
+  after with the background unchanged at 30,30,34, and cancel clearing it
+  early.
+- **Cancel could not catch the game in time, and DayZ loaded anyway.** It
+  killed once, at the instant it was pressed - but the launcher starts
+  BattlEye's launcher, BattlEye starts the game and exits, and the gap between
+  those is seconds long. Press Cancel in that gap and there is nothing running
+  under either name to kill, so nothing was, and DayZ carried on loading.
+  Cancel now arms a watch rather than firing once: whatever is running is
+  killed immediately, and anything that appears afterwards is killed as it
+  appears, for up to two minutes. The window stays up saying "Cancelling..."
+  while it waits - closing it while DayZ was still coming up would have been a
+  lie - and changes to "Stopped." once it has caught the game, then closes.
+  Tested against the exact race, with a stand-in process: Cancel pressed with
+  nothing running, the process started three seconds later, killed by the
+  watch, "DayZ was stopped." logged and the window closed itself.
+- **The additional mods folder is searched properly, not one level deep.** It
+  only ever listed the folders directly inside it, so a mod kept the way a
+  working tree keeps them - `P:\Published\COT\@COT_dzpmtest` - was invisible,
+  and every server asking for it said "NOT FOUND in your mod folders" while the
+  mod sat on disk. It now walks up to four levels down, taking any folder
+  named `@Something` or holding an `addons` folder or a manifest, and does not
+  descend into a mod it has already found. Steam's own workshop folder is still
+  read flat, since it is one level of numbered folders and walking into them
+  would be wasted work. Measured on a real tree: 37 mods under `P:\Published`,
+  including the three nested under `COT\` and `Testing\`, and nothing from
+  inside any mod's `addons`.
+- **The launcher vanished when joining a server** - no window, no error, the
+  log stopping mid-sequence at "closing the session as app 221100" with no
+  crash entry after it. The app-id switch tore the Steam session down and only
+  then told the browser to let go of its query, so cancelling and releasing
+  that query went through an interface whose session no longer existed. That is
+  an access violation, and .NET Framework does not turn those into exceptions -
+  the process is simply gone, which is why nothing was written to the log or
+  to the crash handler. It survived every test until a REFRESH happened to be
+  in flight, because with no query active there was nothing to release. The
+  browser now lets go BEFORE the session closes, and `Stop` checks the
+  interface pointer as well as the query handle. Proved both ways against a
+  live Steam client with a query genuinely in flight (10,000 servers, not yet
+  done): the old order dies with `AccessViolationException` in
+  `SteamServerList.Stop`, the new one completes the whole cycle - switch,
+  rebind, new query returning 187 Experimental servers, and back to 221100.
+- **The Hide button on the starting window was clipped along its top edge.**
+  The note above it was 34 px high where the text needed 26, and the extra
+  reached down over the button - a label added before a control sits on top of
+  it in WinForms z-order, so it painted over the button's top edge. The note is
+  now sized to its text, and on the Beautiful Potato version the button sits
+  level with the potato instead of stranded below it.
+- **Steam no longer counts play time for both DayZ builds at once.** The
+  launcher has to claim DayZ (221100) for its own Steam session, because that
+  is the only way to reach the workshop, and it keeps that session open on
+  purpose - the browser needs it. Join an Experimental server and the game
+  announces itself as 1024020 while the launcher is still announcing 221100,
+  so Steam sees DayZ *and* DayZ Experimental running and adds time to both for
+  as long as the launcher is open. Once the game is started, the launcher's
+  session now moves onto the build actually being played, leaving one game
+  running. A session's app id cannot be changed, so it is closed and re-opened
+  (`SteamWorkshop.SwitchApp`): every delegate bound to the old session is
+  dropped and the server browser is told to forget its interface pointer, which
+  belonged to the session that just ended - and a new one is bound in the same
+  breath, so the player sees nothing: the launcher never closes, the window
+  does not flicker, and live player counts keep working without anyone
+  pressing REFRESH. Anything that touches the workshop - verifying,
+  downloading, the Mod Manager - calls `EnsureWorkshopApp` first, which moves
+  the session back to 221100, because mods belong to 221100 whichever build is
+  played. Verified in one process against a live Steam client: browser
+  connected, session re-opened as 1024020, browser rebound, session back to
+  221100, browser still connected.
 - **The launcher no longer re-downloads perfectly good mods when it cannot
   reach Steam.** Seen in a real log: a player restarted the launcher as
   administrator, pressed CONNECT without pressing REFRESH first, and all seven
@@ -59,6 +143,62 @@ arbitrary until you know what they were measured against.
 
 ### Added
 
+- **A red Cancel button on the starting window**, beside Hide. DayZ takes a
+  minute or two to appear, and until now a wrong server or a change of mind
+  during that minute meant waiting for the game to finish loading just to quit
+  it. Cancel kills what the launcher started - BattlEye's launcher - and the
+  game itself if BattlEye has got that far. It is deliberately a stronger red
+  than the muted one the other dialogs use for "no thanks", because it stops
+  something already under way and must not be mistaken for Hide, which only
+  gets the window out of the way. Esc still hides rather than cancels. Once the
+  game is up the button disappears: the window is about to close itself, and a
+  button that kills a running game is not what anyone expects to find there.
+- **"NOT FOUND - click to say where it is".** A local mod the launcher cannot
+  place used to be a dead end: a red line in the mod panel and nothing to do
+  about it. Clicking that row now asks where the mod is, with the path and a
+  Browse button, and says what it makes of the folder as it is typed - whether
+  it has an `addons` folder in it, or whether the `@Thing` you meant is one
+  level further in, which is the usual mistake. The answer is kept as an
+  ordinary mod override, the same mechanism that points a workshop mod at a
+  local build, so the command line already knew how to use it and it is asked
+  once rather than every join. A join that hits a missing local mod asks the
+  same question instead of quietly dropping the mod and letting the server do
+  the explaining with a kick.
+- **An egg for our own servers.** Join anything with "A Beautiful Potato" in
+  its name and the starting window grows a line along the bottom - **You Are A
+  Beautiful** followed by the potato himself. Matched on the name rather than
+  on a list of addresses, because addresses move and the name does not, and a
+  community server that happens to be called something similar getting the
+  kind word too is no loss. Everywhere else the window is exactly as it was.
+- **A "Starting DayZ..." window while the game gets on its feet**, with the
+  server's name, a `||||||||..........` meter and large text. From the moment
+  the launcher hands over to BattlEye, DayZ can take a minute or two to put
+  anything on screen; all the launcher said about it was one line in the log
+  panel, which is small and goes unread, so players read the silence as failure
+  and pressed CONNECT again - starting a second copy and making it worse. It
+  is modeless, so the launcher stays usable behind it, and Esc or Hide dismiss
+  it. **The meter is honest about being a guess:** DayZ reports no progress, so
+  it fills against the clock over about 75 seconds and deliberately stops at
+  nine tenths rather than sitting full while nothing happens; past that it says
+  a first launch or one after an update is slower. What is real is the finish -
+  the game's own process is watched for, and that is what fills the bar, changes
+  the headline to "DayZ is running." and closes the window 2.5 seconds later.
+  Verified on screen in both states, and the close measured at 1.9 s after the
+  process was seen.
+- **A name is settled before the first join, and it is never "Survivor".** DayZ
+  takes the in-game name from `-name=` on the command line and nowhere else,
+  so a player who never set one is called Survivor - as is everyone else who
+  never set one, which makes a server unreadable to its admins and a player
+  unable to find their own body. On the first join with no name, a dialog asks
+  for one. Pressing OK with the box empty is a real answer meaning "you pick",
+  and produces `Spud` plus four digits - `Spud7575`. "Survivor" in any casing
+  is refused outright, with the reason shown, rather than quietly swapped, so
+  nobody walks away thinking they are wearing a name they are not. Whatever is
+  settled on is saved and used from then on until they change it.
+- **The title bar says when the launcher is elevated**: *A Beautiful Potato
+  Launcher   (elevated User: Administrator)*. Elevation decides who owns every
+  file the launcher and the game write from that point on, and there was
+  otherwise nothing on screen to show it.
 - **"Unable to locate a running instance of Steam" is caught before the game
   shows it, and explained.** That box is DayZ's own - `DayZ_x64.exe` calls
   `SteamAPI_IsSteamRunning()` on startup and puts up its own message when the
