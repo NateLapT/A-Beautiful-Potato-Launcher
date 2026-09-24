@@ -3,8 +3,11 @@
 //
 //  Hiding roughly a quarter of the master list is a big claim to make on the
 //  player's behalf, so nothing is hidden invisibly: every rejected server is
-//  listed here with the reason it was rejected, and anything wrongly caught can
-//  be allowed back permanently.
+//  listed here, and anything wrongly caught can be allowed back permanently.
+//
+//  The REASON a server was rejected is deliberately not shown or copied. This
+//  list gets screenshotted and pasted around, and spelling out the rules would
+//  tell the people running fake servers exactly what to change.
 // ---------------------------------------------------------------------------
 
 using System;
@@ -84,25 +87,44 @@ namespace ABeautifulPotatoLauncher
                     Margin = new Padding(8, 8, 8, 8)
                 };
                 list.Columns.Add("Server", 300);
-                list.Columns.Add("Address", 160);
-                list.Columns.Add("Why it was flagged", 400);
+                list.Columns.Add("Address", 200);
 
-                var allFlagged = flagged.OrderBy(x => x.Host).ToList();
+                // Rows are built ONCE and only re-shown on each search. Clearing
+                // and adding thousands of items one at a time, with the list
+                // repainting after every add, on every keystroke, is what made
+                // filtering crawl.
+                var flagColour = Color.FromArgb(205, 150, 150);
+                var allRows = flagged.OrderBy(x => x.Host)
+                    .Select(x => new ListViewItem(new[] { x.Name ?? "", x.Endpoint ?? "" })
+                                 { Tag = x, ForeColor = flagColour })
+                    .ToArray();
+
                 Action refreshFlagList = () =>
                 {
                     string q = searchBox.Text.Trim();
-                    list.Items.Clear();
-                    foreach (var x in allFlagged.Where(x =>
-                        string.IsNullOrEmpty(q)
-                        || x.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
-                        || x.Host.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
-                        || x.Reason.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0))
+                    var rows = string.IsNullOrEmpty(q)
+                        ? allRows
+                        : allRows.Where(r =>
+                          {
+                              var x = (FlaggedServer)r.Tag;
+                              return (x.Name ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                                  || (x.Endpoint ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+                          }).ToArray();
+
+                    list.BeginUpdate();
+                    try
                     {
-                        list.Items.Add(new ListViewItem(new[] { x.Name, x.Endpoint, x.Reason })
-                        { Tag = x, ForeColor = Color.FromArgb(205, 150, 150) });
+                        list.Items.Clear();
+                        list.Items.AddRange(rows);
                     }
+                    finally { list.EndUpdate(); }
                 };
-                searchBox.TextChanged += (s, e) => refreshFlagList();
+
+                // And wait for a pause in the typing before filtering at all.
+                var searchDelay = new Timer { Interval = 200 };
+                searchDelay.Tick += (s, e) => { searchDelay.Stop(); refreshFlagList(); };
+                f.Disposed += (s, e) => searchDelay.Dispose();
+                searchBox.TextChanged += (s, e) => { searchDelay.Stop(); searchDelay.Start(); };
                 refreshFlagList();
 
                 flaggedPage.Controls.Add(list);        // Fill, so it goes in first
@@ -156,7 +178,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     var sb = new System.Text.StringBuilder();
                     foreach (var x in flagged.OrderBy(x => x.Host))
-                        sb.AppendLine(x.Endpoint + "\t" + x.Name + "\t" + x.Reason);
+                        sb.AppendLine(x.Endpoint + "\t" + x.Name);
                     try
                     {
                         if (sb.Length > 0) Clipboard.SetText(sb.ToString());

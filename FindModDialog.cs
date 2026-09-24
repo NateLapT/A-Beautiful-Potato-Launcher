@@ -91,6 +91,7 @@ namespace ABeautifulPotatoLauncher
                 ForeColor = Dim,
                 UseMnemonic = false
             };
+            _verdict.Click += (s, e) => { if (_suggest != null) _path.Text = _suggest; };
             Controls.Add(_verdict);
 
             var ok = new Button
@@ -145,6 +146,8 @@ namespace ABeautifulPotatoLauncher
         {
             string p = (_path.Text ?? "").Trim();
 
+            _suggest = null;
+            _verdict.Cursor = Cursors.Default;
             if (p.Length == 0) { _verdict.Text = ""; return; }
 
             if (!Directory.Exists(p))
@@ -161,21 +164,64 @@ namespace ABeautifulPotatoLauncher
                 return;
             }
 
-            string inside = null;
-            try
+            // Look for THIS mod below the folder given, subfolders included.
+            // This used to name whichever @ folder came first - suggesting
+            // @BeautifulBikePanels to someone looking for @BeautifulEarplugs.
+            _suggest = FindBelow(p, 4);
+            if (_suggest != null)
             {
-                foreach (var d in Directory.GetDirectories(p, "@*"))
-                {
-                    inside = Path.GetFileName(d);
-                    break;
-                }
+                string rel = _suggest.Length > p.Length ? _suggest.Substring(p.Length).TrimStart('\\', '/') : _suggest;
+                _verdict.Text = "Found it inside: " + rel + "  - click here to use that folder.";
+                _verdict.ForeColor = Color.FromArgb(130, 200, 130);
+                _verdict.Cursor = Cursors.Hand;
+                return;
             }
-            catch { }
 
-            _verdict.Text = inside != null
-                ? "No addons here - did you mean the " + inside + " folder inside it?"
-                : "No addons folder inside. Usable if the mod is unpacked, otherwise wrong folder.";
+            _verdict.Text = "No addons folder here, and " + _modName + " is not in any folder below it.";
             _verdict.ForeColor = Color.FromArgb(220, 190, 120);
+        }
+
+        /// <summary>The folder below this one that matches the mod asked for.</summary>
+        private string _suggest;
+
+        /// <summary>
+        /// The best-matching mod folder at or below dir, by the same rule the
+        /// launcher uses to pair a server's local mod with the player's copy.
+        /// </summary>
+        private string FindBelow(string dir, int depth)
+        {
+            string best = null;
+            int bestRank = 0;
+            // Runs on every keystroke in the path box, so it is capped: typing
+            // "P:\" must not walk an entire drive before the next letter lands.
+            _budget = 2000;
+            Walk(dir, depth, ref best, ref bestRank);
+            return best;
+        }
+
+        private int _budget;
+
+        private void Walk(string dir, int depth, ref string best, ref int bestRank)
+        {
+            if (depth < 0 || --_budget < 0) return;
+            string[] subs;
+            try { subs = Directory.GetDirectories(dir); }
+            catch { return; }
+
+            foreach (string d in subs)
+            {
+                bool isMod;
+                try { isMod = Directory.Exists(Path.Combine(d, "addons")); }
+                catch { isMod = false; }
+
+                if (isMod)
+                {
+                    int r = ModIndex.MatchRank(_modName, Path.GetFileName(d), ModIndex.ReadModCppName(d));
+                    if (r > bestRank) { best = d; bestRank = r; }
+                    continue;                    // a mod holds no further mods
+                }
+                Walk(d, depth - 1, ref best, ref bestRank);
+            }
         }
 
         /// <summary>

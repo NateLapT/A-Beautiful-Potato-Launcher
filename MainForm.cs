@@ -123,6 +123,9 @@ namespace ABeautifulPotatoLauncher
             try { Directory.CreateDirectory(LogDirectory); }
             catch { }
 
+            // The exe an update replaced, if this is the first run after one.
+            Updater.CleanUpAfterUpdate();
+
             try
             {
                 File.AppendAllText(LogFile,
@@ -158,6 +161,15 @@ namespace ABeautifulPotatoLauncher
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+
+            // Install / uninstall / hand over to the installed copy. See
+            // Installer - the exe is its own installer.
+            try
+            {
+                if (Installer.BeforeStart(Environment.GetCommandLineArgs().Skip(1).ToArray())) return;
+            }
+            catch (Exception ex) { LogCrash("installer", ex); }
+
             Application.Run(new MainForm());
         }
 
@@ -875,6 +887,34 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
+        // ------------------------------------------------------- updates --
+
+        private static readonly Color UpdateGold = Color.FromArgb(240, 200, 80);
+        private Label _versionLabel;
+        private Button _updateButton;
+        private List<ReleaseInfo> _updates = new List<ReleaseInfo>();
+        private readonly System.Windows.Forms.Timer _updateTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>
+        /// Asks GitHub for newer releases. When there is one, the footer's
+        /// version turns yellow and [UPDATE] appears beside it - nothing pops
+        /// up by itself. See Updater.
+        /// </summary>
+        private async void CheckForUpdates()
+        {
+            List<ReleaseInfo> found;
+            try { found = await Updater.CheckAsync(); }
+            catch { return; }
+            if (IsDisposed || found.Count == 0) return;
+
+            _updates = found;
+            _versionLabel.ForeColor = UpdateGold;
+            _versionLabel.Text = Program.VersionLabel + "   →  v" + found[0].Version;
+            _versionLabel.Width = TextRenderer.MeasureText(_versionLabel.Text, _versionLabel.Font).Width + 16;
+            _updateButton.Visible = true;
+            Log("Update available: v" + found[0].Version + " (you have v" + Program.Version + ").");
+        }
+
         public MainForm()
         {
             // Elevation belongs in the title bar: it changes who owns every
@@ -899,6 +939,14 @@ namespace ABeautifulPotatoLauncher
             _tab = Enum.IsDefined(typeof(Tab), savedTab) ? (Tab)savedTab : Tab.Community;
 
             BuildUi();
+
+            // Once the window is up, never before: a slow or absent network
+            // must not hold up the launcher opening. Then every six hours, for
+            // a launcher left open all day.
+            Shown += (s, e) => CheckForUpdates();
+            _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
+            _updateTimer.Tick += (s, e) => CheckForUpdates();
+            _updateTimer.Start();
 
             // Every clickable thing gets the hand cursor; see UiCursors.
             ListViewTweaks.Smooth(_list);
@@ -1095,6 +1143,25 @@ namespace ABeautifulPotatoLauncher
                    : "\r\nBuilt " + Program.BuiltUtc.ToString("yyyy-MM-dd HH:mm") + " UTC")
                 + "\r\nChanges are listed in CHANGELOG.md.");
             bottomBar.Controls.Add(version);
+            _versionLabel = version;
+
+            // Hidden until a newer release is found - see CheckForUpdates.
+            // Added straight after the version, so it sits just right of it.
+            _updateButton = new Button
+            {
+                Text = "UPDATE",
+                Dock = DockStyle.Right,
+                Width = 74,
+                Visible = false,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 60, 20),
+                ForeColor = UpdateGold,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                TabStop = false
+            };
+            _updateButton.FlatAppearance.BorderColor = UpdateGold;
+            _updateButton.Click += (s, e) => UpdateDialog.Show(this, _updates);
+            bottomBar.Controls.Add(_updateButton);
 
             var settings = new Button
             {
@@ -2812,6 +2879,8 @@ namespace ABeautifulPotatoLauncher
             Log("Query: " + kind + ", app " + app + (steamFilters.Count == 0 ? ", no filters"
                 : ", " + string.Join(", ", steamFilters.Select(f => f.Key + "=" + f.Value).ToArray())));
 
+            if (kind == ListKind.Lan) StartLocalhostProbe();
+
             if (!SteamServerList.Start(kind, app, steamFilters))
             {
                 _status.Text = "Steam refused the server list request.";
@@ -2831,6 +2900,81 @@ namespace ABeautifulPotatoLauncher
 
         private int _pollTicks;
         private ListKind _pollKind = ListKind.Internet;
+
+        // ------------------------------------------------ localhost on LAN --
+        //
+        // Steam's LAN list is a broadcast, and a server running on this same
+        // machine often never answers it - so the player's own test server,
+        // the one they most want to join, was missing from the LAN tab. Every
+        // LAN refresh therefore also asks the DayZ server processes running
+        // here for their real ports (see LocalServers) and adds what answers.
+        // With no server process found, 27015 and 27016 - where a server with
+        // no steamQueryPort set answers - are still asked.
+
+        private volatile List<BrowserServer> _localhost = new List<BrowserServer>();
+
+        private void StartLocalhostProbe()
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var found = LocalServers.Find();
+                if (found.Count == 0)
+                {
+                    foreach (int qp in LocalServers.DefaultQueryPorts)
+                    {
+                        var info = A2S.GetInfoAt("127.0.0.1", qp, 600);
+                        if (info != null && info.Online)
+                            found.Add(new LocalServer
+                            {
+                                QueryPort = qp,
+                                GamePort = info.GamePort > 0 ? info.GamePort : 2302,
+                                Info = info
+                            });
+                    }
+                }
+
+                _localhost = found.Select(s => new BrowserServer
+                {
+                    Name = s.Info.Name,
+                    Map = s.Info.Map,
+                    Host = "127.0.0.1",
+                    Port = s.GamePort,
+                    QueryPort = s.QueryPort,
+                    Players = s.Info.Players,
+                    MaxPlayers = s.Info.MaxPlayers,
+                    Ping = Math.Max(0, s.Info.PingMs),
+                    AppId = (uint)s.Info.AppId,
+                    Password = s.Info.Password,
+                    Tags = s.Info.Keywords ?? ""
+                }).ToList();
+            });
+        }
+
+        /// <summary>
+        /// The Steam LAN list plus any local server it did not already have.
+        /// A server Steam DID find arrives under the machine's LAN address, so
+        /// a match on game port and name counts as the same server.
+        /// </summary>
+        private static List<BrowserServer> AddLocalhost(List<BrowserServer> steam, uint app,
+                                                        List<BrowserServer> local)
+        {
+            if (local == null || local.Count == 0) return steam;
+            var all = new List<BrowserServer>(steam ?? new List<BrowserServer>());
+            foreach (var s in local)
+            {
+                if (s.AppId != 0 && app != 0 && s.AppId != app) continue;   // other build's pass
+                if (all.Any(x => x.Endpoint == s.Endpoint
+                              || (x.Port == s.Port && string.Equals(x.Name, s.Name, StringComparison.Ordinal))))
+                    continue;
+                all.Add(s);
+            }
+            return all;
+        }
+
+        private List<BrowserServer> AddLocalhost(List<BrowserServer> steam, uint app)
+        {
+            return AddLocalhost(steam, app, _localhost);
+        }
 
         // ----------------------------------------------- the 10,000 cap ----
         //
@@ -3198,6 +3342,7 @@ namespace ABeautifulPotatoLauncher
             int raw;
             _pollTicks++;
             _browser = SteamServerList.Poll(out done, out raw);
+            if (_pollKind == ListKind.Lan) _browser = AddLocalhost(_browser, _pollApp);
 
             int minTicks = PollingSmallList ? 2 : 5;
             if (_pollTicks < minTicks) done = false;
@@ -3764,6 +3909,9 @@ namespace ABeautifulPotatoLauncher
             if (s == null) return null;
 
             if (_favourites.Contains(s.Endpoint)) return null;
+
+            // A server on this very machine is the player's own. Never hide it.
+            if ((s.Host ?? "").StartsWith("127.", StringComparison.Ordinal)) return null;
 
             if (_allowed.Contains(s.Host) ||
                 _allowed.Contains(BrowserFilters.Subnet24(s.Host))) return null;
@@ -6259,10 +6407,15 @@ private void Launch(Row srv)
             // simply will not connect.
             Log("");
             Log("Asking " + srv.Endpoint + " what it is running...");
-            var live = A2S.GetInfoAt(srv.Host, srv.EffectiveQueryPort, 3000);
+            List<int> tried;
+            var live = FindQueryPort(srv, out tried);
             if (!live.Online)
-                throw new Exception("The server did not answer on query port " +
-                                    A2S.QueryPort(srv.Port) + ".\r\n\r\n" + live.Error);
+                throw new Exception("The server at " + srv.Endpoint + " did not answer on "
+                                    + (tried.Count == 1 ? "query port " : "any of the query ports ")
+                                    + string.Join(", ", tried) + ".\r\n\r\n"
+                                    + "The query port is steamQueryPort in the server's cfg - "
+                                    + "27015 (or 27016) when it is not set.\r\n\r\n" + live.Error);
+            Log("Query : port " + srv.QueryPort);
             Log("Server: " + live.Name);
             Log("Build : " + live.GameLabel + " (app " + live.AppId + ")  version " + live.Version);
 
@@ -6296,7 +6449,7 @@ private void Launch(Row srv)
                     + "Press REFRESH on the server and try again.");
             if (mods == null)
                 throw new Exception("The server did not answer the mod query on port " +
-                                    A2S.QueryPort(srv.Port) + ".");
+                                    srv.EffectiveQueryPort + ".");
             Log("Server publishes " + mods.Count + " mod(s).");
             Log("Note: a server only advertises as many mods as its steamProtocolMaxDataSize");
             Log("      allows. If it kicks you for a mod not listed above, that setting is");
@@ -6868,6 +7021,48 @@ private static bool IsRunning(string exeName)
             catch { return false; }
         }
 
+        /// <summary>
+        /// Finds the port this server answers queries on, and stores it in
+        /// srv.QueryPort so the mod query after it asks the same place.
+        ///
+        /// A query port cannot be derived from the game port, so this asks,
+        /// in order: the port Steam reported; for a server on this machine, the
+        /// port its process really has open (see LocalServers); game port + 1;
+        /// and 27015/27016, where a server with no steamQueryPort set answers. It
+        /// used to ask game port + 1 alone - a direct connect to 2402 asked
+        /// 2403 only, while the server was answering on 27015.
+        /// </summary>
+        private ServerInfo FindQueryPort(Row srv, out List<int> tried)
+        {
+            var ports = new List<int>();
+            Action<int> add = p => { if (p > 0 && p < 65535 && !ports.Contains(p)) ports.Add(p); };
+
+            add(srv.QueryPort);
+            if (LocalServers.IsThisMachine(srv.Host)) add(LocalServers.QueryPortFor(srv.Port));
+            add(A2S.QueryPort(srv.Port));
+            foreach (int p in LocalServers.DefaultQueryPorts) add(p);
+
+            tried = new List<int>();
+            ServerInfo last = new ServerInfo { Error = "no port to ask" };
+            foreach (int p in ports)
+            {
+                tried.Add(p);
+                var info = A2S.GetInfoAt(srv.Host, p, tried.Count == 1 ? 3000 : 1500);
+                if (info == null) continue;
+                last = info;
+                if (!info.Online) continue;
+
+                // 27015 is shared by every server on a host that left it unset;
+                // only accept an answer that is really for this game port.
+                if (info.GamePort > 0 && info.GamePort != srv.Port) continue;
+
+                srv.QueryPort = p;
+                return info;
+            }
+            last.Online = false;
+            return last;
+        }
+
 private static ServerRules QueryModsChecked(Row row)
         {
             bool tagged = HasTag(row.Tags, "mod");
@@ -6900,10 +7095,53 @@ private static ServerRules QueryModsChecked(Row row)
             return rules;
         }
 
+        /// <summary>
+        /// Asks for an address and joins it. This had been cut down to a log
+        /// line - the button wrote "Direct connect requested." and nothing else
+        /// happened, because nothing opened DirectConnectDialog any more.
+        /// </summary>
         private void OnDirectConnect(object sender, EventArgs e)
         {
             Log("Direct connect requested.");
             SavePlayerName();
+
+            // Same door as CONNECT - see OnConnect.
+            if (InLaunchCooldown)
+            {
+                Log("Ignoring a second launch - one is already starting. "
+                    + "Press CANCEL on the starting window to stop it.");
+                return;
+            }
+
+            string host;
+            int port;
+            bool save;
+            if (!DirectConnectDialog.Show(this, out host, out port, out save)) return;
+
+            var row = new Row { Host = host, Port = port, Name = host + ":" + port };
+            if (save && !_favourites.Contains(row.Endpoint))
+            {
+                _favourites.Add(row.Endpoint);
+                ServerStore.SetName(row.Endpoint, row.Name);
+                ServerStore.SaveFavourites(_favourites);
+                Log("Saved " + row.Endpoint + " to favourites.");
+            }
+
+            Log("Direct connect to " + row.Endpoint);
+            _connect.Enabled = false;
+            Cursor = Cursors.WaitCursor;
+            try { Launch(row); }
+            catch (Exception ex)
+            {
+                Log("ERROR: " + ex.Message);
+                MessageBox.Show(ex.Message, "A Beautiful Potato Launcher",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!InLaunchCooldown) _connect.Enabled = true;
+                Cursor = Cursors.Default;
+            }
         }
 
         /// <summary>Opens the mod library window.</summary>

@@ -38,6 +38,13 @@ namespace ABeautifulPotatoLauncher
         public string Name = "";
         public string Folder = "";
 
+        /// <summary>
+        /// The name inside a local mod's mod.cpp, which is what a server
+        /// reports - "BeautifulEarplugs (testing)" for the @BeautifulEarplugs
+        /// folder. Empty when there is no mod.cpp or no name in it.
+        /// </summary>
+        public string ModCppName = "";
+
         /// <summary>The publication stamp inside meta.cpp; 0 when unreadable.</summary>
         public ulong MetaStamp;
 
@@ -287,12 +294,17 @@ namespace ABeautifulPotatoLauncher
 
             lock (Lock)
             {
-                // An exact match wins outright.
+                // Best match first, across every local mod, before settling for
+                // a weaker one. See MatchRank.
+                ModEntry best = null;
+                int bestRank = 0;
                 foreach (var e in Entries.Values)
                 {
                     if (!e.IsLocal) continue;
-                    if (string.Equals(e.Name, want, StringComparison.OrdinalIgnoreCase)) return e;
+                    int r = MatchRank(want, e.Name, e.ModCppName);
+                    if (r > bestRank) { best = e; bestRank = r; }
                 }
+                if (best != null) return best;
 
                 // Then a workshop mod of the same name - the player may well
                 // have the same thing installed from the workshop instead.
@@ -303,6 +315,69 @@ namespace ABeautifulPotatoLauncher
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// How well a local folder matches the name a server reported. 0 is no
+        /// match; higher is better.
+        ///
+        /// A server does NOT report the folder name. It reports the name in
+        /// the mod's mod.cpp, so @BeautifulEarplugs arrives as
+        /// "BeautifulEarplugs (testing)". Matching on the folder alone never
+        /// paired those, however deep the scan looked.
+        ///
+        ///   3  the mod.cpp name, exactly
+        ///   2  the folder name, exactly
+        ///   1  the folder name, once a trailing "(...)" tag is dropped
+        /// </summary>
+        public static int MatchRank(string want, string folderName, string modCppName)
+        {
+            want = (want ?? "").TrimStart('@').Trim();
+            if (want.Length == 0) return 0;
+
+            if (!string.IsNullOrEmpty(modCppName)
+                && string.Equals(modCppName.Trim(), want, StringComparison.OrdinalIgnoreCase)) return 3;
+
+            string folder = (folderName ?? "").TrimStart('@').Trim();
+            if (folder.Length == 0) return 0;
+            if (string.Equals(folder, want, StringComparison.OrdinalIgnoreCase)) return 2;
+
+            string stem = StripTag(want);
+            if (stem.Length > 0 && stem.Length < want.Length
+                && string.Equals(folder, stem, StringComparison.OrdinalIgnoreCase)) return 1;
+            return 0;
+        }
+
+        /// <summary>"BeautifulEarplugs (testing)" -> "BeautifulEarplugs".</summary>
+        private static string StripTag(string s)
+        {
+            s = s.Trim();
+            if (s.EndsWith(")"))
+            {
+                int open = s.LastIndexOf('(');
+                if (open > 0) return s.Substring(0, open).Trim();
+            }
+            return s;
+        }
+
+        /// <summary>The name = "..." line of a mod.cpp in this folder, or "".</summary>
+        public static string ReadModCppName(string dir)
+        {
+            try
+            {
+                string path = Path.Combine(dir, "mod.cpp");
+                if (!File.Exists(path)) return "";
+                foreach (string raw in File.ReadLines(path))
+                {
+                    string line = raw.Trim();
+                    int eq = line.IndexOf('=');
+                    if (eq < 0) continue;
+                    if (!line.Substring(0, eq).Trim().Equals("name", StringComparison.OrdinalIgnoreCase)) continue;
+                    return line.Substring(eq + 1).Trim().TrimEnd(';').Trim().Trim('"').Trim();
+                }
+            }
+            catch { }
+            return "";
         }
 
         public static ModEntry GetByKey(string key)
@@ -524,7 +599,8 @@ namespace ABeautifulPotatoLauncher
                 Folder = dir,
                 Name = name,
                 HasMeta = false,
-                HasContent = true       // AddLocal is only reached when it does
+                HasContent = true,      // AddLocal is only reached when it does
+                ModCppName = ReadModCppName(dir)
             };
             try { e.InstalledAt = Directory.GetLastWriteTimeUtc(dir); }
             catch { }
@@ -535,6 +611,7 @@ namespace ABeautifulPotatoLauncher
             {
                 // Keep what the deep pass already measured.
                 known.Name = name;
+                known.ModCppName = e.ModCppName;
                 known.InstalledAt = e.InstalledAt;
                 found[known.Key] = known;
                 return;

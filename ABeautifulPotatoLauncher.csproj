@@ -15,9 +15,11 @@
     <Company>A Beautiful Potato</Company>
     <!-- THE VERSION. Bump this when cutting a release, and move the
          [Unreleased] section of CHANGELOG.md under the same number. -->
-    <Version>0.5</Version>
+    <!-- Written and compared like a decimal: 0.55 comes BEFORE 0.6. The
+         GitHub release tag must match, with a v: v0.55. See Updater. -->
+    <Version>0.55</Version>
     <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
-    <FileVersion>0.5.0.0</FileVersion>
+    <FileVersion>0.55.0.0</FileVersion>
 
     <!-- The build time, appended to the informational version as
          "0.3+20260921.0510" (UTC). The version number only changes on a
@@ -32,6 +34,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- JavaScriptSerializer, for reading GitHub's release list. Part of
+         .NET Framework itself, so nothing extra ships. See Updater. -->
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="assets\logo_title.png"  LogicalName="logo_title.png" />
     <EmbeddedResource Include="assets\logo_potato.png" LogicalName="logo_potato.png" />
     <EmbeddedResource Include="assets\DayZLogo.png"    LogicalName="dayz_logo.png" />
@@ -39,6 +47,10 @@
     <!-- IP -> country ranges from the regional internet registries, 1.4 MB.
          Rebuild with tools/build-ip-table.ps1; see IpRegion.cs. -->
     <EmbeddedResource Include="assets\ip-country.bin"  LogicalName="ip-country.bin" />
+
+    <!-- The server list a fresh install starts with, ~112k servers, 2 MB.
+         Rebuild with tools/build-default-servers.py; see ServerStore.LoadList. -->
+    <EmbeddedResource Include="assets\default-servers.tsv.gz" LogicalName="default-servers.tsv.gz" />
   </ItemGroup>
 
 </Project>

@@ -16,6 +16,42 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.55] - 2026-09-24 (pre-release)
+
+### Added
+
+- **Update notifications.** On start (and every six hours) the launcher asks
+  GitHub for newer releases - pre-releases included. When there is one the
+  footer version turns yellow and an [UPDATE] button appears beside it; it
+  opens the change log with an UPDATE NOW button. The update downloads the new
+  exe, checks its size, that it is really the launcher and that it is the
+  version the release claims, then swaps it in and restarts. No installer, no
+  administrator. Versions compare like decimals: 0.55 comes before 0.6.
+- **The exe installs itself.** Run from anywhere, it offers to install to
+  `%LocalAppData%\Programs\A Beautiful Potato Launcher` with Start menu and
+  desktop shortcuts and an entry in Settings > Apps - no MSI, no
+  administrator. Not Program Files: that needs administrator to write, which
+  would put a UAC prompt in front of every update. Running an older copy when a
+  newer one is installed opens the installed one instead; a newer copy offers
+  to update it. Uninstall from Settings > Apps, optionally with settings.
+  Developer builds (under bin\) never ask.
+- **Built-in server list.** A fresh install opens with ~112k servers
+  (steam.dayzed.gg snapshot) instead of an empty list.
+- **LAN tab finds servers on this PC.** Running DayZ servers are found by the
+  ports their process really has open, so their query port is exact.
+
+### Fixed
+
+- **Direct Connect did nothing** but write "Direct connect requested." to the
+  log; the popup is back. Joining now tries every likely query port (reported,
+  local process, game port + 1, 27015, 27016) instead of game port + 1 alone.
+- **Local mods matched by their mod.cpp name**, which is what a server reports -
+  "BeautifulEarplugs (testing)" now finds @BeautifulEarplugs.
+- **Mod info for local mods** shows the real folder, status and an Explorer
+  button; the description box fills the window.
+- **Flagged servers list** no longer shows why a server was flagged, and
+  searching it is fast.
+
 ## [0.3] — current build (pre-release)
 
 ### Fixed

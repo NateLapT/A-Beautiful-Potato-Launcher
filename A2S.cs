@@ -53,6 +53,13 @@ namespace ABeautifulPotatoLauncher
         public string Keywords = "";
 
         /// <summary>
+        /// The game port the server reports in its reply, or 0. Needed when a
+        /// server is found by its query port alone - 27016 says nothing about
+        /// which port to join on.
+        /// </summary>
+        public int GamePort;
+
+        /// <summary>
         /// The server is password protected. A2S calls this "visibility": 0 is
         /// open, anything else means a password is required before the game
         /// will let you in.
@@ -274,7 +281,10 @@ namespace ABeautifulPotatoLauncher
                 if (i < d.Length)
                 {
                     byte edf = d[i++];
-                    if ((edf & 0x80) != 0) i += 2;                       // port
+                    if ((edf & 0x80) != 0 && i + 2 <= d.Length)          // game port
+                    {
+                        info.GamePort = BitConverter.ToUInt16(d, i); i += 2;
+                    }
                     if ((edf & 0x10) != 0) i += 8;                       // steam id
                     if ((edf & 0x40) != 0) { i += 2; ReadCString(d, ref i); }
                     if ((edf & 0x20) != 0) info.Keywords = ReadCString(d, ref i);

@@ -110,8 +110,11 @@ namespace ABeautifulPotatoLauncher
                 f.AcceptButton = ok;
                 f.CancelButton = cancel;
 
-                // Pasting "1.2.3.4:2302" into the address box should just work.
-                ip.TextChanged += (s, e) =>
+                // "1.2.3.4:2402" in the address box should just work - pasted
+                // or typed. Split when the box is left or CONNECT is pressed,
+                // NOT on every keystroke: typing "127.0.0.1:2402" key by key
+                // split at ":2", leaving port 2 and the rest in the wrong box.
+                Action splitPort = () =>
                 {
                     int c = ip.Text.LastIndexOf(':');
                     if (c <= 0) return;
@@ -120,13 +123,14 @@ namespace ABeautifulPotatoLauncher
                     if (!int.TryParse(tail, out parsed) || parsed <= 0 || parsed > 65535) return;
                     ip.Text = ip.Text.Substring(0, c).Trim();
                     pt.Text = parsed.ToString();
-                    ip.SelectionStart = ip.Text.Length;
                 };
+                ip.Leave += (s, e) => splitPort();
 
                 while (true)
                 {
                     if (f.ShowDialog(owner) != DialogResult.OK) return false;
 
+                    splitPort();
                     string h = ip.Text.Trim();
                     int p;
                     if (h.Length == 0)

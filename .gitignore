@@ -10,6 +10,10 @@ source/
 # the build fails on a fresh clone. 1.4 MB, rebuilt by tools/build-ip-table.ps1.
 !assets/ip-country.bin
 
+# ...and the built-in server list, also embedded. 2 MB, rebuilt by
+# tools/build-default-servers.py.
+!assets/default-servers.tsv.gz
+
 # Build output
 bin/
 obj/

@@ -86,31 +86,52 @@ namespace ABeautifulPotatoLauncher
                     y += 23;
                 }
 
-                string modCpp = ModCpp(steamPath, mod.WorkshopId);
+                string modCpp = ModCpp(mod, steamPath);
                 string overview = ReadKey(modCpp, "overview");
-                if (overview.Length > 0 && y < 360)
+                if (overview.Length > 0)
                 {
-                    f.Controls.Add(new TextBox
+                    // Fills everything between the last row and the buttons, and
+                    // grows with the window. It used to be a fixed 376 - y high,
+                    // which shrank to a single unreadable line once the list of
+                    // facts got longer. The window is made taller first if that
+                    // would leave less than a readable box.
+                    const int minBox = 120;
+                    int top = y + 8;
+                    int bottomGap = 44 + 10;                 // button row + margin
+                    int need = top + minBox + bottomGap;
+                    if (f.ClientSize.Height < need)
+                        f.ClientSize = new Size(f.ClientSize.Width, need);
+
+                    var desc = new TextBox
                     {
-                        Text = overview,
-                        Bounds = new Rectangle(16, y + 6, 528, 376 - y - 14),
+                        Text = overview.Replace("\r\n", "\n").Replace("\n", "\r\n"),
+                        Bounds = new Rectangle(16, top, f.ClientSize.Width - 32,
+                                               f.ClientSize.Height - top - bottomGap),
                         Multiline = true,
+                        WordWrap = true,
                         ReadOnly = true,
                         ScrollBars = ScrollBars.Vertical,
                         BackColor = Panel2,
                         ForeColor = Color.Gainsboro,
-                        BorderStyle = BorderStyle.FixedSingle
-                    });
+                        BorderStyle = BorderStyle.FixedSingle,
+                        TabStop = false,                     // no select-all on open
+                        Anchor = AnchorStyles.Top | AnchorStyles.Bottom
+                               | AnchorStyles.Left | AnchorStyles.Right
+                    };
+                    f.Controls.Add(desc);
+                    f.Shown += (s, e) => { desc.SelectionStart = 0; desc.SelectionLength = 0; };
                 }
 
                 int by = f.ClientSize.Height - 44;
+                // A local mod has no workshop item, so there is no page to open.
                 var workshop = MakeBtn("Workshop page", new Rectangle(16, by, 130, 30));
                 workshop.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+                workshop.Enabled = !mod.IsLocal;
                 workshop.Click += (s, e) => SteamWorkshop.OpenWorkshopPage(mod.WorkshopId);
                 f.Controls.Add(workshop);
 
-                string folder = ItemFolder(steamPath, mod.WorkshopId);
-                var openFolder = MakeBtn("Open folder", new Rectangle(154, by, 120, 30));
+                string folder = ModFolder(mod, steamPath);
+                var openFolder = MakeBtn("Explorer", new Rectangle(154, by, 120, 30));
                 openFolder.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
                 openFolder.Enabled = folder != null && Directory.Exists(folder);
                 openFolder.Click += (s, e) =>
@@ -197,8 +218,10 @@ namespace ABeautifulPotatoLauncher
             Action<string, string> add = (k, v) =>
                 list.Add(new KeyValuePair<string, string>(k, v));
 
-            string modCpp = ModCpp(steamPath, mod.WorkshopId);
-            string folder = ItemFolder(steamPath, mod.WorkshopId);
+            if (mod.IsLocal) return GatherLocal(mod, steamPath);
+
+            string modCpp = ModCpp(mod, steamPath);
+            string folder = ModFolder(mod, steamPath);
             bool installed = steamPath != null && SteamWorkshop.IsInstalled(steamPath, mod.WorkshopId);
 
             add("Workshop ID", mod.WorkshopId.ToString());
@@ -285,6 +308,58 @@ namespace ABeautifulPotatoLauncher
                 : SteamWorkshop.StaleBy(steamPath, mod.WorkshopId);
             add("Status", DescribeState(state, installed, behind));
 
+            AddContent(add, folder);
+            if (folder != null) add("Installed at", folder);
+            return list;
+        }
+
+        /// <summary>
+        /// A mod the server loads from its own disk. It has no workshop id -
+        /// every Steam lookup above would ask about item 0 and answer "not
+        /// installed" for a mod the launch finds and loads perfectly well. So
+        /// this asks the same two places the launch does, in the same order:
+        /// the folder the player pointed at, then the mod index by name.
+        /// </summary>
+        private static List<KeyValuePair<string, string>> GatherLocal(Mod mod, string steamPath)
+        {
+            var list = new List<KeyValuePair<string, string>>();
+            Action<string, string> add = (k, v) =>
+                list.Add(new KeyValuePair<string, string>(k, v));
+
+            string how;
+            string folder = LocalFolder(mod, steamPath, out how);
+            string modCpp = ModCpp(mod, steamPath);
+
+            add("Workshop ID", "none - local mod");
+            add("Source", "Local folder (not from the workshop)");
+
+            string author = ReadKey(modCpp, "author");
+            if (author.Length > 0) add("Author", author);
+
+            string version = ReadKey(modCpp, "version");
+            if (version.Length > 0) add("Version", version);
+
+            if (folder != null)
+            {
+                try
+                {
+                    add("Modified", Directory.GetLastWriteTime(folder)
+                        .ToString("dddd d MMMM yyyy, HH:mm"));
+                }
+                catch { }
+            }
+
+            add("Status", folder != null
+                ? "Installed (" + how + ")"
+                : "NOT FOUND - click the status in the mod list to say where it is");
+
+            AddContent(add, folder);
+            add("Installed at", folder ?? "(not found)");
+            return list;
+        }
+
+        private static void AddContent(Action<string, string> add, string folder)
+        {
             if (folder != null && Directory.Exists(folder))
             {
                 int pbos = SafeCount(folder, "*.pbo");
@@ -297,9 +372,6 @@ namespace ABeautifulPotatoLauncher
                     ? "Signed (" + signs + (signs == 1 ? " signature)" : " signatures)")
                     : "NOT SIGNED - some servers will reject it");
             }
-
-            if (folder != null) add("Installed at", folder);
-            return list;
         }
 
         /// <summary>
@@ -336,16 +408,48 @@ namespace ABeautifulPotatoLauncher
             catch { return 0; }
         }
 
-        private static string ItemFolder(string steamPath, ulong id)
+        /// <summary>
+        /// Where this mod's files really are. A local mod resolves the way the
+        /// launch resolves it; a workshop mod is Steam's item folder.
+        /// </summary>
+        private static string ModFolder(Mod mod, string steamPath)
         {
-            return steamPath == null ? null : SteamWorkshop.ItemPath(steamPath, id);
+            if (mod.IsLocal)
+            {
+                string how;
+                return LocalFolder(mod, steamPath, out how);
+            }
+            return steamPath == null ? null : SteamWorkshop.ItemPath(steamPath, mod.WorkshopId);
         }
 
-        private static string ModCpp(string steamPath, ulong id)
+        /// <summary>
+        /// Same order as the launch's command-line builder: the folder the
+        /// player chose, then a search of the mod folders by name.
+        /// </summary>
+        private static string LocalFolder(Mod mod, string steamPath, out string how)
+        {
+            how = null;
+            var chosen = ModOverrides.For(mod);
+            if (chosen != null && !string.IsNullOrEmpty(chosen.Folder) && Directory.Exists(chosen.Folder))
+            {
+                how = "the folder you chose";
+                return chosen.Folder;
+            }
+
+            var found = ModIndex.FindLocalByName(mod.BareName, steamPath);
+            if (found != null && !string.IsNullOrEmpty(found.Folder))
+            {
+                how = "found by name";
+                return found.Folder;
+            }
+            return null;
+        }
+
+        private static string ModCpp(Mod mod, string steamPath)
         {
             try
             {
-                string folder = ItemFolder(steamPath, id);
+                string folder = ModFolder(mod, steamPath);
                 if (folder == null) return null;
                 string path = Path.Combine(folder, "mod.cpp");
                 return File.Exists(path) ? File.ReadAllText(path) : null;

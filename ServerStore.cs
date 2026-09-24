@@ -961,10 +961,18 @@ namespace ABeautifulPotatoLauncher
             try
             {
                 string file = ListFile(key);
-                if (!File.Exists(file)) return result;
+                IEnumerable<string> lines;
+                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                bool seeded = false;
+                if (File.Exists(file))
+                    lines = File.ReadAllLines(file, System.Text.Encoding.UTF8);
+                else if ((lines = DefaultListLines(key)) != null)
+                    seeded = true;
+                else
+                    return result;
 
-                long cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)ListMaxAge.TotalSeconds;
-                foreach (string line in File.ReadAllLines(file, System.Text.Encoding.UTF8))
+                long cutoff = now - (long)ListMaxAge.TotalSeconds;
+                foreach (string line in lines)
                 {
                     if (line.Length == 0) continue;
                     string[] f = line.Split('\t');
@@ -973,6 +981,12 @@ namespace ABeautifulPotatoLauncher
                     {
                         long seen = long.Parse(f[13]);
                         if (seen > 0 && seen < cutoff) continue;
+
+                        // The built-in list carries no dates. Stamped as seen
+                        // now, so anything a real refresh never finds again
+                        // ages out after ListMaxAge like any other server,
+                        // rather than living for ever at 0.
+                        if (seeded) seen = now;
 
                         var s = new BrowserServer
                         {
@@ -996,6 +1010,41 @@ namespace ABeautifulPotatoLauncher
             }
             catch { }
             return result;
+        }
+
+        /// <summary>
+        /// The server list built into the exe (assets/default-servers.tsv.gz,
+        /// see tools/build-default-servers.py), for a browsing tab that has no
+        /// saved list yet - so a fresh install opens full instead of empty and
+        /// waiting a minute on Steam. Null for the personal tabs (Recent,
+        /// Friends, LAN, Favourites), which are the player's own and must not
+        /// be filled from anywhere else, and for Experimental: the built-in
+        /// list holds stable servers only.
+        /// </summary>
+        private static IEnumerable<string> DefaultListLines(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            bool browsing = key.StartsWith("Community/", StringComparison.OrdinalIgnoreCase)
+                         || key.StartsWith("Official/", StringComparison.OrdinalIgnoreCase);
+            if (!browsing || key.EndsWith("/exp", StringComparison.OrdinalIgnoreCase)) return null;
+
+            try
+            {
+                var asm = typeof(ServerStore).Assembly;
+                using (var raw = asm.GetManifestResourceStream("default-servers.tsv.gz"))
+                {
+                    if (raw == null) return null;
+                    using (var gz = new System.IO.Compression.GZipStream(raw, System.IO.Compression.CompressionMode.Decompress))
+                    using (var rd = new StreamReader(gz, System.Text.Encoding.UTF8))
+                    {
+                        var lines = new List<string>(120000);
+                        string line;
+                        while ((line = rd.ReadLine()) != null) lines.Add(line);
+                        return lines;
+                    }
+                }
+            }
+            catch { return null; }
         }
 
         private static string Clean(string v)
