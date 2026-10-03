@@ -287,9 +287,13 @@ namespace ABeautifulPotatoLauncher
 
         // ------------------------------------------------------ filesystem --
 
+        /// <summary>
+        /// Where Steam keeps the current game's workshop downloads - 221100 for
+        /// DayZ (both builds share it), 108600 for Project Zomboid.
+        /// </summary>
         public static string WorkshopRoot(string steamPath)
         {
-            return Path.Combine(steamPath, "steamapps", "workshop", "content", DayZAppId.ToString());
+            return Path.Combine(steamPath, "steamapps", "workshop", "content", Games.WorkshopApp.ToString());
         }
 
         private static IEnumerable<string> WorkshopRoots(string steamPath)
@@ -300,6 +304,9 @@ namespace ABeautifulPotatoLauncher
 
             string std = WorkshopRoot(steamPath);
             if (seen.Add(std)) yield return std;
+
+            // The !Workshop folders below are DayZ's own layout.
+            if (Games.IsZomboid) yield break;
 
             string direct = Path.Combine(steamPath, "!Workshop");
             if (seen.Add(direct) && Directory.Exists(direct)) yield return direct;
@@ -615,7 +622,24 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static bool IsInstalled(string steamPath, ulong id)
         {
+            if (Games.IsZomboid) return ZomboidInstalled(steamPath, id);
             try { return File.Exists(MetaPath(steamPath, id)); }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// A Project Zomboid item has no meta.cpp. What the game loads is the
+        /// "mods" folder inside the item, so that folder holding a mod.info is
+        /// the test - Steam only moves an item into place once it is whole.
+        /// </summary>
+        private static bool ZomboidInstalled(string steamPath, ulong id)
+        {
+            try
+            {
+                string mods = Path.Combine(ItemPath(steamPath, id), "mods");
+                return Directory.Exists(mods)
+                    && Directory.EnumerateFiles(mods, "mod.info", SearchOption.AllDirectories).Any();
+            }
             catch { return false; }
         }
 
@@ -637,7 +661,7 @@ namespace ABeautifulPotatoLauncher
             {
                 string dir = ItemPath(steamPath, id);
                 if (!Directory.Exists(dir)) return false;
-                if (File.Exists(MetaPath(steamPath, id))) return false;
+                if (IsInstalled(steamPath, id)) return false;
                 return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Any();
             }
             catch { return false; }
@@ -701,6 +725,15 @@ namespace ABeautifulPotatoLauncher
         private delegate bool ReleaseQueryFn(IntPtr ugc, ulong handle);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate bool IsCallDoneFn(IntPtr utils, ulong call, out bool failed);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate ulong CreateAllQueryFn(IntPtr ugc, int queryType, int matchingType,
+                                                uint creatorApp, uint consumerApp, uint page);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private delegate bool SetSearchTextFn(IntPtr ugc, ulong handle, byte[] text);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private delegate bool SetQueryBoolFn(IntPtr ugc, ulong handle, [MarshalAs(UnmanagedType.I1)] bool value);
 
         private static IntPtr _lib = IntPtr.Zero;
         private static IntPtr _ugc = IntPtr.Zero;
@@ -716,13 +749,16 @@ namespace ABeautifulPotatoLauncher
         /// joined, so that Steam is not told two different DayZ apps are
         /// running at once. See SwitchApp.
         /// </summary>
-        private static uint _sessionApp = DayZAppId;
+        private static uint _sessionApp;
 
         private static CreateDetailsQueryFn _createDetails;
         private static SendQueryFn _sendQuery;
         private static GetQueryResultFn _queryResult;
         private static ReleaseQueryFn _releaseQuery;
         private static IsCallDoneFn _callDone;
+        private static CreateAllQueryFn _createAll;
+        private static SetSearchTextFn _setSearchText;
+        private static SetQueryBoolFn _setLongDescription;
 
         private static ShutdownFn _shutdown;
         private static RunCallbacksFn _runCallbacks;
@@ -736,7 +772,15 @@ namespace ABeautifulPotatoLauncher
         public static bool Available { get { return _initialised && _ugc != IntPtr.Zero; } }
 
         /// <summary>The app id this launcher's Steam session currently claims.</summary>
-        public static uint SessionApp { get { return _sessionApp; } }
+        public static uint SessionApp { get { return _sessionApp != 0 ? _sessionApp : Games.WorkshopApp; } }
+
+        /// <summary>
+        /// The steam_api64.dll this process loaded, or zero. Exactly one copy is
+        /// ever loaded: DayZ's and Project Zomboid's are different SDK versions,
+        /// and two of them in one process would be two Steam sessions fighting
+        /// over the same client. The server browser binds through this one.
+        /// </summary>
+        internal static IntPtr Library { get { return _lib; } }
 
         /// <summary>
         /// Re-opens the Steam session as a different app.
@@ -787,6 +831,7 @@ namespace ABeautifulPotatoLauncher
             _download = null; _downloadInfo = null; _installInfo = null;
             _createDetails = null; _sendQuery = null; _queryResult = null;
             _releaseQuery = null; _callDone = null;
+            _createAll = null; _setSearchText = null; _setLongDescription = null;
 
             _sessionApp = appId;
 
@@ -803,9 +848,10 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static bool EnsureWorkshopApp(string gameDir, Action<string> log)
         {
-            return _sessionApp == DayZAppId && _initialised
+            uint app = Games.WorkshopApp;
+            return !_initialised || _sessionApp == app
                 ? TryInit(gameDir, log)
-                : SwitchApp(DayZAppId, gameDir, log);
+                : SwitchApp(app, gameDir, log);
         }
 
         /// <summary>
@@ -816,11 +862,12 @@ namespace ABeautifulPotatoLauncher
         public static bool TryInit(string gameDir, Action<string> log)
         {
             if (_initialised) return Available;
+            if (_sessionApp == 0) _sessionApp = Games.WorkshopApp;
 
             try
             {
-                string dll = Path.Combine(gameDir, "steam_api64.dll");
-                if (!File.Exists(dll))
+                string dll = Path.Combine(gameDir ?? "", "steam_api64.dll");
+                if (_lib == IntPtr.Zero && !File.Exists(dll))
                 {
                     log("Steam API: steam_api64.dll not found in the game folder.");
                     return false;
@@ -832,15 +879,16 @@ namespace ABeautifulPotatoLauncher
                 Environment.SetEnvironmentVariable("SteamAppId", _sessionApp.ToString());
                 Environment.SetEnvironmentVariable("SteamGameId", _sessionApp.ToString());
 
-                _lib = LoadLibrary(dll);
+                // Loaded once and kept: a re-opened session (SwitchApp) uses the
+                // same library rather than loading a second copy - see Library.
+                if (_lib == IntPtr.Zero) _lib = LoadLibrary(dll);
                 if (_lib == IntPtr.Zero)
                 {
                     log("Steam API: could not load steam_api64.dll.");
                     return false;
                 }
 
-                var init = Bind<InitFn>("SteamAPI_Init");
-                if (init == null || !init())
+                if (!InitSteam(log))
                 {
                     // Name the elevation mismatch here too: this is the line
                     // that ends up in a player's log, and "is Steam running?"
@@ -885,6 +933,9 @@ namespace ABeautifulPotatoLauncher
                 _queryResult   = Bind<GetQueryResultFn>("SteamAPI_ISteamUGC_GetQueryUGCResult");
                 _releaseQuery  = Bind<ReleaseQueryFn>("SteamAPI_ISteamUGC_ReleaseQueryUGCRequest");
                 _callDone      = Bind<IsCallDoneFn>("SteamAPI_ISteamUtils_IsAPICallCompleted");
+                _createAll     = Bind<CreateAllQueryFn>("SteamAPI_ISteamUGC_CreateQueryAllUGCRequestPage");
+                _setSearchText = Bind<SetSearchTextFn>("SteamAPI_ISteamUGC_SetSearchText");
+                _setLongDescription = Bind<SetQueryBoolFn>("SteamAPI_ISteamUGC_SetReturnLongDescription");
 
                 // The utils accessor is version-suffixed too, and it carries the
                 // "has this async call finished" test the details query needs.
@@ -907,6 +958,37 @@ namespace ABeautifulPotatoLauncher
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate bool IsRunningFn();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int InitFlatFn(byte[] errorMessage);
+
+        /// <summary>
+        /// Starts the Steam API, whichever SDK the loaded dll comes from.
+        ///
+        /// DayZ's dll exports SteamAPI_Init. Newer SDKs - Project Zomboid's
+        /// among them - do not: SteamAPI_Init became an inline wrapper in the
+        /// header, and the dll exports SteamAPI_InitFlat instead, which returns
+        /// 0 for success and fills in a message otherwise. Measured: binding
+        /// SteamAPI_Init against Project Zomboid's dll finds no such entry
+        /// point, so without this the launcher could not start Steam at all
+        /// for a player who has Zomboid and not DayZ.
+        /// </summary>
+        private static bool InitSteam(Action<string> log)
+        {
+            var init = Bind<InitFn>("SteamAPI_Init");
+            if (init != null) return init();
+
+            var flat = Bind<InitFlatFn>("SteamAPI_InitFlat");
+            if (flat == null) return false;
+
+            var err = new byte[1024];
+            int result = flat(err);
+            if (result == 0) return true;
+
+            string why = Encoding.UTF8.GetString(err).TrimEnd('\0').Trim();
+            if (why.Length > 0) log("Steam API: SteamAPI_InitFlat said " + result + " - " + why);
+            return false;
+        }
 
         /// <summary>
         /// THE EXACT QUESTION THE GAME ASKS.
@@ -1137,6 +1219,151 @@ namespace ABeautifulPotatoLauncher
             finally { Marshal.FreeHGlobal(det); }
         }
 
+        // ------------------------------------- Project Zomboid: mod id search --
+
+        // SteamUGCDetails_t, laid out by the SDK: published id (8), result (4),
+        // file type (4), creator app (4), consumer app (4), title char[129],
+        // description char[8000]. OffsetTimeUpdated above sits just past these,
+        // which is how the two agree.
+        private const int OffsetTitle = 24;
+        private const int TitleSize = 129;
+        private const int OffsetDescription = 153;
+        private const int DescriptionSize = 8000;
+
+        private const int RankedByTextSearch = 11;      // EUGCQuery
+        private const int MatchingItems = 0;            // EUGCMatchingUGCType: ready-to-use items
+        private const int SearchesAtOnce = 8;
+
+        /// <summary>
+        /// Finds the workshop item behind each Project Zomboid mod id.
+        ///
+        /// A PZ server lists mod ids, never workshop ids, so this asks the
+        /// Workshop itself: a text search for the id, restricted to Project
+        /// Zomboid, and a result only counts if its description DECLARES that
+        /// id - PZ authors write "Mod ID: Foo" on the page. Merely mentioning
+        /// the id is not enough; patches and reuploads do that too, and picking
+        /// one of those would subscribe the player to the wrong item.
+        ///
+        /// Several searches are in flight at once, because a busy server lists
+        /// a couple of hundred mods and asking one at a time would take minutes.
+        /// The answer for every id asked is returned, including "nothing found"
+        /// (workshop id 0), so it is not asked again straight away.
+        /// </summary>
+        public static Dictionary<string, Zomboid.ModLookup> FindZomboidMods(IList<string> modIds,
+                                                                             Func<bool> cancelled)
+        {
+            var results = new Dictionary<string, Zomboid.ModLookup>(StringComparer.OrdinalIgnoreCase);
+            if (modIds == null || modIds.Count == 0) return results;
+            if (!Available || _createAll == null || _setSearchText == null || _sendQuery == null
+                || _queryResult == null || _callDone == null || _utils == IntPtr.Zero) return results;
+
+            IntPtr det = Marshal.AllocHGlobal(DetailsSize);
+            try
+            {
+                for (int start = 0; start < modIds.Count; start += SearchesAtOnce)
+                {
+                    if (cancelled != null && cancelled()) break;
+
+                    var batch = modIds.Skip(start).Take(SearchesAtOnce).ToList();
+                    var handles = new ulong[batch.Count];
+                    var calls = new ulong[batch.Count];
+
+                    lock (ApiLock)
+                    {
+                        for (int k = 0; k < batch.Count; k++)
+                        {
+                            ulong h = _createAll(_ugc, RankedByTextSearch, MatchingItems,
+                                                 Zomboid.AppId, Zomboid.AppId, 1);
+                            if (h == 0 || h == ulong.MaxValue) continue;
+                            handles[k] = h;
+
+                            _setSearchText(_ugc, h, Encoding.UTF8.GetBytes(batch[k] + "\0"));
+                            if (_setLongDescription != null) _setLongDescription(_ugc, h, true);
+                            calls[k] = _sendQuery(_ugc, h);
+                        }
+                    }
+
+                    // Pump until every search in the batch has answered, or ten
+                    // seconds have gone - the same allowance as the time query.
+                    var done = new bool[batch.Count];
+                    var failed = new bool[batch.Count];
+                    for (int tick = 0; tick < 100 && done.Contains(false); tick++)
+                    {
+                        RunCallbacks();
+                        System.Threading.Thread.Sleep(100);
+                        lock (ApiLock)
+                        {
+                            for (int k = 0; k < batch.Count; k++)
+                            {
+                                if (done[k]) continue;
+                                if (calls[k] == 0) { done[k] = true; failed[k] = true; continue; }
+                                bool f;
+                                if (_callDone(_utils, calls[k], out f)) { done[k] = true; failed[k] = f; }
+                            }
+                        }
+                    }
+
+                    for (int k = 0; k < batch.Count; k++)
+                    {
+                        // No answer at all is not "not found" - leave it unrecorded
+                        // so the next look asks again.
+                        if (!done[k] || failed[k])
+                        {
+                            Release(handles[k]);
+                            continue;
+                        }
+
+                        var look = new Zomboid.ModLookup { AskedUtc = DateTime.UtcNow };
+                        for (uint i = 0; i < 50; i++)
+                        {
+                            for (int z = 0; z < DetailsSize; z++) Marshal.WriteByte(det, z, 0);
+                            bool got;
+                            lock (ApiLock) got = _queryResult(_ugc, handles[k], i, det);
+                            if (!got) break;
+
+                            ulong pid = (ulong)Marshal.ReadInt64(det, OffsetPublishedId);
+                            if (pid == 0) continue;
+
+                            string description = ReadFixedString(det, OffsetDescription, DescriptionSize);
+                            if (!Zomboid.DescriptionDeclares(description, batch[k])) continue;
+
+                            look.WorkshopId = pid;
+                            look.Title = ReadFixedString(det, OffsetTitle, TitleSize);
+
+                            // The time query has nothing to add for this one now.
+                            uint updated = (uint)Marshal.ReadInt32(det, OffsetTimeUpdated);
+                            if (updated != 0)
+                                lock (_workshopUpdated) _workshopUpdated[pid] = UnixEpoch.AddSeconds(updated);
+                            break;
+                        }
+
+                        results[batch[k]] = look;
+                        Release(handles[k]);
+                    }
+                }
+            }
+            catch { }
+            finally { Marshal.FreeHGlobal(det); }
+
+            return results;
+        }
+
+        private static void Release(ulong handle)
+        {
+            if (handle == 0 || handle == ulong.MaxValue) return;
+            try { lock (ApiLock) if (_releaseQuery != null) _releaseQuery(_ugc, handle); }
+            catch { }
+        }
+
+        private static string ReadFixedString(IntPtr p, int offset, int max)
+        {
+            var bytes = new byte[max];
+            Marshal.Copy(p + offset, bytes, 0, max);
+            int n = Array.IndexOf(bytes, (byte)0);
+            if (n < 0) n = max;
+            return Encoding.UTF8.GetString(bytes, 0, n);
+        }
+
         private static readonly DateTime UnixEpoch =
             new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -1152,7 +1379,7 @@ namespace ABeautifulPotatoLauncher
         private static string WorkshopDetailsUrl(ulong id, bool english = true)
         {
             string url = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + id
-                       + "&appid=" + DayZAppId;
+                       + "&appid=" + Games.WorkshopApp;
             if (english) url += "&l=english";
             return url;
         }
@@ -1313,6 +1540,16 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static DateTime InstalledAt(string steamPath, ulong id)
         {
+            // Project Zomboid items carry no meta.cpp. Steam's install record
+            // holds the publication time of the content it installed, which is
+            // the exact thing to compare with the workshop's - see StaleBy.
+            if (Games.IsZomboid)
+            {
+                string folder; long size; DateTime updated;
+                return TryGetInstallInfo(id, out folder, out size, out updated)
+                    ? updated.ToUniversalTime() : DateTime.MinValue;
+            }
+
             try
             {
                 string meta = MetaPath(steamPath, id);
@@ -1378,6 +1615,11 @@ namespace ABeautifulPotatoLauncher
             if (installed == DateTime.MinValue) return TimeSpan.Zero;
             TimeSpan installedLag = published - installed;
             if (installedLag <= StaleTolerance) return TimeSpan.Zero;   // copy is newer: current
+
+            // Project Zomboid's installed time IS the publication time of the
+            // installed content (Steam's own record), so it needs no second
+            // opinion: it lagging the workshop means a newer release exists.
+            if (Games.IsZomboid) return installedLag;
 
             // Signal 2: the content timestamp the author stamped into meta.cpp.
             DateTime built = LocalPublishTime(steamPath, id);

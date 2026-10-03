@@ -21,7 +21,7 @@ namespace ABeautifulPotatoLauncher
         public static bool Show(IWin32Window owner, out string host, out int port, out bool save)
         {
             host = "";
-            port = 2302;
+            port = Games.IsZomboid ? Zomboid.DefaultPort : 2302;
             save = false;
 
             using (var f = new Form())
@@ -68,7 +68,7 @@ namespace ABeautifulPotatoLauncher
                 });
                 var pt = new TextBox
                 {
-                    Text = "2302",
+                    Text = (Games.IsZomboid ? Zomboid.DefaultPort : 2302).ToString(),
                     Bounds = new Rectangle(104, 87, 90, 23),
                     BackColor = Panel2,
                     ForeColor = Color.Gainsboro,
