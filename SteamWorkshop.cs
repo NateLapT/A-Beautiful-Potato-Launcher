@@ -949,9 +949,25 @@ namespace ABeautifulPotatoLauncher
             return Marshal.GetDelegateForFunctionPointer(p, typeof(T)) as T;
         }
 
+        /// <summary>
+        /// Held around every call that pumps Steam's callbacks or creates,
+        /// polls or releases a query.
+        ///
+        /// SteamAPI_RunCallbacks is NOT safe to call from two threads at once.
+        /// The mod-time prefetch pumps it on a pool thread while the UI thread
+        /// polls, starts and releases server-list queries - a search followed
+        /// by a query released mid-dispatch was an AccessViolation inside
+        /// steamclient64.dll, which no catch can stop. Reentrant, so a holder
+        /// may call RunCallbacks.
+        /// </summary>
+        internal static readonly object ApiLock = new object();
+
         public static void RunCallbacks()
         {
-            try { if (_runCallbacks != null) _runCallbacks(); } catch { }
+            lock (ApiLock)
+            {
+                try { if (_runCallbacks != null) _runCallbacks(); } catch { }
+            }
         }
 
         /// <summary>Subscribes and asks Steam to start downloading now.</summary>
@@ -1065,24 +1081,26 @@ namespace ABeautifulPotatoLauncher
                     wanted.CopyTo(start, batch, 0, n);
 
                     ulong handle;
-                    try { handle = _createDetails(_ugc, batch, (uint)n); }
+                    try { lock (ApiLock) handle = _createDetails(_ugc, batch, (uint)n); }
                     catch { return; }
                     if (handle == 0 || handle == ulong.MaxValue) return;
 
                     try
                     {
-                        ulong call = _sendQuery(_ugc, handle);
+                        ulong call;
+                        lock (ApiLock) call = _sendQuery(_ugc, handle);
                         if (call == 0) continue;
 
                         // Steam answers asynchronously, so callbacks are pumped
                         // until it does. Ten seconds is generous; it normally
-                        // takes under one.
+                        // takes under one. The lock is taken per call, never
+                        // across the sleep, so the UI thread is not held up.
                         bool failed = true, done = false;
                         for (int i = 0; i < 100 && !done; i++)
                         {
-                            if (_runCallbacks != null) _runCallbacks();
+                            RunCallbacks();
                             System.Threading.Thread.Sleep(100);
-                            done = _callDone(_utils, call, out failed);
+                            lock (ApiLock) done = _callDone(_utils, call, out failed);
                         }
                         if (!done || failed)
                         {
@@ -1093,7 +1111,9 @@ namespace ABeautifulPotatoLauncher
                         for (uint i = 0; i < n; i++)
                         {
                             for (int z = 0; z < DetailsSize; z++) Marshal.WriteByte(det, z, 0);
-                            if (!_queryResult(_ugc, handle, i, det)) continue;
+                            bool got;
+                            lock (ApiLock) got = _queryResult(_ugc, handle, i, det);
+                            if (!got) continue;
 
                             ulong pid = (ulong)Marshal.ReadInt64(det, OffsetPublishedId);
                             uint updated = (uint)Marshal.ReadInt32(det, OffsetTimeUpdated);
@@ -1105,7 +1125,7 @@ namespace ABeautifulPotatoLauncher
                     }
                     finally
                     {
-                        try { if (_releaseQuery != null) _releaseQuery(_ugc, handle); }
+                        try { lock (ApiLock) if (_releaseQuery != null) _releaseQuery(_ugc, handle); }
                         catch { }
                     }
                 }

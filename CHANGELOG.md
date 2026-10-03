@@ -16,6 +16,23 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.7] - 2026-09-26
+
+### Changed
+
+- **The built-in server list has the fakes taken out.** ~13k servers instead
+  of ~112k, and 0.4 MB instead of 2 MB: the steam.dayzed.gg snapshot of
+  Steam's master list (included with their permission) is screened by the
+  launcher's own fake-server rules before it is embedded - 95,699 of 109,069
+  removed. Rebuilt by tools/build-default-servers.py, which runs
+  tools/screen-default-servers.ps1 against the built launcher so the list and
+  the browser can never disagree.
+- **MIT licence** added.
+
+## [0.6] - 2026-09-24
+
+Released as v0.6; v0.55 was the local test build of the same work.
+
 ## [0.55] - 2026-09-24 (pre-release)
 
 ### Added

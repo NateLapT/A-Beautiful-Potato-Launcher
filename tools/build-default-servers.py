@@ -11,9 +11,12 @@
 #    name  map  gamedir  tags  host  gameport  queryport  players  maxplayers
 #    ping  appid  password  secure  lastseen
 #
-#  Fakes are kept on purpose. The launcher's farm detection works by counting
-#  how many servers share an address, so a list with the farms removed would
-#  teach it nothing - it hides them itself at render time.
+#  Then the fakes are removed by tools/screen-default-servers.ps1, which runs
+#  the launcher's OWN screening code on the list - so build the launcher
+#  first. Screened on the WHOLE list: farm detection counts how many servers
+#  share an address, so it has to see the farm to recognise it.
+#
+#  Included with dayzed.gg's permission.
 #
 #  Usage:  python tools/build-default-servers.py            (downloads)
 #          python tools/build-default-servers.py file.json  (uses a saved copy)
@@ -22,6 +25,7 @@
 import gzip
 import json
 import os
+import subprocess
 import sys
 import urllib.request
 
@@ -72,6 +76,11 @@ def main():
 
     print("%d servers (generated %s) -> %s, %.1f MB"
           % (len(lines), doc.get("generated_at"), os.path.normpath(OUT), os.path.getsize(OUT) / 1048576.0))
+
+    screen = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screen-default-servers.ps1")
+    # Anything after the input file is passed on, e.g.  -Report why.txt
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", screen]
+                   + sys.argv[2:], check=True)
 
 
 if __name__ == "__main__":
