@@ -126,10 +126,17 @@ namespace ABeautifulPotatoLauncher
             // The exe an update replaced, if this is the first run after one.
             Updater.CleanUpAfterUpdate();
 
+            // Which game this run is for. Everything per-game - the data
+            // folder, the Steam app, the list - follows from it, so it is
+            // settled before any of that is touched. See Games.
+            try { Games.Load(ServerStore.BaseDir); }
+            catch { }
+
             try
             {
                 File.AppendAllText(LogFile,
                     "[" + DateTime.Now.ToString("HH:mm:ss") + "] Launcher started - " + VersionLabel
+                    + "  (" + Games.Name + ")"
                     + Environment.NewLine
                     + "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + Elevation.Describe()
                     + Environment.NewLine);
@@ -317,6 +324,8 @@ namespace ABeautifulPotatoLauncher
         {
             get
             {
+                // Project Zomboid's column is the server's game version.
+                if (Games.IsZomboid) return Zomboid.VersionOf(Tags);
                 if (AppId == A2S.ExperimentalAppId) return "Experimental";
                 if (AppId == A2S.StableAppId) return "Stable";
                 return "";
@@ -805,6 +814,8 @@ namespace ABeautifulPotatoLauncher
         {
             get
             {
+                if (Games.IsZomboid) return new[] { Zomboid.AppId };
+
                 string mode = EffectiveBrowseMode;
                 if (mode == "all")
                     return new[] { (uint)A2S.StableAppId, (uint)A2S.ExperimentalAppId };
@@ -825,7 +836,9 @@ namespace ABeautifulPotatoLauncher
 
         private string EffectiveBrowseMode
         {
-            get { return TabForcesAllBuilds(_tab) ? "all" : _browseMode; }
+            // Project Zomboid has one build to browse; its dropdown picks a
+            // VERSION instead, which filters locally - see VersionFilter.
+            get { return Games.IsZomboid || TabForcesAllBuilds(_tab) ? "all" : _browseMode; }
         }
         private bool _steamReady;
 
@@ -920,7 +933,7 @@ namespace ABeautifulPotatoLauncher
             // Elevation belongs in the title bar: it changes who owns every
             // file the launcher and the game write from here on, and it is not
             // otherwise visible at a glance.
-            Text = "A Beautiful Potato Launcher"
+            Text = "A Beautiful Potato Launcher  -  " + Games.Name
                  + (Elevation.Self ? "   (elevated User: Administrator)" : "");
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(1180, 800);
@@ -937,6 +950,10 @@ namespace ABeautifulPotatoLauncher
             _allowed = ServerStore.LoadAllowed();
             int savedTab = ServerStore.LoadTab();
             _tab = Enum.IsDefined(typeof(Tab), savedTab) ? (Tab)savedTab : Tab.Community;
+            if (Games.IsZomboid && _tab == Tab.Official) _tab = Tab.Community;
+
+            // The PZ mod scan reads the workshop folders of every library.
+            Zomboid.SteamPathForScan = FindSteam();
 
             BuildUi();
 
@@ -1237,8 +1254,11 @@ namespace ABeautifulPotatoLauncher
             searchRow.Controls.SetChildIndex(topRight, 1);
 
             int x = 0;
-            foreach (var t in new[] { Tab.Official, Tab.Community, Tab.Recent,
-                                      Tab.Friends, Tab.Lan, Tab.Favourites })
+            // OFFICIAL means Bohemia's own servers; Project Zomboid has none.
+            var tabOrder = Games.IsZomboid
+                ? new[] { Tab.Community, Tab.Recent, Tab.Friends, Tab.Lan, Tab.Favourites }
+                : new[] { Tab.Official, Tab.Community, Tab.Recent, Tab.Friends, Tab.Lan, Tab.Favourites };
+            foreach (var t in tabOrder)
             {
                 var b = new Button
                 {
@@ -1434,12 +1454,13 @@ namespace ABeautifulPotatoLauncher
             _list.Columns.Add("", 26, HorizontalAlignment.Center);
             _list.Columns.Add("", 26, HorizontalAlignment.Center);
             _list.Columns.Add("Name", 244);
-            _list.Columns.Add("Game", 84);
+            _list.Columns.Add(Games.IsZomboid ? "Version" : "Game", 84);
             _list.Columns.Add("Status", 62);
             _list.Columns.Add("Map", 106);
             _list.Columns.Add("Country", 58, HorizontalAlignment.Center);
             _list.Columns.Add("Players", 70, HorizontalAlignment.Center);
-            _list.Columns.Add("Time", 54, HorizontalAlignment.Center);
+            // DayZ publishes its in-game clock; Project Zomboid does not.
+            _list.Columns.Add(Games.IsZomboid ? "" : "Time", Games.IsZomboid ? 0 : 54, HorizontalAlignment.Center);
             _list.Columns.Add("Ping", 56, HorizontalAlignment.Center);
             _list.Columns.Add("Mods", 48, HorizontalAlignment.Center);
             _list.Columns.Add("Password", 66, HorizontalAlignment.Center);
@@ -1518,7 +1539,8 @@ namespace ABeautifulPotatoLauncher
             };
             _mods.Columns.Add("Mod", 180);
             _mods.Columns.Add("Workshop ID", 90);
-            _mods.Columns.Add("Status", 120);
+            // Wider for Zomboid, whose states say what happens next.
+            _mods.Columns.Add("Status", Games.IsZomboid ? 230 : 120);
             _mods.Columns.Add("", 58, HorizontalAlignment.Center);
             _mods.Columns.Add("", 42, HorizontalAlignment.Center);
             _mods.Columns.Add("", 60, HorizontalAlignment.Center);
@@ -1598,28 +1620,76 @@ namespace ABeautifulPotatoLauncher
         /// logo appears: beside the search bar, and on the DayZ logo itself.
         /// One copy of the wording so the two can never drift apart.
         /// </summary>
-        internal const string Disclaimer =
+        internal static string Disclaimer
+        {
+            get { return Games.IsZomboid ? ZomboidDisclaimer : DayZDisclaimer; }
+        }
+
+        private const string DayZDisclaimer =
             "A Beautiful Potato Launcher is an unofficial third-party launcher made by "
             + "community members for the DayZ community.\r\n"
             + "It is not endorsed by, affiliated with, or sponsored by Bohemia Interactive a.s. "
             + "All trademarks are the property of their respective owners.";
 
+        private const string ZomboidDisclaimer =
+            "A Beautiful Potato Launcher is an unofficial third-party launcher made by "
+            + "community members for the Project Zomboid community.\r\n"
+            + "It is not endorsed by, affiliated with, or sponsored by The Indie Stone. "
+            + "All trademarks are the property of their respective owners.";
+
         private void BuildRail(Panel rail)
         {
-            var dayzLogo = new PictureBox
+            // WHICH GAME. At the very top, because it changes everything below
+            // it. Choosing the other one restarts the launcher - see Games.
+            var gamePick = new ComboBox
             {
-                Image = LoadImage("dayz_logo.png"),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Bounds = new Rectangle(18, 14, 174, 74),
-                BackColor = Color.Transparent,
-                AccessibleName = "DayZ",
-                AccessibleDescription = Disclaimer      // what a screen reader announces
+                Bounds = new Rectangle(20, 10, 170, 24),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro,
+                FlatStyle = FlatStyle.Flat
             };
-            rail.Controls.Add(dayzLogo);
+            gamePick.Items.AddRange(new object[] { Games.NameOf(Game.DayZ), Games.NameOf(Game.Zomboid) });
+            gamePick.SelectedIndex = (int)Games.Current;
+            gamePick.SelectedIndexChanged += (s, e) => SwitchGame((Game)gamePick.SelectedIndex);
+            rail.Controls.Add(gamePick);
+            new ToolTip().SetToolTip(gamePick,
+                "Which game's servers to browse. Changing it restarts the launcher.");
+
+            // The DayZ logo for DayZ. Project Zomboid gets its name in plain
+            // type instead - no logo of theirs is shipped with the launcher.
+            Control gameMark;
+            if (Games.IsZomboid)
+            {
+                gameMark = new Label
+                {
+                    Text = "PROJECT\r\nZOMBOID",
+                    Bounds = new Rectangle(18, 40, 174, 68),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = Color.FromArgb(200, 60, 50),
+                    BackColor = Color.Transparent,
+                    Font = new Font("Segoe UI", 15f, FontStyle.Bold),
+                    UseMnemonic = false,
+                    AccessibleDescription = Disclaimer
+                };
+            }
+            else
+            {
+                gameMark = new PictureBox
+                {
+                    Image = LoadImage("dayz_logo.png"),
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Bounds = new Rectangle(18, 40, 174, 68),
+                    BackColor = Color.Transparent,
+                    AccessibleName = "DayZ",
+                    AccessibleDescription = Disclaimer      // what a screen reader announces
+                };
+            }
+            rail.Controls.Add(gameMark);
 
             // Hover text. AutoPopDelay raised because the default five seconds
             // is not long enough to read two sentences.
-            new ToolTip { AutoPopDelay = 20000, InitialDelay = 300 }.SetToolTip(dayzLogo, Disclaimer);
+            new ToolTip { AutoPopDelay = 20000, InitialDelay = 300 }.SetToolTip(gameMark, Disclaimer);
 
             var potato = new PictureBox
             {
@@ -1647,7 +1717,8 @@ namespace ABeautifulPotatoLauncher
             }
 
             int ry = 184;
-            rail.Controls.Add(new Label { Text = "Browse", Bounds = new Rectangle(20, ry, 170, 18), ForeColor = Dim });
+            rail.Controls.Add(new Label { Text = Games.IsZomboid ? "Version" : "Browse",
+                                          Bounds = new Rectangle(20, ry, 170, 18), ForeColor = Dim });
             ry += 20;
             _cbBuild = new ComboBox
             {
@@ -1664,11 +1735,32 @@ namespace ABeautifulPotatoLauncher
             _cbBuild.ItemHeight = 17;
             _cbBuild.DrawItem += DrawBuildItem;
 
+            if (Games.IsZomboid)
+            {
+                // The same box, picking a game VERSION rather than a build.
+                // Filled from the servers actually in the list - see
+                // FillVersionChoices - and applied locally, instantly.
+                FillVersionChoices();
+                _cbBuild.SelectedIndexChanged += (s, e) =>
+                {
+                    if (_syncingBuild) return;
+                    int i = _cbBuild.SelectedIndex;
+                    _browseMode = i > 0 && i < _versionValues.Count ? "v:" + _versionValues[i] : "all";
+                    ServerStore.SaveBrowseMode(_browseMode);
+                    ApplyFilters();
+                };
+                new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_cbBuild,
+                    "Show servers on one game version. A server on a different version "
+                    + "from yours will not let you in - yours is shown in green.");
+            }
+            else
+            {
             _cbBuild.Items.AddRange(new object[] { "All servers", "Experimental servers", "Stable servers" });
             _cbBuild.SelectedIndex = IndexForMode(_browseMode);
+            }
             _cbBuild.SelectedIndexChanged += (s, e) =>
             {
-                if (_syncingBuild) return;
+                if (_syncingBuild || Games.IsZomboid) return;
 
                 _browseMode = ModeForIndex(_cbBuild.SelectedIndex);
                 ServerStore.SaveBrowseMode(_browseMode);
@@ -1677,18 +1769,23 @@ namespace ABeautifulPotatoLauncher
             rail.Controls.Add(_cbBuild);
             ry += 34;
 
-            rail.Controls.Add(new Label { Text = "In-game name", Bounds = new Rectangle(20, ry, 170, 18), ForeColor = Dim });
-            ry += 20;
+            // DayZ takes the player's name on the command line. Project Zomboid
+            // asks for an account name per server, in its own connect window,
+            // so there is nothing to fill in here.
             _name = new TextBox
             {
-                Bounds = new Rectangle(20, ry, 170, 24),
+                Bounds = new Rectangle(20, ry + 20, 170, 24),
                 BackColor = Panel2,
                 ForeColor = Color.Gainsboro,
                 BorderStyle = BorderStyle.FixedSingle,
                 Text = ServerStore.LoadName()
             };
-            rail.Controls.Add(_name);
-            ry += 34;
+            if (!Games.IsZomboid)
+            {
+                rail.Controls.Add(new Label { Text = "In-game name", Bounds = new Rectangle(20, ry, 170, 18), ForeColor = Dim });
+                rail.Controls.Add(_name);
+                ry += 54;
+            }
 
             _refresh = MakeBtn("REFRESH", new Rectangle(20, ry, 170, 30), Panel2);
             _refresh.Click += (s, e) => RefreshCurrent(true);
@@ -1710,7 +1807,9 @@ namespace ABeautifulPotatoLauncher
             buildIndex.Click += (s, e) => BuildIndexNow();
             rail.Controls.Add(buildIndex);
             new ToolTip { AutoPopDelay = 15000 }.SetToolTip(buildIndex,
-                "Asks Steam for every map the launcher knows about, which reaches past "
+                (Games.IsZomboid
+                    ? "Asks Steam for the list one starting letter at a time, which reaches past "
+                    : "Asks Steam for every map the launcher knows about, which reaches past ")
                 + "its 10,000-server limit. Takes a few minutes; the list fills as it goes.");
             ry += 30;
 
@@ -1720,11 +1819,15 @@ namespace ABeautifulPotatoLauncher
             rail.Controls.Add(_favBtn);
             ry += 30;
 
-            var modMgr = MakeBtn("MOD MANAGER", new Rectangle(20, ry, 170, 26), Panel2);
-            modMgr.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
-            modMgr.Click += OnModManager;
-            rail.Controls.Add(modMgr);
-            ry += 30;
+            // The mod library window is built around DayZ's mod folders.
+            if (!Games.IsZomboid)
+            {
+                var modMgr = MakeBtn("MOD MANAGER", new Rectangle(20, ry, 170, 26), Panel2);
+                modMgr.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+                modMgr.Click += OnModManager;
+                rail.Controls.Add(modMgr);
+                ry += 30;
+            }
 
             var direct = MakeBtn("DIRECT CONNECT", new Rectangle(20, ry, 170, 28),
                                  Color.FromArgb(58, 78, 104));
@@ -1908,7 +2011,7 @@ namespace ABeautifulPotatoLauncher
             // In-game clock, in quarter-day steps. A range rather than a
             // day/night switch because "dusk" and "early morning" are real
             // requests that two options cannot express.
-            lab("Game Time", 4, y);
+            if (!Games.IsZomboid) lab("Game Time", 4, y);
             _timeRange = new RangeSlider
             {
                 Bounds = new Rectangle(118, y - 4, 300, 38),
@@ -1923,14 +2026,20 @@ namespace ABeautifulPotatoLauncher
             };
             _timeRange.SetRange(0, 24);
             _timeRange.RangeChanged += (s2, e2) => QueueFilter();
-            p.Controls.Add(_timeRange);
+
+            // DayZ publishes an in-game clock; Project Zomboid does not, so
+            // the slider would only ever hide everything.
+            if (!Games.IsZomboid) p.Controls.Add(_timeRange);
 
             new ToolTip { AutoPopDelay = 15000 }.SetToolTip(_timeRange,
                 "The server's in-game clock, in six hour steps. Servers that do "
                 + "not publish a clock are not shown while this is narrowed.");
-            y += 40;
+            if (!Games.IsZomboid) y += 40;
             const int rx = 500;
-            lab("3rd Person View", rx - 114, 10);
+
+            // Zomboid has no camera setting to filter on, but it does publish
+            // whether PvP is on - the question its players ask first.
+            lab(Games.IsZomboid ? "PvP" : "3rd Person View", rx - 114, 10);
             _segThird = new Segmented(new[] { "Any", "Enabled", "Disabled" }, new Point(rx, 10));
             _segThird.Changed += QueueFilter;
             _segThird.AddTo(p);
@@ -1946,6 +2055,9 @@ namespace ABeautifulPotatoLauncher
             _chkHideFakes = MakeCheck("Hide fake servers",    new Point(rx, 146));
             _chkHideFakes.Checked = true;
             _chkHideFakes.ForeColor = Color.FromArgb(220, 190, 120);
+
+            // No fake screening for Project Zomboid - see FakeReason.
+            _chkHideFakes.Visible = !Games.IsZomboid;
 
             var tipFake = new ToolTip();
             tipFake.SetToolTip(_chkHideFakes,
@@ -2172,7 +2284,11 @@ namespace ABeautifulPotatoLauncher
                 e.Graphics.FillRectangle(brush, e.Bounds);
 
             // Same values as the Game column in the list - see MakeItem.
-            Color ink = text.StartsWith("Experimental", StringComparison.OrdinalIgnoreCase)
+            Color ink = Games.IsZomboid
+                      ? (e.Index > 0 && e.Index < _versionValues.Count
+                            ? ZomboidVersionColour(_versionValues[e.Index], Color.Gainsboro)
+                            : Color.Gainsboro)
+                      : text.StartsWith("Experimental", StringComparison.OrdinalIgnoreCase)
                             ? Color.FromArgb(255, 170, 80)
                       : text.StartsWith("Stable", StringComparison.OrdinalIgnoreCase)
                             ? Color.FromArgb(110, 220, 140)
@@ -2181,6 +2297,115 @@ namespace ABeautifulPotatoLauncher
             TextRenderer.DrawText(e.Graphics, text, _cbBuild.Font,
                 new Rectangle(e.Bounds.X + 2, e.Bounds.Y, e.Bounds.Width - 4, e.Bounds.Height),
                 ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+
+        /// <summary>
+        /// The version behind each entry of Zomboid's version box, parallel to
+        /// its items; entry 0 is "All versions" and holds "".
+        /// </summary>
+        private readonly List<string> _versionValues = new List<string>();
+
+        /// <summary>The version the player picked, or "" for every version.</summary>
+        private string VersionFilter
+        {
+            get
+            {
+                return Games.IsZomboid && _browseMode != null && _browseMode.StartsWith("v:")
+                    ? _browseMode.Substring(2) : "";
+            }
+        }
+
+        /// <summary>
+        /// Stocks Zomboid's version box from the servers in the list, newest
+        /// version first, with how many servers run each. The player's own
+        /// version is always offered, even before any server running it has
+        /// arrived, and so is a saved choice that is not in the list yet.
+        ///
+        /// Rebuilt only when the set of versions changes, and never while the
+        /// box is open - replacing a dropdown's items under the pointer is the
+        /// crash RefreshFilterChoices describes.
+        /// </summary>
+        private void FillVersionChoices()
+        {
+            if (!Games.IsZomboid || _cbBuild == null || _cbBuild.DroppedDown) return;
+
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            List<BrowserServer> cache = null;
+            try { cache = IsSteamTab(_tab) ? _cache : null; } catch { }
+            if (cache != null)
+                foreach (var srv in cache)
+                {
+                    string v = srv.Version;
+                    if (v.Length == 0) continue;
+                    int n;
+                    counts[v] = counts.TryGetValue(v, out n) ? n + 1 : 1;
+                }
+
+            string mine = Zomboid.LocalVersion;
+            string mineKey = counts.Keys.FirstOrDefault(v => Zomboid.SameVersion(v, mine));
+            if (mine.Length > 0 && mineKey == null)
+            {
+                var parts = mine.Split('.');
+                mineKey = parts.Length >= 2 ? parts[0] + "." + parts[1] : mine;
+                counts[mineKey] = 0;
+            }
+
+            string chosen = VersionFilter;
+            if (chosen.Length > 0 && !counts.Keys.Any(v => Zomboid.SameVersion(v, chosen))) counts[chosen] = 0;
+
+            var versions = counts.Keys.ToList();
+            versions.Sort(Zomboid.CompareVersionsDescending);
+
+            var values = new List<string> { "" };
+            values.AddRange(versions);
+            if (values.SequenceEqual(_versionValues) && _cbBuild.Items.Count == values.Count
+                && counts.Values.Sum() == _versionCountTotal) return;
+
+            var labels = new List<object> { "All versions" };
+            foreach (string v in versions)
+            {
+                int n = counts[v];
+                bool yours = mine.Length > 0 && Zomboid.SameVersion(v, mine);
+                labels.Add(v + (yours ? "  (yours)" : "") + (n > 0 ? "  -  " + n.ToString("N0") : ""));
+            }
+
+            _syncingBuild = true;
+            try
+            {
+                _versionValues.Clear();
+                _versionValues.AddRange(values);
+                _versionCountTotal = counts.Values.Sum();
+
+                _cbBuild.BeginUpdate();
+                _cbBuild.Items.Clear();
+                _cbBuild.Items.AddRange(labels.ToArray());
+                int at = chosen.Length == 0 ? 0
+                       : Math.Max(0, _versionValues.FindIndex(v => v.Length > 0 && Zomboid.SameVersion(v, chosen)));
+                _cbBuild.SelectedIndex = at;
+                _cbBuild.EndUpdate();
+            }
+            finally { _syncingBuild = false; }
+        }
+
+        private int _versionCountTotal = -1;
+
+        /// <summary>
+        /// Saves the other game as the choice and restarts into it. Nothing is
+        /// carried over: each game has its own lists, filters and Steam session.
+        /// </summary>
+        private void SwitchGame(Game to)
+        {
+            if (to == Games.Current) return;
+
+            Log("Switching to " + Games.NameOf(to) + " - restarting the launcher.");
+            Games.Save(ServerStore.BaseDir, to);
+            try { Application.Restart(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("The launcher could not restart itself (" + ex.Message + ").\r\n\r\n"
+                                + "Close it and open it again; it will start on " + Games.NameOf(to) + ".",
+                                "Switch game", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         private static int IndexForMode(string mode)
@@ -2197,6 +2422,9 @@ namespace ABeautifulPotatoLauncher
         {
             foreach (var kv in _tabs)
                 kv.Value.BackColor = kv.Key == _tab ? Accent : Panel2;
+
+            // Zomboid's version box filters whatever is on screen, on any tab.
+            if (Games.IsZomboid) return;
 
             bool picks = TabPicksBuild(_tab);
             _cbBuild.Enabled = picks;
@@ -2325,8 +2553,9 @@ namespace ABeautifulPotatoLauncher
 
         private void MarkSortedColumn()
         {
-            string[] titles = { "", "", "Name", "Game", "Status", "Map", "Country",
-                                "Players", "Time", "Ping", "Mods", "Password", "Address" };
+            string[] titles = { "", "", "Name", Games.IsZomboid ? "Version" : "Game", "Status", "Map",
+                                "Country", "Players", Games.IsZomboid ? "" : "Time", "Ping", "Mods",
+                                "Password", "Address" };
             for (int i = 0; i < _list.Columns.Count && i < titles.Length; i++)
             {
                 string label = titles[i];
@@ -2484,7 +2713,11 @@ namespace ABeautifulPotatoLauncher
                     byColumn = (a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
                     break;
                 case ColGame:
-                    byColumn = (a, b) => string.Compare(a.GameLabel, b.GameLabel, StringComparison.OrdinalIgnoreCase);
+                    // Versions compare as numbers: 42.9 is older than 42.21.
+                    if (Games.IsZomboid)
+                        byColumn = (a, b) => -Zomboid.CompareVersionsDescending(a.GameLabel, b.GameLabel);
+                    else
+                        byColumn = (a, b) => string.Compare(a.GameLabel, b.GameLabel, StringComparison.OrdinalIgnoreCase);
                     break;
                 case ColStatus:
                     byColumn = (a, b) => Rank(a).CompareTo(Rank(b));
@@ -2520,7 +2753,7 @@ namespace ABeautifulPotatoLauncher
                     byColumn = (a, b) => PingKey(a).CompareTo(PingKey(b));
                     break;
                 case ColMods:
-                    byColumn = (a, b) => HasTag(a.Tags, "mod").CompareTo(HasTag(b.Tags, "mod"));
+                    byColumn = (a, b) => Modded(a.Tags).CompareTo(Modded(b.Tags));
                     break;
                 case ColPassword:
                     byColumn = (a, b) => a.Password.CompareTo(b.Password);
@@ -2660,7 +2893,7 @@ namespace ABeautifulPotatoLauncher
                 PlayersCell(row),
                 TagTime(row.Tags),
                 row.Ping > 0 ? row.Ping + " ms" : (row.Offline ? "-" : ""),
-                HasTag(row.Tags, "mod") ? "yes" : "",
+                Modded(row.Tags) ? "yes" : "",
                 row.Password ? "Yes" : "No",
                 row.Endpoint
             })
@@ -2679,8 +2912,9 @@ namespace ABeautifulPotatoLauncher
             it.SubItems[ColRefresh].ForeColor = Color.FromArgb(120, 150, 190);
             it.SubItems[ColStar].ForeColor = fav
                 ? Color.FromArgb(235, 200, 90) : Color.FromArgb(95, 95, 102);
-            it.SubItems[ColGame].ForeColor =
-                row.AppId == A2S.ExperimentalAppId ? Color.FromArgb(255, 170, 80)
+            it.SubItems[ColGame].ForeColor = Games.IsZomboid
+                ? ZomboidVersionColour(row.GameLabel, body)
+                : row.AppId == A2S.ExperimentalAppId ? Color.FromArgb(255, 170, 80)
                 : row.AppId == A2S.StableAppId ? Color.FromArgb(110, 220, 140)
                 : body;
             it.SubItems[ColPassword].ForeColor = row.Password
@@ -2794,6 +3028,28 @@ namespace ABeautifulPotatoLauncher
             try { _list.RedrawItems(i, i, true); } catch { }
         }
 
+        /// <summary>
+        /// Whether a server says it runs mods: DayZ's "mod" tag, Zomboid's
+        /// "modded".
+        /// </summary>
+        private static bool Modded(string tags)
+        {
+            return Games.IsZomboid ? Zomboid.IsModded(tags) : HasTag(tags, "mod");
+        }
+
+        /// <summary>
+        /// A Zomboid version in green when it is the version installed here -
+        /// the game will not join any other - and amber when it is not.
+        /// </summary>
+        private static Color ZomboidVersionColour(string version, Color fallback)
+        {
+            if (string.IsNullOrEmpty(version)) return fallback;
+            string mine = Zomboid.LocalVersion;
+            if (mine.Length == 0) return fallback;
+            return Zomboid.SameVersion(version, mine) ? Color.FromArgb(110, 220, 140)
+                                                      : Color.FromArgb(255, 170, 80);
+        }
+
         private static bool HasTag(string tags, string tag)
         {
             if (string.IsNullOrEmpty(tags)) return false;
@@ -2817,12 +3073,11 @@ namespace ABeautifulPotatoLauncher
             ReadFilterUi();
 
             string steam = FindSteam();
-            string gameDir = steam == null ? null
-                : (FindGameDir(steam, A2S.ExperimentalAppId) ?? FindGameDir(steam, A2S.StableAppId));
+            string gameDir = AnyGameDir(steam);
 
             if (gameDir == null)
             {
-                _status.Text = "Cannot find DayZ, so the server browser is unavailable.";
+                _status.Text = "Cannot find " + Games.Name + ", so the server browser is unavailable.";
                 return;
             }
 
@@ -2861,6 +3116,8 @@ namespace ABeautifulPotatoLauncher
             _merged.Clear();
             _mergedKeys.Clear();
             _deepSweepQueued = false;
+            _retryWaitTicks = 0;
+            _pollRetries = 0;
 
             foreach (var srv in _cache)
                 if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
@@ -2899,6 +3156,37 @@ namespace ABeautifulPotatoLauncher
         }
 
         private int _pollTicks;
+
+        /// <summary>
+        /// Ticks left to wait before asking again for a pass that came back
+        /// empty, and how many times the current pass has been re-asked.
+        /// </summary>
+        private int _retryWaitTicks;
+        private int _pollRetries;
+
+        /// <summary>
+        /// STEAM RATIONS SERVER-LIST REQUESTS, and a Zomboid sweep hits the ration.
+        ///
+        /// Measured 3 October 2026: the first four requests of a sweep are
+        /// answered, then roughly one in every 40-50 seconds; the rest are
+        /// turned away within a second or two and look exactly like an empty
+        /// answer. They are not empty - "b*" and "c*", refused inside the
+        /// sweep, returned 1,538 and 1,172 servers asked on their own a minute
+        /// later, and the requests straight after those were refused again.
+        ///
+        /// So a pass that comes back empty is asked again after a pause long
+        /// enough for the ration to come round: about 20 seconds, then 40.
+        /// A sweep therefore takes minutes rather than seconds, but it runs in
+        /// the background with the list already usable.
+        /// </summary>
+        private static readonly int[] RetryAfterTicks = { 29, 57 };   // ~20 s, ~40 s at InternetPollMs
+
+        /// <summary>
+        /// Name slices on an ordinary Zomboid refresh. Fewer than DayZ's maps,
+        /// because every one spends Steam's ration - which the player's own
+        /// SEARCH needs too. BUILD INDEX still takes them all.
+        /// </summary>
+        private const int SlicesPerRefresh = 6;
         private ListKind _pollKind = ListKind.Internet;
 
         // ------------------------------------------------ localhost on LAN --
@@ -2917,17 +3205,20 @@ namespace ABeautifulPotatoLauncher
         {
             System.Threading.Tasks.Task.Run(() =>
             {
-                var found = LocalServers.Find();
+                // LocalServers knows DayZ's server processes; a Zomboid server
+                // here is simply asked on its default port.
+                var found = Games.IsZomboid ? new List<LocalServer>() : LocalServers.Find();
                 if (found.Count == 0)
                 {
-                    foreach (int qp in LocalServers.DefaultQueryPorts)
+                    int[] ports = Games.IsZomboid ? new[] { Zomboid.DefaultPort } : LocalServers.DefaultQueryPorts;
+                    foreach (int qp in ports)
                     {
                         var info = A2S.GetInfoAt("127.0.0.1", qp, 600);
                         if (info != null && info.Online)
                             found.Add(new LocalServer
                             {
                                 QueryPort = qp,
-                                GamePort = info.GamePort > 0 ? info.GamePort : 2302,
+                                GamePort = info.GamePort > 0 ? info.GamePort : Games.IsZomboid ? qp : 2302,
                                 Info = info
                             });
                     }
@@ -3056,6 +3347,8 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         private List<SweepPass> DeepSweepPasses(uint app, bool everyMap)
         {
+            if (Games.IsZomboid) return ZomboidSweepPasses(app, everyMap);
+
             var passes = new List<SweepPass>
             {
                 new SweepPass(app, "first-person", "gametagsand", "no3rd"),
@@ -3114,6 +3407,33 @@ namespace ABeautifulPotatoLauncher
 
             // Where the next ordinary refresh picks up.
             _mapCursor = maps.Count == 0 ? 0 : (_mapCursor + take) % maps.Count;
+            return passes;
+        }
+
+        /// <summary>
+        /// Project Zomboid's way past the cap. Its tag and map filters return
+        /// nothing from Steam, but the name filter works, so the list is asked
+        /// for one leading character at a time - see Zomboid.NameSlices.
+        ///
+        /// Populated servers first: those are the ones a player is looking
+        /// for, and on its own that pass reached 9,884 servers with players
+        /// where the plain request found 1,842. Then the name slices - a share
+        /// of them on an ordinary refresh, moving on each time, and all of them
+        /// for BUILD INDEX, the same arrangement DayZ's maps use.
+        /// </summary>
+        private List<SweepPass> ZomboidSweepPasses(uint app, bool everySlice)
+        {
+            var passes = new List<SweepPass> { new SweepPass(app, "populated", "empty", "1") };
+
+            var slices = Zomboid.NameSlices;
+            int take = everySlice ? slices.Length : Math.Min(SlicesPerRefresh, slices.Length);
+            for (int i = 0; i < take; i++)
+            {
+                string slice = slices[(_mapCursor + i) % slices.Length];
+                passes.Add(new SweepPass(app, "names " + slice, "name_match", slice));
+            }
+
+            _mapCursor = (_mapCursor + take) % slices.Length;
             return passes;
         }
 
@@ -3281,9 +3601,13 @@ namespace ABeautifulPotatoLauncher
                 return;
             }
 
-            int maps = KnownMaps().Count;
+            int maps = Games.IsZomboid ? Zomboid.NameSlices.Length : KnownMaps().Count;
             if (MessageBox.Show(
-                    "Ask Steam for every one of the " + maps + " maps the launcher knows about?"
+                    (Games.IsZomboid
+                        ? "Ask Steam for the server list one starting letter at a time (" + maps + " passes)?"
+                          + "\r\n\r\nSteam only answers about one of these a minute once a sweep is under way, "
+                          + "so this takes around half an hour."
+                        : "Ask Steam for every one of the " + maps + " maps the launcher knows about?")
                     + "\r\n\r\nThis reaches past Steam's 10,000-server limit and builds the full "
                     + "list, but it takes several minutes. The list fills as it goes and you can "
                     + "keep using the launcher while it runs.",
@@ -3319,6 +3643,7 @@ namespace ABeautifulPotatoLauncher
 
         private static string BuildLabel(uint app)
         {
+            if (Games.IsZomboid) return Games.Name;
             return app == (uint)A2S.ExperimentalAppId ? "Experimental" : "stable";
         }
 
@@ -3340,6 +3665,28 @@ namespace ABeautifulPotatoLauncher
         {
             bool done;
             int raw;
+            // Waiting out the pause before re-asking an empty pass - see
+            // RetryAfterTicks.
+            if (_retryWaitTicks > 0)
+            {
+                if (--_retryWaitTicks > 0) return;
+
+                var again = FiltersFor(_pollPass, _pollKind);
+                _lastSteamFilterKey = SteamFilterKey(again);
+                if (SteamServerList.Start(_pollKind, _pollPass.App, again))
+                {
+                    _pollRetries++;
+                    _pollTicks = 0;
+                    _stableTicks = 0;
+                    _lastRawCount = -1;
+                    return;
+                }
+
+                // Refused outright: take the empty answer and move on, rather
+                // than asking again for ever.
+                _pollRetries = RetryAfterTicks.Length;
+            }
+
             _pollTicks++;
             _browser = SteamServerList.Poll(out done, out raw);
             if (_pollKind == ListKind.Lan) _browser = AddLocalhost(_browser, _pollApp);
@@ -3381,6 +3728,19 @@ namespace ABeautifulPotatoLauncher
             UpdateStatus(done ? null : "(loading from Steam...)");
 
             if (!done) return;
+
+            if (Games.IsZomboid && raw == 0 && _pollRetries < RetryAfterTicks.Length
+                && _pollKind == ListKind.Internet && _pollPass.Extra != null && _pollPass.Extra.Count > 0)
+            {
+                _retryWaitTicks = RetryAfterTicks[_pollRetries];
+                Log("  " + _pollPass.Label + ": Steam is pacing requests - asking again in about "
+                    + (_retryWaitTicks * InternetPollMs / 1000) + " s.");
+                SteamServerList.Stop();
+                UpdateStatus((_buildingIndex ? "BUILDING SERVER INDEX - " : "sweeping - ")
+                             + "waiting for Steam, " + (_appQueue.Count + 1) + " passes left...");
+                return;
+            }
+            _pollRetries = 0;
 
             int before = _mergedKeys.Count;
             foreach (var srv in _browser)
@@ -3532,6 +3892,7 @@ namespace ABeautifulPotatoLauncher
                 SortRows(rows);
 
             SetRows(rows, _selectedEndpoint);
+            FillVersionChoices();
             return rows.Count;
         }
 
@@ -3622,6 +3983,9 @@ namespace ABeautifulPotatoLauncher
             // slot count has to be weighed against.
             _serversPerIp.Clear();
             _sentinelOnlyIps.Clear();
+
+            // No fake screening for Project Zomboid - see FakeReason.
+            if (Games.IsZomboid) return;
 
             var sentinelCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
@@ -3907,6 +4271,11 @@ namespace ABeautifulPotatoLauncher
         private string FakeReason(BrowserServer s)
         {
             if (s == null) return null;
+
+            // Project Zomboid's list does not have DayZ's redirect farms, and
+            // its real servers run 170 and 200 slots - which every capacity
+            // rule here would call impossible. So none of it applies.
+            if (Games.IsZomboid) return null;
 
             if (_favourites.Contains(s.Endpoint)) return null;
 
@@ -4545,7 +4914,15 @@ namespace ABeautifulPotatoLauncher
                 _filters.MinHour = _timeRange.Low;
                 _filters.MaxHour = _timeRange.High;
             }
-            _filters.ThirdPersonMode = (TriState)(_segThird?.SelectedIndex ?? 0);
+            if (Games.IsZomboid)
+            {
+                // The first segment is PvP for Zomboid; see BuildFilterPanel.
+                _filters.Pvp = (TriState)(_segThird?.SelectedIndex ?? 0);
+                _filters.ThirdPersonMode = TriState.Any;
+                _filters.Official = TriState.Any;
+                _filters.Version = VersionFilter;
+            }
+            else _filters.ThirdPersonMode = (TriState)(_segThird?.SelectedIndex ?? 0);
             _filters.ModsMode = (TriState)(_segMods?.SelectedIndex ?? 0);
             _filters.NoPassword = _chkNoPass?.Checked ?? false;
             _filters.HideFull = _chkHideFull?.Checked ?? false;
@@ -5633,6 +6010,27 @@ namespace ABeautifulPotatoLauncher
                 _modsHeader.Text = string.Format("Content required by {0} ({1} mods)  -  checked {2:HH:mm:ss}",
                                                  row.Name, modCount, _modsShownAt);
 
+                // Project Zomboid lists mod ids; the workshop item behind each
+                // is filled in from what is on disk and from earlier Workshop
+                // searches, and the rest are looked up below.
+                if (Games.IsZomboid && rules.Mods != null)
+                {
+                    foreach (var mod in rules.Mods)
+                        if (mod != null && mod.WorkshopId == 0)
+                            mod.WorkshopId = Zomboid.WorkshopIdFor(mod.Name);
+
+                    // A server's rules hold only so much text, and a big mod list
+                    // is cut short - ONE/LIFE publishes 8 of its 272. Say so,
+                    // rather than let 8 look like the whole list.
+                    int stated;
+                    if (int.TryParse(rules.Get("modCount"), out stated) && stated > modCount)
+                        _modsHeader.Text = string.Format(
+                            "Content required by {0} ({1} of {2} mods listed - the server publishes no more)  -  checked {3:HH:mm:ss}",
+                            row.Name, modCount, stated, _modsShownAt);
+
+                    _modsHeader.Text += "   -  the game downloads anything missing when you join";
+                }
+
                 if (rules.Mods != null)
                 {
                     string steamPath = FindSteam();
@@ -5665,6 +6063,7 @@ namespace ABeautifulPotatoLauncher
                 // "Workshop version" row out altogether - it only knew the
                 // number after a launch had fetched it.
                 PrefetchModTimes(rules);
+                if (Games.IsZomboid) LookUpZomboidMods(rules);
 
                 _desc.Clear();
                 if (!string.IsNullOrEmpty(rules.Description))
@@ -6025,6 +6424,8 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         private ListViewItem MakeModRow(Mod m, string steam)
         {
+            if (Games.IsZomboid) return MakeZomboidModRow(m, steam);
+
             // A mod the server loaded from its own disk has no workshop id, so
             // it is matched against the player's library by name. There is
             // nothing to download and nothing to be out of date against.
@@ -6112,6 +6513,174 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>
+        /// One Project Zomboid mod row. The server names a MOD ID; the workshop
+        /// item behind it may be known (from disk or a Workshop search), still
+        /// being looked up, or not findable at all - and the game fetches it on
+        /// joining whichever of those it is, so a mod not installed is not the
+        /// emergency it is for DayZ.
+        /// </summary>
+        private ListViewItem MakeZomboidModRow(Mod m, string steam)
+        {
+            var link = Color.FromArgb(120, 150, 190);
+            var quiet = Color.FromArgb(150, 150, 158);
+            string title = Zomboid.TitleFor(m.Name);
+
+            if (m.WorkshopId == 0)
+            {
+                bool userMod = Zomboid.IsUserMod(m.Name);
+                bool looking;
+                lock (_zomboidLookupLock) looking = _zomboidLooking.Contains(m.Name);
+
+                string status = userMod ? "installed (your mods folder)"
+                              : looking ? "looking it up on the Workshop..."
+                              : "not found on the Workshop - the game fetches it on join";
+                var row = new ListViewItem(new[]
+                {
+                    m.Name, userMod ? "Local" : looking ? "..." : "?", status, "", "", "", ""
+                })
+                {
+                    Tag = m,
+                    UseItemStyleForSubItems = false,
+                    ToolTipText = userMod
+                        ? "Loaded from your Zomboid\\mods folder."
+                        : "The server lists this mod id, but no Workshop item could be matched to it. "
+                          + "The game asks the server for the exact item when it connects and downloads it then."
+                };
+                Color c = userMod ? Good : quiet;
+                row.SubItems[MColName].ForeColor = c;
+                row.SubItems[MColId].ForeColor = quiet;
+                row.SubItems[MColStatus].ForeColor = c;
+                return row;
+            }
+
+            bool have = steam != null && SteamWorkshop.IsInstalled(steam, m.WorkshopId);
+            bool broken = !have && steam != null && SteamWorkshop.IsBrokenInstall(steam, m.WorkshopId);
+            bool stale = have && SteamWorkshop.NeedsUpdate(steam, m.WorkshopId);
+            bool busy = SteamWorkshop.IsBusy(m.WorkshopId);
+
+            string state;
+            Color colour;
+            if (busy) { state = "downloading..."; colour = Color.FromArgb(200, 190, 130); }
+            else if (broken) { state = "BROKEN - no mods folder in it"; colour = Color.FromArgb(230, 130, 130); }
+            else if (!have) { state = "not installed - fetched on join"; colour = Color.FromArgb(220, 190, 120); }
+            else if (stale)
+            {
+                TimeSpan behind = SteamWorkshop.StaleBy(steam, m.WorkshopId);
+                state = behind > TimeSpan.Zero ? "OUT OF DATE by " + Age(behind) : "OUT OF DATE";
+                colour = Color.FromArgb(225, 175, 90);
+            }
+            else { state = "installed"; colour = Good; }
+
+            var it = new ListViewItem(new[]
+            {
+                m.Name, m.WorkshopId.ToString(), state, "Verify", "Sub", "Remove", "Page"
+            })
+            {
+                Tag = m,
+                UseItemStyleForSubItems = false,
+                ToolTipText = (title.Length > 0 ? title + "\r\n" : "")
+                    + "Verify re-downloads it, Sub subscribes, Remove unsubscribes, Page opens it on the Workshop"
+            };
+
+            it.SubItems[MColName].ForeColor = colour;
+            it.SubItems[MColId].ForeColor = colour;
+            it.SubItems[MColStatus].ForeColor = colour;
+            it.SubItems[MColRepair].ForeColor = link;
+            it.SubItems[MColSub].ForeColor = have ? Color.FromArgb(90, 90, 96) : link;
+            it.SubItems[MColRemove].ForeColor = have ? Color.FromArgb(190, 130, 130) : Color.FromArgb(90, 90, 96);
+            it.SubItems[MColInfo].ForeColor = link;
+            return it;
+        }
+
+        private readonly object _zomboidLookupLock = new object();
+
+        /// <summary>Mod ids being looked up on the Workshop right now.</summary>
+        private readonly HashSet<string> _zomboidLooking = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private bool _zomboidLookupRunning;
+
+        /// <summary>How many mod ids are searched for between repaints of the panel.</summary>
+        private const int ZomboidLookupChunk = 24;
+
+        /// <summary>
+        /// Finds the workshop items behind a server's mod ids that are not on
+        /// disk and have not been searched for already, off the UI thread, and
+        /// redraws the panel as answers arrive - a server listing two hundred
+        /// mods should not sit blank while every one is asked about.
+        /// One lookup at a time; the next server clicked is picked up when it
+        /// finishes, because its answers mostly overlap anyway.
+        /// </summary>
+        private void LookUpZomboidMods(ServerRules rules)
+        {
+            if (rules == null || rules.Mods == null) return;
+
+            List<string> want;
+            lock (_zomboidLookupLock)
+            {
+                if (_zomboidLookupRunning) return;
+                want = Zomboid.NeedLookup(rules.Mods.Where(m => m != null && m.WorkshopId == 0)
+                                                    .Select(m => m.Name));
+                if (want.Count == 0) return;
+
+                _zomboidLookupRunning = true;
+                foreach (string id in want) _zomboidLooking.Add(id);
+            }
+
+            // Bound here, on the UI thread, where the session is normally
+            // opened; the search itself runs below.
+            string steam = FindSteam();
+            string gameDir = AnyGameDir(steam);
+            if (gameDir == null || !SteamWorkshop.TryInit(gameDir, Log))
+            {
+                lock (_zomboidLookupLock) { _zomboidLooking.Clear(); _zomboidLookupRunning = false; }
+                return;
+            }
+
+            Log("Looking up " + want.Count + " mod id(s) on the Steam Workshop...");
+            string forServer = _modsShownFor;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                int matched = 0;
+                try
+                {
+                    for (int start = 0; start < want.Count && !_closing; start += ZomboidLookupChunk)
+                    {
+                        var chunk = want.Skip(start).Take(ZomboidLookupChunk).ToList();
+                        var found = SteamWorkshop.FindZomboidMods(chunk, () => _closing);
+                        Zomboid.RememberLookups(found);
+                        matched += found.Values.Count(v => v.WorkshopId != 0);
+
+                        lock (_zomboidLookupLock) foreach (string id in chunk) _zomboidLooking.Remove(id);
+
+                        try
+                        {
+                            BeginInvoke((Action)(() =>
+                            {
+                                if (!_closing && _modsShownFor == forServer) RepopulateModsFromCache();
+                            }));
+                        }
+                        catch (InvalidOperationException) { return; }
+                    }
+                }
+                catch { }
+                finally
+                {
+                    lock (_zomboidLookupLock) { _zomboidLooking.Clear(); _zomboidLookupRunning = false; }
+                }
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        Log("  Workshop lookup: matched " + matched + " of " + want.Count + " mod id(s).");
+                        if (!_closing && _modsShownFor == forServer) RepopulateModsFromCache();
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        /// <summary>
         /// Drops every cached judgement about what is installed, and redraws
         /// the mod panel from disk.
         ///
@@ -6126,6 +6695,7 @@ namespace ABeautifulPotatoLauncher
             {
                 SteamWorkshop.ForgetItemPaths();
                 ModIndex.Invalidate();
+                Zomboid.Invalidate();
 
                 if (_modsShownFor != null) ShowMods(true);
             }
@@ -6206,6 +6776,14 @@ namespace ABeautifulPotatoLauncher
 
             if (col == MColInfo)
             {
+                // Zomboid's last column opens the item's Workshop page; the
+                // details window reads DayZ's own files.
+                if (Games.IsZomboid)
+                {
+                    if (mod.WorkshopId != 0) SteamWorkshop.OpenWorkshopPage(mod.WorkshopId);
+                    return;
+                }
+
                 // Reads local files, so it works even with Steam shut.
                 ModInfoDialog.Show(this, mod, FindSteam());
                 return;
@@ -6215,7 +6793,7 @@ namespace ABeautifulPotatoLauncher
             // clicking the status is worth something: it asks where the mod is
             // and remembers the answer. Everything else on this row acts on a
             // workshop item, which a local mod does not have.
-            if (mod.IsLocal && col == MColStatus)
+            if (mod.IsLocal && col == MColStatus && !Games.IsZomboid)
             {
                 LocateLocalMod(mod);
                 return;
@@ -6229,8 +6807,7 @@ namespace ABeautifulPotatoLauncher
             if (mod.IsLocal || mod.WorkshopId == 0) return;
 
             string steam = FindSteam();
-            string gameDir = steam == null ? null
-                : (FindGameDir(steam, A2S.ExperimentalAppId) ?? FindGameDir(steam, A2S.StableAppId));
+            string gameDir = AnyGameDir(steam);
             if (gameDir == null || !SteamWorkshop.TryInit(gameDir, Log))
             {
                 string why = Elevation.Mismatch();
@@ -6247,12 +6824,14 @@ namespace ABeautifulPotatoLauncher
                 SteamWorkshop.Subscribe(mod.WorkshopId);
                 SteamWorkshop.ForceDownload(mod.WorkshopId);
                 WatchDownload(mod.WorkshopId);
-                Log("Repairing " + mod.Name + " (" + mod.WorkshopId + ") - Steam is re-downloading it.");
-                hit.Item.SubItems[MColStatus].Text = "repairing...";
+                Log((Games.IsZomboid ? "Verifying " : "Repairing ") + mod.Name + " (" + mod.WorkshopId
+                    + ") - Steam is re-downloading it.");
+                hit.Item.SubItems[MColStatus].Text = Games.IsZomboid ? "verifying..." : "repairing...";
             }
             else if (col == MColSub)
             {
                 SteamWorkshop.Subscribe(mod.WorkshopId);
+                WatchDownload(mod.WorkshopId);
                 Log("Subscribed to " + mod.Name + " (" + mod.WorkshopId + ").");
                 hit.Item.SubItems[MColStatus].Text = "subscribing...";
             }
@@ -6375,6 +6954,8 @@ namespace ABeautifulPotatoLauncher
 
 private void Launch(Row srv)
         {
+            if (Games.IsZomboid) { LaunchZomboid(srv); return; }
+
             ServerStore.SaveName(_name.Text.Trim());
 
             if (IsRunning(GameExe))
@@ -6898,6 +7479,143 @@ private void Launch(Row srv)
         }
 
         /// <summary>
+        /// Joins a Project Zomboid server.
+        ///
+        /// Far less to do than DayZ: no BattlEye wrapper, no mod list on the
+        /// command line, and no downloading first - the game asks the server
+        /// for its workshop items while it connects and fetches whatever is
+        /// missing itself. What the launcher CAN catch beforehand is the one
+        /// thing that wastes the player's time: a server on a different game
+        /// version, which the game would only refuse after loading.
+        ///
+        /// The game opens its own connect window, with the server password
+        /// already filled in; the account name and password for that server
+        /// are typed there, and the game remembers them.
+        /// </summary>
+        private void LaunchZomboid(Row srv)
+        {
+            if (IsRunning(Zomboid.GameExe))
+            {
+                MessageBox.Show(
+                    "Project Zomboid is already running.\r\n\r\nClose it first - it only joins a "
+                    + "server it was started for.",
+                    "Close Project Zomboid first", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            Log(Elevation.Describe());
+
+            string steam = FindSteam();
+            if (steam == null) throw new Exception("Could not find Steam.");
+
+            string gameDir = Zomboid.FindGameDir(steam);
+            if (gameDir == null)
+                throw new Exception("Project Zomboid is not installed in any Steam library."
+                    + Environment.NewLine + Environment.NewLine + "Looked for "
+                    + Zomboid.InstallFolder + "\\" + Zomboid.GameExe + " under:" + Environment.NewLine + "  "
+                    + string.Join(Environment.NewLine + "  ",
+                        SteamLibraries.All(steam).Select(r => Path.Combine(r, "steamapps", "common")).ToArray()));
+            Log("Game  : " + gameDir);
+
+            Log("");
+            Log("Asking " + srv.Endpoint + " what it is running...");
+            List<int> tried;
+            var live = FindQueryPort(srv, out tried);
+            if (!live.Online)
+                throw new Exception("The server at " + srv.Endpoint + " did not answer on "
+                                    + (tried.Count == 1 ? "port " : "any of the ports ")
+                                    + string.Join(", ", tried) + ".\r\n\r\n" + live.Error);
+            Log("Server: " + live.Name);
+
+            // A DIFFERENT VERSION WILL NOT LET YOU IN, and the game only says so
+            // after it has loaded - so it is asked here, while it costs nothing.
+            string theirs = Zomboid.VersionOf(live.Keywords);
+            if (theirs.Length == 0) theirs = Zomboid.VersionOf(srv.Tags);
+            string mine = Zomboid.LocalVersion;
+            Log("Version: server " + (theirs.Length > 0 ? theirs : "(not stated)")
+                + ", yours " + (mine.Length > 0 ? mine : "(unknown - run the game once)"));
+
+            if (theirs.Length > 0 && mine.Length > 0 && !Zomboid.SameVersion(theirs, mine))
+            {
+                if (MessageBox.Show(
+                        "This server runs Project Zomboid " + theirs + ", and you have " + mine + ".\r\n\r\n"
+                        + "The game will not join a server on a different version. In Steam, "
+                        + "Project Zomboid - Properties - Betas picks which version is installed.\r\n\r\n"
+                        + "Start the game anyway?",
+                        "Different game version", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                        MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                {
+                    Log("Not launching - the versions differ.");
+                    return;
+                }
+            }
+
+            // The mods are the game's job - see the summary above - so they are
+            // only reported.
+            ServerRules rules = null;
+            try { rules = A2S.GetRulesAt(srv.Host, srv.EffectiveQueryPort, 2500); }
+            catch { }
+            if (rules != null)
+                Log("Server lists " + rules.Mods.Count + " mod(s); the game downloads any you are missing as it connects.");
+
+            string password = null;
+            if (live.Password || srv.Password)
+            {
+                password = PasswordDialog.Ask(this, srv.Name);
+                if (password == null)
+                {
+                    Log("Password required, and none was given - not launching.");
+                    return;
+                }
+                Log("Password supplied.");
+            }
+
+            string exe = Path.Combine(gameDir, Zomboid.GameExe);
+            if (!CanRead(exe))
+                throw new Exception("Windows will not let your account run:" + Environment.NewLine
+                    + Environment.NewLine + exe + Environment.NewLine + Environment.NewLine
+                    + (Elevation.Mismatch() ?? "The file is there, but reading it is refused - anti-virus, "
+                       + "or files installed by a Steam running as administrator."));
+
+            string args = Zomboid.ConnectArgs(srv.Host, srv.Port, password);
+            Log("");
+            Log("Launching " + Zomboid.GameExe + " " + Zomboid.ConnectArgs(srv.Host, srv.Port,
+                password == null ? null : "********"));
+
+            // Started under its own app id explicitly: the launcher's session
+            // already claims 108600, and the child inherits the environment -
+            // set it rather than trust what was inherited. See Launch.
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = args,
+                WorkingDirectory = gameDir,
+                UseShellExecute = false
+            };
+            psi.EnvironmentVariables["SteamAppId"] = Zomboid.AppId.ToString();
+            psi.EnvironmentVariables["SteamGameId"] = Zomboid.AppId.ToString();
+
+            Process started;
+            try { started = Process.Start(psi); }
+            catch (Exception ex)
+            {
+                Log("ERROR: Windows would not start " + exe + " - " + ex.Message);
+                throw new Exception("Windows would not start the game:" + Environment.NewLine
+                    + Environment.NewLine + exe + Environment.NewLine + Environment.NewLine
+                    + (Elevation.Mismatch() ?? ("Windows said: " + ex.Message)));
+            }
+
+            BeginLaunchCooldown();
+            var waiting = new LaunchingForm(srv.Name, Zomboid.GameExe, started, Log, EndLaunchCooldown);
+            waiting.Show(this);
+
+            Log("");
+            Log("Started. The game opens its connect window with the server filled in - "
+                + "enter your account name for this server there.");
+            _status.Text = "Launched " + srv.Endpoint;
+        }
+
+        /// <summary>
         /// The game cannot see Steam. Explains why - almost always Steam
         /// running as administrator while the launcher does not - and offers
         /// the two ways out.
@@ -7154,8 +7872,7 @@ private static ServerRules QueryModsChecked(Row row)
                                 "Steam not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            string gameDir = FindGameDir(steam, A2S.ExperimentalAppId)
-                          ?? FindGameDir(steam, A2S.StableAppId);
+            string gameDir = AnyGameDir(steam);
 
             // MODELESS on purpose. ShowDialog would freeze the server list
             // behind it, and the mod library is exactly the thing a player
@@ -7323,7 +8040,9 @@ private static ServerRules QueryModsChecked(Row row)
             // used to report the game as not installed. Workshop content sits
             // in the same library as the game, so this fixes the mod folders
             // too.
-            found = SteamLibraries.WithDayZ(found, StableFolders.Concat(ExpFolders));
+            found = SteamLibraries.WithDayZ(found, Games.IsZomboid
+                ? new[] { Zomboid.InstallFolder }
+                : StableFolders.Concat(ExpFolders));
 
             _steamAnswer = found;
             _steamAskedAt = DateTime.UtcNow;
@@ -7366,9 +8085,21 @@ private static ServerRules QueryModsChecked(Row row)
             return null;
         }
 
+        /// <summary>
+        /// An installed copy of the current game - whichever build, for DayZ -
+        /// for things that only need its steam_api64.dll.
+        /// </summary>
+        private static string AnyGameDir(string steamPath)
+        {
+            if (steamPath == null) return null;
+            if (Games.IsZomboid) return Zomboid.FindGameDir(steamPath);
+            return FindGameDir(steamPath, A2S.ExperimentalAppId) ?? FindGameDir(steamPath, A2S.StableAppId);
+        }
+
         private static string FindGameDir(string steamPath, ulong appId)
         {
             if (string.IsNullOrEmpty(steamPath)) return null;
+            if (Games.IsZomboid) return Zomboid.FindGameDir(steamPath);
             string[] targets = appId == A2S.ExperimentalAppId ? ExpFolders : StableFolders;
 
             // Every library, not only the main install - see SteamLibraries.

@@ -99,6 +99,16 @@ namespace ABeautifulPotatoLauncher
             set { Mods = value; }
         }
         public TriState Official = TriState.Any;
+
+        /// <summary>
+        /// Project Zomboid: the game version to show, e.g. "42.21", or empty for
+        /// every version. A server on another version will not let the player
+        /// in, so this is the filter PZ players reach for first.
+        /// </summary>
+        public string Version = "";
+
+        /// <summary>Project Zomboid: PvP on, off, or either - from the server's "pvp" tag.</summary>
+        public TriState Pvp = TriState.Any;
         public bool NoPassword;
         public bool HideFull;
         public bool HideEmpty;
@@ -200,7 +210,13 @@ namespace ABeautifulPotatoLauncher
                 f.Add(new KeyValuePair<string, string>("gameaddr", endpoint));
             }
 
-            if (!string.IsNullOrEmpty(Map.Trim()))
+            // Project Zomboid: Steam's map and password filters both return
+            // NOTHING for app 108600 (measured - "map\Muldraugh, KY" and
+            // "password\0" each came back empty), so those two are applied
+            // locally only.
+            bool zomboid = Games.IsZomboid;
+
+            if (!zomboid && !string.IsNullOrEmpty(Map.Trim()))
                 f.Add(new KeyValuePair<string, string>("map", Map.Trim()));
 
             // Valve's semantics: "empty\1" means EXCLUDE empty servers, and
@@ -213,7 +229,7 @@ namespace ABeautifulPotatoLauncher
             if (Players == PlayersMode.Empty)
                 f.Add(new KeyValuePair<string, string>("noplayers", "1"));
 
-            if (NoPassword)
+            if (NoPassword && !zomboid)
                 f.Add(new KeyValuePair<string, string>("password", "0"));
 
             // ASKING FOR OFFICIAL SERVERS IS ASKING STEAM, NOT FILTERING LOCALLY.
@@ -232,7 +248,7 @@ namespace ABeautifulPotatoLauncher
             //
             // gamedataand does NOT work here, for the record: DayZ publishes
             // these as game TAGS, and gamedataand returned nothing at all.
-            if (Official == TriState.Enabled)
+            if (Official == TriState.Enabled && !zomboid)
                 f.Add(new KeyValuePair<string, string>("gametagsnor", "privHive"));
 
             return f;
@@ -527,11 +543,23 @@ namespace ABeautifulPotatoLauncher
                 case PlayersMode.Empty:    if (s.Players != 0) return false; break;
             }
 
-            if (ThirdPerson == TriState.Enabled && !s.ThirdPerson) return false;
-            if (ThirdPerson == TriState.Disabled && s.ThirdPerson) return false;
+            if (Games.IsZomboid)
+            {
+                if (Version.Length > 0 && !Zomboid.SameVersion(s.Version, Version)) return false;
+                if (Pvp == TriState.Enabled && !s.Pvp) return false;
+                if (Pvp == TriState.Disabled && s.Pvp) return false;
+            }
+            else
+            {
+                if (ThirdPerson == TriState.Enabled && !s.ThirdPerson) return false;
+                if (ThirdPerson == TriState.Disabled && s.ThirdPerson) return false;
+            }
 
             if (Mods == TriState.Enabled && !s.HasMods) return false;
             if (Mods == TriState.Disabled && s.HasMods) return false;
+
+            // Official servers and the in-game clock are DayZ's alone.
+            if (Games.IsZomboid) return true;
 
             if (Official == TriState.Enabled && !IsOfficial(s)) return false;
             if (Official == TriState.Disabled && IsOfficial(s)) return false;

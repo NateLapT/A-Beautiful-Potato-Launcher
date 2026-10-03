@@ -41,7 +41,12 @@ namespace ABeautifulPotatoLauncher
             new ServerEntry("A Beautiful Potato | Shooting Range",   "104.218.48.62", 2302),
         };
 
-        private static string Dir
+        /// <summary>
+        /// The launcher's own data folder, shared by every game: the choice of
+        /// game, and the window and panel layout, live here. DayZ's data has
+        /// always lived here too and stays put - see Dir.
+        /// </summary>
+        internal static string BaseDir
         {
             get
             {
@@ -50,6 +55,25 @@ namespace ABeautifulPotatoLauncher
                 Directory.CreateDirectory(d);
 
                 BringForwardOldData(appData, d);
+                return d;
+            }
+        }
+
+        /// <summary>
+        /// Where the current game's data lives. DayZ keeps the top level it has
+        /// always used, so nothing an existing player has built up moves;
+        /// another game gets a folder of its own beneath it. See Games.
+        /// </summary>
+        private static string Dir
+        {
+            get
+            {
+                string d = BaseDir;
+                string sub = Games.DataFolder;
+                if (sub == null) return d;
+
+                d = Path.Combine(d, sub);
+                Directory.CreateDirectory(d);
                 return d;
             }
         }
@@ -162,7 +186,8 @@ namespace ABeautifulPotatoLauncher
             }
             catch { /* fall through to defaults */ }
 
-            if (list.Count == 0) list.AddRange(Defaults);
+            // The built-in servers are DayZ servers.
+            if (list.Count == 0 && !Games.IsZomboid) list.AddRange(Defaults);
             return list;
         }
 
@@ -342,7 +367,9 @@ namespace ABeautifulPotatoLauncher
 
         // ---- the window's last size and place ----
 
-        private static string WindowFile { get { return Path.Combine(Dir, "window.txt"); } }
+        // Shared by every game: switching game is a restart, and the window
+        // should come back exactly where it was.
+        private static string WindowFile { get { return Path.Combine(BaseDir, "window.txt"); } }
 
         /// <summary>
         /// Remembers where the window was and how big. Returns false when there
@@ -380,7 +407,7 @@ namespace ABeautifulPotatoLauncher
 
         // ---- panel splitter positions ----
 
-        private static string PanelFile { get { return Path.Combine(Dir, "panels.txt"); } }
+        private static string PanelFile { get { return Path.Combine(BaseDir, "panels.txt"); } }
 
         /// <summary>
         /// Splitter positions, held as a FRACTION of the space available rather
@@ -1024,6 +1051,10 @@ namespace ABeautifulPotatoLauncher
         private static IEnumerable<string> DefaultListLines(string key)
         {
             if (string.IsNullOrEmpty(key)) return null;
+
+            // The bundled seed list is DayZ's master list.
+            if (Games.IsZomboid) return null;
+
             bool browsing = key.StartsWith("Community/", StringComparison.OrdinalIgnoreCase)
                          || key.StartsWith("Official/", StringComparison.OrdinalIgnoreCase);
             if (!browsing || key.EndsWith("/exp", StringComparison.OrdinalIgnoreCase)) return null;
@@ -1098,7 +1129,7 @@ namespace ABeautifulPotatoLauncher
             // in-game name - the official launcher only ever passes it as
             // "-name=" on the command line - but DayZ echoes its own command
             // line into the top of every RPT, so that is where it can be read.
-            return DetectNameFromDayZ();
+            return Games.IsZomboid ? "" : DetectNameFromDayZ();
         }
 
         private static string DetectNameFromDayZ()
@@ -1155,6 +1186,56 @@ namespace ABeautifulPotatoLauncher
         public static void SaveName(string name)
         {
             try { File.WriteAllText(SettingsFile, name ?? ""); }
+            catch { }
+        }
+
+        // ---- Project Zomboid: which workshop item provides each mod id ----
+
+        private static string ZomboidModIdFile { get { return Path.Combine(Dir, "modids.tsv"); } }
+
+        /// <summary>
+        /// What the Workshop said about each PZ mod id: mod id, workshop id
+        /// (0 = nothing matched), title, and when it was asked. Kept so a mod
+        /// id is searched for once rather than every time a server is clicked.
+        /// </summary>
+        public static Dictionary<string, Zomboid.ModLookup> LoadZomboidModIds()
+        {
+            var map = new Dictionary<string, Zomboid.ModLookup>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(ZomboidModIdFile)) return map;
+                foreach (string line in File.ReadAllLines(ZomboidModIdFile))
+                {
+                    string[] f = line.Split('\t');
+                    if (f.Length < 4 || f[0].Length == 0) continue;
+                    ulong id;
+                    long ticks;
+                    ulong.TryParse(f[1], out id);
+                    long.TryParse(f[3], out ticks);
+                    map[f[0]] = new Zomboid.ModLookup
+                    {
+                        WorkshopId = id,
+                        Title = f[2],
+                        AskedUtc = ticks > 0 ? new DateTime(ticks, DateTimeKind.Utc) : DateTime.MinValue
+                    };
+                }
+            }
+            catch { }
+            return map;
+        }
+
+        public static void SaveZomboidModIds(IDictionary<string, Zomboid.ModLookup> map)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                foreach (var kv in map)
+                    sb.Append(Clean(kv.Key)).Append('\t')
+                      .Append(kv.Value.WorkshopId).Append('\t')
+                      .Append(Clean(kv.Value.Title)).Append('\t')
+                      .Append(kv.Value.AskedUtc.Ticks).Append('\n');
+                File.WriteAllText(ZomboidModIdFile, sb.ToString());
+            }
             catch { }
         }
     }

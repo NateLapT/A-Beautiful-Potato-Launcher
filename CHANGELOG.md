@@ -18,6 +18,44 @@ arbitrary until you know what they were measured against.
 
 ## [0.7] - 2026-09-26
 
+### Added
+
+- **Project Zomboid.** A Game picker at the top of the left rail switches the
+  launcher between DayZ and Project Zomboid (it restarts to switch; each game
+  keeps its own lists, favourites and settings - Zomboid's in a `zomboid`
+  folder beside DayZ's, which does not move). For Zomboid:
+  - The Steam session is opened as app 108600, so Steam shows Project Zomboid,
+    and the list is Steam's master list for that app.
+  - A **Version** column, coloured green when it matches the installed game,
+    and a **Version** dropdown in the rail (where DayZ's Stable/Experimental
+    box is) that filters the list - a server on another version will not let
+    you in. The 3rd Person filter becomes **PvP**.
+  - Past Steam's 10,000 cap by **name slices** (`a*`, `b*`, ...). Zomboid's
+    tags are `;`-separated, so Steam's tag filters match nothing, and its map
+    and password filters return nothing either - those two filter locally.
+    Steam rations server-list requests - after the first four of a sweep,
+    about one in 40-50 seconds is answered and the rest come back empty in a
+    second (`b*` and `c*`, refused in a sweep, held 1,538 and 1,172 servers
+    asked alone). So an empty slice is asked again after ~20 s, then ~40 s; an
+    ordinary refresh takes 6 slices, and BUILD INDEX all 46 (about half an
+    hour, in the background).
+  - The mod panel reads the server's mod ids (A2S rules `mods:1/N`) and finds
+    each one's workshop item - from the `mod.info` files on disk, then by a
+    Steam Workshop search whose result must declare `Mod ID: <id>` in its
+    description. Verify, Sub, Remove and Page work on those. A server whose
+    rules are cut short says "8 of 272 mods listed".
+  - CONNECT starts `ProjectZomboid64.exe +connect host:port [+password]`,
+    after warning if the server's version differs from yours. The game asks
+    for the account name in its own connect window, and downloads missing
+    mods itself while connecting.
+  - No fake-server screening: Zomboid's list does not have DayZ's redirect
+    farms, and its real servers run 170-200 slots, which the DayZ capacity
+    rules would hide.
+- **Steam API from newer SDKs.** Project Zomboid's `steam_api64.dll` has no
+  `SteamAPI_Init` export, only `SteamAPI_InitFlat`; both are now tried. Only
+  one `steam_api64.dll` is ever loaded per process, and the server browser
+  binds through it rather than loading a second copy.
+
 ### Changed
 
 - **The built-in server list has the fakes taken out.** ~13k servers instead

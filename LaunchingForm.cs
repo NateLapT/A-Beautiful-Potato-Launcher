@@ -78,7 +78,7 @@ namespace ABeautifulPotatoLauncher
 
             _exeName = System.IO.Path.GetFileNameWithoutExtension(gameExe ?? "DayZ_x64");
 
-            Text = "Starting DayZ";
+            Text = "Starting " + Games.Name;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;
@@ -92,7 +92,7 @@ namespace ABeautifulPotatoLauncher
 
             _head = new Label
             {
-                Text = "Starting DayZ...",
+                Text = "Starting " + Games.Name + "...",
                 Bounds = new Rectangle(18, 16, 424, 34),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 15f, FontStyle.Bold),
@@ -123,7 +123,7 @@ namespace ABeautifulPotatoLauncher
 
             _note = new Label
             {
-                Text = "DayZ takes a minute or two to appear. This window closes by itself.",
+                Text = Games.Name + " takes a minute or two to appear. This window closes by itself.",
                 // 26 high, not 34: the extra reached down over the top of
                 // the button below it, and a label added first sits on top in
                 // z-order, so it painted over the button's top edge.
@@ -233,9 +233,9 @@ namespace ABeautifulPotatoLauncher
             {
                 if (KillNow())
                 {
-                    _log("DayZ was stopped.");
+                    _log(Games.Name + " was stopped.");
                     _head.Text = "Stopped.";
-                    _note.Text = "DayZ was stopped before it finished loading.";
+                    _note.Text = Games.Name + " was stopped before it finished loading.";
                     _meter.Text = Bar(0);
                     _killedAt = DateTime.UtcNow;
                 }
@@ -253,7 +253,7 @@ namespace ABeautifulPotatoLauncher
             {
                 _seen = true;
                 _seenAt = DateTime.UtcNow;
-                _head.Text = "DayZ is running.";
+                _head.Text = Games.Name + " is running.";
 
                 // Cancel meant "stop this launch". The game is up now, and a
                 // button that kills a running game is not what anyone expects
@@ -300,14 +300,14 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         private void OnCancel(object sender, EventArgs e)
         {
-            _log("Launch cancelled - stopping DayZ, and anything it starts from here.");
+            _log("Launch cancelled - stopping " + Games.Name + ", and anything it starts from here.");
 
             _cancelled = true;
             _cancelledAt = DateTime.UtcNow;
             _cancelled_cb();
 
             _head.Text = "Cancelling...";
-            _note.Text = "Stopping DayZ. If it is still starting, it will be stopped as it appears.";
+            _note.Text = "Stopping " + Games.Name + ". If it is still starting, it will be stopped as it appears.";
             _meter.ForeColor = Color.FromArgb(220, 140, 120);
             _cancel.Visible = false;
             _close.Text = "Close";
@@ -334,7 +334,10 @@ namespace ABeautifulPotatoLauncher
             // we started is never enough on its own. Both names are taken:
             // nothing else can be running under them, because a join refuses
             // to start at all while DayZ is already open.
-            foreach (string name in new[] { "DayZ_BE", "DayZ_x64", _exeName })
+            // Only this game's processes: cancelling a Zomboid launch must never
+            // touch a DayZ that happens to be open, or the other way round.
+            foreach (string name in Games.IsZomboid ? new[] { _exeName }
+                                                    : new[] { "DayZ_BE", "DayZ_x64", _exeName })
             {
                 try
                 {

@@ -62,7 +62,12 @@ namespace ABeautifulPotatoLauncher
         // DayZ packs its server flags into the Steam tags field, e.g.
         // "battleye,no3rd,external,privHive,shard123ABC,lqs0,etm3.000000,
         //  entm64.000000,mod,isDLC,16:48"
-        public bool HasMods     { get { return HasTag("mod"); } }
+        public bool HasMods     { get { return Games.IsZomboid ? Zomboid.IsModded(Tags) : HasTag("mod"); } }
+
+        /// <summary>Project Zomboid's game version from its tags, e.g. "42.21"; "" for DayZ.</summary>
+        public string Version { get { return Games.IsZomboid ? Zomboid.VersionOf(Tags) : ""; } }
+
+        public bool Pvp { get { return Zomboid.IsPvp(Tags); } }
 
         /// <summary>
         /// How many players are waiting to get in, or 0 when nobody is.
@@ -99,6 +104,7 @@ namespace ABeautifulPotatoLauncher
         private bool HasTag(string t)
         {
             if (string.IsNullOrEmpty(Tags)) return false;
+            if (Games.IsZomboid) return Zomboid.HasTag(Tags, t);
             foreach (var part in Tags.Split(','))
                 if (part.Trim().Equals(t, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
@@ -135,6 +141,7 @@ namespace ABeautifulPotatoLauncher
         {
             get
             {
+                if (Games.IsZomboid) return Version;
                 if (AppId == A2S.ExperimentalAppId) return "Experimental";
                 if (AppId == A2S.StableAppId) return "Stable";
                 return "";
@@ -232,7 +239,9 @@ namespace ABeautifulPotatoLauncher
             {
                 if (!SteamWorkshop.TryInit(gameDir, log)) return false;
 
-                IntPtr lib = LoadLibrary(Path.Combine(gameDir, "steam_api64.dll"));
+                // The library SteamWorkshop already loaded, never a second copy -
+                // see SteamWorkshop.Library.
+                IntPtr lib = SteamWorkshop.Library;
                 if (lib == IntPtr.Zero) return false;
 
                 Func<string, Type, object> bind = (n, t) =>

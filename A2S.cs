@@ -134,7 +134,12 @@ namespace ABeautifulPotatoLauncher
         /// query on 27016 or elsewhere - so prefer the port the master list
         /// reports whenever there is one. See Effective().
         /// </summary>
-        public static int QueryPort(int gamePort) { return gamePort + 1; }
+        public static int QueryPort(int gamePort)
+        {
+            // Project Zomboid answers on the game port itself - all 10,000
+            // servers sampled reported the two as equal.
+            return Games.IsZomboid ? gamePort : gamePort + 1;
+        }
 
         /// <summary>
         /// Picks the port to query: the one Steam reported if it looks sane,
@@ -889,6 +894,12 @@ namespace ABeautifulPotatoLauncher
             {
                 Dictionary<string, string> text;
                 byte[] blob = RulesBlob(host, queryPort, timeoutMs, out text);
+
+                // Project Zomboid has no packed blob: everything is plain text
+                // rules, including the mod list. See Zomboid.ParseRules.
+                if (Games.IsZomboid)
+                    return text == null || text.Count == 0 ? null : Zomboid.ParseRules(text);
+
                 if (blob == null) return null;
 
                 var parsed = ParseBlob(blob);
