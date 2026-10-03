@@ -296,6 +296,13 @@ namespace ABeautifulPotatoLauncher
         public static bool Start(ListKind kind, uint appId,
                                  IEnumerable<KeyValuePair<string, string>> filters)
         {
+            // See SteamWorkshop.ApiLock - a pool thread may be pumping callbacks.
+            lock (SteamWorkshop.ApiLock) return StartLocked(kind, appId, filters);
+        }
+
+        private static bool StartLocked(ListKind kind, uint appId,
+                                        IEnumerable<KeyValuePair<string, string>> filters)
+        {
             if (!Available) return false;
             Stop();
 
@@ -359,6 +366,11 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         /// <param name="done">true once the refresh has finished.</param>
         public static List<BrowserServer> Poll(out bool done, out int rawCount)
+        {
+            lock (SteamWorkshop.ApiLock) return PollLocked(out done, out rawCount);
+        }
+
+        private static List<BrowserServer> PollLocked(out bool done, out int rawCount)
         {
             var results = new List<BrowserServer>();
             done = true;
@@ -433,13 +445,16 @@ namespace ABeautifulPotatoLauncher
             // _mm is checked as well as _active: these are calls THROUGH the
             // matchmaking interface, and making them once the session behind
             // it has gone is an access violation, not a caught exception.
-            if (_active != IntPtr.Zero && _mm != IntPtr.Zero)
+            lock (SteamWorkshop.ApiLock)
             {
-                try { if (_cancel != null) _cancel(_mm, _active); } catch { }
-                try { if (_release != null) _release(_mm, _active); } catch { }
-                _active = IntPtr.Zero;
+                if (_active != IntPtr.Zero && _mm != IntPtr.Zero)
+                {
+                    try { if (_cancel != null) _cancel(_mm, _active); } catch { }
+                    try { if (_release != null) _release(_mm, _active); } catch { }
+                    _active = IntPtr.Zero;
+                }
+                FreeFilters();
             }
-            FreeFilters();
         }
 
         private static void FreeFilters()
