@@ -1,34 +1,18 @@
 // ---------------------------------------------------------------------------
-//  Project Zomboid: which account the game's connect window opens with.
+//  Project Zomboid: the accounts the game has saved for a server - READ ONLY.
 //
-//  WHY THIS EXISTS
-//    The game takes only two things on its command line - +connect host:port
-//    and +password (the SERVER password). The account name, the account
-//    password and Steam Relay are filled into its connect window from the
-//    servers and accounts it has saved, in %USERPROFILE%\Zomboid\db\
-//    ServerListSteam.db. A server can have any number of saved accounts, but
-//    the window always takes the FIRST one - read from the game's own code:
-//    Server.getUserName(), getPwd() and getUseSteamRelay() all return
-//    accounts.get(0), and the accounts are loaded by "SELECT * FROM account
-//    WHERE serverId = ?" with no ORDER BY, which is row-id order.
+//  The game keeps its saved servers and accounts in %USERPROFILE%\Zomboid\db\
+//  ServerListSteam.db: a "server" table, and an "account" table with any
+//  number of accounts per server (username, password as a bcrypt hash, save
+//  password, Steam Relay, last logon). The launcher's join window lists them
+//  so the player can pick one; ZomboidJoinHelper then has the game's connect
+//  window fill that account in.
 //
-//    So a player with two accounts on one server got the first one every
-//    time and retyped the other. Here the player picks the account in the
-//    launcher, and just before the game starts that account is made the first
-//    one for the server - by swapping its row id with the current first row,
-//    which moves every column (saved password hash, relay, play time) with it.
-//
-//  WHAT IS NEVER DONE
-//    Passwords are not read, shown or written. The game stores them as bcrypt
-//    hashes, so a password typed into the launcher could not be stored anyway;
-//    a new account is saved with its name only and the game asks for the
-//    password once. And nothing is written while the game is running - the
-//    launcher refuses to start it twice, which is the same moment this runs.
-//
-//  IF THE GAME CHANGES ITS DATABASE
-//    The columns used are checked first. Anything unexpected and this simply
-//    does nothing: the game opens its connect window as it always did. A copy
-//    of the database is taken before every change.
+//  Nothing here writes to that database. An earlier version reordered the
+//  accounts so the chosen one came first, on the reading that the window
+//  fills in the first saved account - true, but the window never finds the
+//  server at all on a +connect start (see ZomboidJoinHelper), so the reorder
+//  changed nothing the player could see. Passwords are never read.
 //
 //  SQLITE WITHOUT A DEPENDENCY
 //    winsqlite3.dll ships with Windows 10 and 11 in System32 and exports the
@@ -93,15 +77,14 @@ namespace ABeautifulPotatoLauncher
                     long target = TargetServer(db, host, port);
                     if (target == 0) return new List<ZomboidAccount>();
 
-                    return db.Query("SELECT id, serverId, username, password, isSavePassword, isUseSteamRelay, "
+                    return db.Query("SELECT id, serverId, username, password <> '', isSavePassword, isUseSteamRelay, "
                                     + "lastLogon, timePlayed FROM account WHERE serverId = ?", target)
                              .Select(r => new ZomboidAccount
                              {
                                  Id = Sqlite.Long(r[0]),
                                  ServerId = Sqlite.Long(r[1]),
                                  Username = Convert.ToString(r[2]) ?? "",
-                                 PasswordSaved = !string.IsNullOrEmpty(Convert.ToString(r[3]))
-                                                 && Sqlite.Long(r[4]) != 0,
+                                 PasswordSaved = Sqlite.Long(r[3]) != 0 && Sqlite.Long(r[4]) != 0,
                                  SteamRelay = Sqlite.Long(r[5]) != 0,
                                  LastLogon = ParseTime(Convert.ToString(r[6])),
                                  TimePlayed = Sqlite.Long(r[7])
@@ -113,126 +96,6 @@ namespace ABeautifulPotatoLauncher
             {
                 problem = ex.Message;
                 return null;
-            }
-        }
-
-        /// <summary>
-        /// Makes the game's connect window open with this account: the chosen
-        /// saved account, or a new one by name, becomes the server's first
-        /// account, with Steam Relay set as asked. The server is added to the
-        /// game's list if it is not there yet.
-        ///
-        /// Returns false, having changed nothing, when the database cannot be
-        /// used - the game then asks for everything itself, as it always did.
-        /// </summary>
-        public static bool PrepareJoin(string host, int port, string serverName,
-                                       ZomboidAccount chosen, string newUsername, bool steamRelay,
-                                       Action<string> log)
-        {
-            string problem;
-            string path = DatabasePath;
-
-            try
-            {
-                // The game makes this file the first time it lists servers. If
-                // it has not, the launcher does not invent one - the game asks.
-                if (!File.Exists(path))
-                {
-                    log("  The game has no saved servers yet, so it will ask for the account itself.");
-                    return false;
-                }
-
-                // A copy before every change, so a surprise in a future game
-                // version can be undone by hand.
-                File.Copy(path, path + ".launcher-backup", true);
-
-                using (var db = Sqlite.Open(path, readOnly: false))
-                {
-                    if (!SchemaFits(db, out problem))
-                    {
-                        log("  Saved accounts left alone: " + problem + ".");
-                        return false;
-                    }
-
-                    db.Exec("BEGIN IMMEDIATE");
-                    try
-                    {
-                        long server = TargetServer(db, host, port);
-                        if (server == 0)
-                        {
-                            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                            db.Exec("INSERT INTO server (name, ip, port, serverPassword, description, lastOnline, lastDataUpdate) "
-                                    + "VALUES (?, ?, ?, '', '', ?, ?)", serverName ?? host, host, port, now, now);
-                            server = db.LastId;
-                            log("  Added " + host + ":" + port + " to the game's server list.");
-                        }
-
-                        long accountId;
-                        string name;
-                        if (chosen != null)
-                        {
-                            accountId = chosen.Id;
-                            name = chosen.Username;
-
-                            // Saved under a duplicate entry for the same address:
-                            // brought across to the one the window reads.
-                            db.Exec("UPDATE account SET serverId = ? WHERE id = ?", server, accountId);
-                        }
-                        else
-                        {
-                            name = (newUsername ?? "").Trim();
-                            var same = db.Query("SELECT id FROM account WHERE serverId = ? AND username = ?", server, name);
-                            if (same.Count > 0) accountId = Sqlite.Long(same[0][0]);
-                            else
-                            {
-                                // Name only. The password is the game's to ask for
-                                // and to store - as a hash, which the launcher could
-                                // not produce.
-                                db.Exec("INSERT INTO account (serverId, username, password, isSavePassword, "
-                                        + "isUseSteamRelay, authType, timePlayed) VALUES (?, ?, '', 1, ?, 1, 0)",
-                                        server, name, steamRelay ? 1 : 0);
-                                accountId = db.LastId;
-                                log("  Saved a new account \"" + name + "\" for this server - the game asks for its password once.");
-                            }
-                        }
-
-                        db.Exec("UPDATE account SET isUseSteamRelay = ? WHERE id = ?", steamRelay ? 1 : 0, accountId);
-
-                        // FIRST, by row id. Swapping ids moves whole rows, so the
-                        // saved password, play time and everything else stay with
-                        // the account they belong to.
-                        long first = Sqlite.Long(db.Query("SELECT MIN(id) FROM account WHERE serverId = ?", server)[0][0]);
-                        if (first != accountId)
-                        {
-                            long parked = -1000000 - accountId;
-                            db.Exec("UPDATE account SET id = ? WHERE id = ?", parked, accountId);
-                            db.Exec("UPDATE account SET id = ? WHERE id = ?", accountId, first);
-                            db.Exec("UPDATE account SET id = ? WHERE id = ?", first, parked);
-                        }
-
-                        // Read it back the way the game will.
-                        var check = db.Query("SELECT username FROM account WHERE serverId = ?", server);
-                        if (check.Count == 0 || !string.Equals(Convert.ToString(check[0][0]), name, StringComparison.Ordinal))
-                            throw new InvalidOperationException("the account did not come out first");
-
-                        db.Exec("COMMIT");
-                    }
-                    catch
-                    {
-                        try { db.Exec("ROLLBACK"); } catch { }
-                        throw;
-                    }
-                }
-
-                log("  The game's connect window will open with account \"" + (chosen != null ? chosen.Username : newUsername)
-                    + "\", Steam Relay " + (steamRelay ? "on" : "off") + ".");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                log("  Could not set the account in the game's saved list (" + ex.Message
-                    + ") - the game will ask for it.");
-                return false;
             }
         }
 
@@ -281,7 +144,7 @@ namespace ABeautifulPotatoLauncher
 
     /// <summary>
     /// Just enough of SQLite, through Windows' own winsqlite3.dll: open, run a
-    /// statement with parameters, read rows back. Values come back as long,
+    /// query with parameters, read rows back. Values come back as long,
     /// double, string or null.
     /// </summary>
     internal sealed class Sqlite : IDisposable
@@ -322,8 +185,6 @@ namespace ABeautifulPotatoLauncher
         [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
         private static extern int sqlite3_bind_null(IntPtr stmt, int idx);
         [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
-        private static extern long sqlite3_last_insert_rowid(IntPtr db);
-        [DllImport(Dll, CallingConvention = CallingConvention.StdCall)]
         private static extern IntPtr sqlite3_errmsg(IntPtr db);
 
         private IntPtr _db;
@@ -333,7 +194,7 @@ namespace ABeautifulPotatoLauncher
         public static Sqlite Open(string path, bool readOnly)
         {
             IntPtr db;
-            // Never OpenCreate: this only ever edits a database the game made.
+            // Never OpenCreate: the database is the game's to make.
             int flags = readOnly ? OpenReadOnly : OpenReadWrite;
             int rc = sqlite3_open_v2(Utf8(path), out db, flags, IntPtr.Zero);
             if (rc != OK)
@@ -345,10 +206,6 @@ namespace ABeautifulPotatoLauncher
             sqlite3_busy_timeout(db, 3000);
             return new Sqlite(db);
         }
-
-        public long LastId { get { return sqlite3_last_insert_rowid(_db); } }
-
-        public void Exec(string sql, params object[] args) { Run(sql, args, false); }
 
         public List<object[]> Query(string sql, params object[] args) { return Run(sql, args, true); }
 

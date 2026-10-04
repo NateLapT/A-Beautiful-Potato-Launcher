@@ -49,19 +49,22 @@ arbitrary until you know what they were measured against.
     for the account name in its own connect window, and downloads missing
     mods itself while connecting.
   - **Join window: server password, account and Steam Relay.** The game's
-    command line takes only `+connect` and `+password`; its connect window
-    fills the account name, that account's saved password and Steam Relay
-    from `Zomboid\db\ServerListSteam.db` - always the server's FIRST saved
-    account (`Server.getUserName()` is `accounts.get(0)`, loaded in row-id
-    order). So the launcher asks which account, then makes that one first
-    for the server by swapping row ids (the whole row moves: saved password
-    hash, play time, relay) and sets its relay flag. "New account..." saves
-    the name only - passwords are bcrypt hashes the game makes, so it asks
-    for a new account's password once. The database is backed up to
-    `ServerListSteam.db.launcher-backup` before each change, its layout is
-    checked first (anything unexpected: no change, the game asks as before),
-    it is never created by the launcher, and nothing is written while the game
-    runs. SQLite through Windows' own `winsqlite3.dll`, so still one exe.
+    command line takes only `+connect` and `+password`. Its connect window is
+    meant to fill the account from the game's saved accounts
+    (`Zomboid\db\ServerListSteam.db`), but on a `+connect` start it never
+    can: `ServerConnectPopup:setServer` compares the saved port (a number)
+    with the one it was given (text), which in Lua never match - so the window
+    always opened empty, Steam invites included. The launcher now installs a
+    small **join helper mod** in `Zomboid\mods`, enabled for the main menu only
+    (`default.txt`, backed up first), and leaves a one-line request in
+    `Zomboid\Lua\ABPL_join.txt` naming the server, account and relay choice.
+    The helper fills those in; when the game holds that account's password,
+    its Connect sends the saved hash as the game's own server list does. It
+    clears the request once used. Joining a server reloads Lua with the
+    server's mods, so the helper is gone before any server sees it. The
+    launcher only READS the game's database (to list the accounts) - an
+    earlier attempt that reordered accounts there was removed, as the window
+    never reached them. Passwords are never read or written by the launcher.
   - No fake-server screening: Zomboid's list does not have DayZ's redirect
     farms, and its real servers run 170-200 slots, which the DayZ capacity
     rules would hide.
