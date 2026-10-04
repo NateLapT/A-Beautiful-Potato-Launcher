@@ -7,12 +7,14 @@
 //  server lists its mods, how the game is started) lives in one place per
 //  game: DayZ's in MainForm as it always has, Project Zomboid's in Zomboid.
 //
-//  ONE GAME PER RUN
-//    Switching game restarts the launcher. Every cache, filter, index and the
-//    Steam session itself belongs to one game, and a clean start is the only
-//    way to be certain none of DayZ's state leaks into Zomboid's list or the
-//    other way round. It also means the Steam session is opened as the right
-//    app from the first moment, so Steam shows the game being browsed.
+//  SWITCHING GAME
+//    Every cache, filter, index and the Steam session belongs to one game, so
+//    switching closes the window and opens a fresh one for the other game -
+//    in the same process, without restarting it. In between, the Steam
+//    session is re-opened as the other game's app (the same SwitchApp that
+//    moves DayZ between stable and Experimental), so Steam shows the new game
+//    straight away, and the few caches held outside the window are dropped.
+//    See MainForm.BeginGame.
 //
 //  WHERE EACH GAME KEEPS ITS FILES
 //    DayZ stays exactly where it always was, so an existing install loses
@@ -29,8 +31,11 @@ namespace ABeautifulPotatoLauncher
 
     internal static class Games
     {
-        /// <summary>The game this run of the launcher is for. Set once, at startup.</summary>
+        /// <summary>The game the launcher is showing. Changes only between windows - see MainForm.BeginGame.</summary>
         public static Game Current { get; private set; }
+
+        /// <summary>Makes another game current. Only while no window is open.</summary>
+        internal static void SetCurrent(Game g) { Current = g; }
 
         public static bool IsZomboid { get { return Current == Game.Zomboid; } }
 

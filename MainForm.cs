@@ -177,7 +177,26 @@ namespace ABeautifulPotatoLauncher
             }
             catch (Exception ex) { LogCrash("installer", ex); }
 
-            Application.Run(new MainForm());
+            // One window per game. Choosing the other game in the rail closes
+            // this window, and the next one opens for that game - same process,
+            // no restart. See MainForm.BeginGame.
+            while (true)
+            {
+                var form = new MainForm();
+                Application.Run(form);
+                if (form.SwitchTo == null) break;
+                MainForm.BeginGame(form.SwitchTo.Value);
+            }
+        }
+
+        /// <summary>A line in the log file, for the moments no window is open to show it.</summary>
+        internal static void LogLine(string msg)
+        {
+            try
+            {
+                File.AppendAllText(LogFile, "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + msg + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static void LogCrash(string where, Exception ex)
@@ -1654,37 +1673,19 @@ namespace ABeautifulPotatoLauncher
             gamePick.SelectedIndexChanged += (s, e) => SwitchGame((Game)gamePick.SelectedIndex);
             rail.Controls.Add(gamePick);
             new ToolTip().SetToolTip(gamePick,
-                "Which game's servers to browse. Changing it restarts the launcher.");
+                "Which game's servers to browse. Steam switches to that game too.");
 
-            // The DayZ logo for DayZ. Project Zomboid gets its name in plain
-            // type instead - no logo of theirs is shipped with the launcher.
-            Control gameMark;
-            if (Games.IsZomboid)
+            // The game's logo, with the disclaimer on it. Zomboid's is its own
+            // black wordmark recoloured light so it reads on the dark rail.
+            var gameMark = new PictureBox
             {
-                gameMark = new Label
-                {
-                    Text = "PROJECT\r\nZOMBOID",
-                    Bounds = new Rectangle(18, 40, 174, 68),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    ForeColor = Color.FromArgb(200, 60, 50),
-                    BackColor = Color.Transparent,
-                    Font = new Font("Segoe UI", 15f, FontStyle.Bold),
-                    UseMnemonic = false,
-                    AccessibleDescription = Disclaimer
-                };
-            }
-            else
-            {
-                gameMark = new PictureBox
-                {
-                    Image = LoadImage("dayz_logo.png"),
-                    SizeMode = PictureBoxSizeMode.Zoom,
-                    Bounds = new Rectangle(18, 40, 174, 68),
-                    BackColor = Color.Transparent,
-                    AccessibleName = "DayZ",
-                    AccessibleDescription = Disclaimer      // what a screen reader announces
-                };
-            }
+                Image = LoadImage(Games.IsZomboid ? "zomboid_logo.png" : "dayz_logo.png"),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Bounds = new Rectangle(18, 40, 174, 68),
+                BackColor = Color.Transparent,
+                AccessibleName = Games.Name,
+                AccessibleDescription = Disclaimer      // what a screen reader announces
+            };
             rail.Controls.Add(gameMark);
 
             // Hover text. AutoPopDelay raised because the default five seconds
@@ -2335,6 +2336,7 @@ namespace ABeautifulPotatoLauncher
             if (cache != null)
                 foreach (var srv in cache)
                 {
+                    if (!Zomboid.IsZomboidServer(srv)) continue;
                     string v = srv.Version;
                     if (v.Length == 0) continue;
                     int n;
@@ -2389,23 +2391,53 @@ namespace ABeautifulPotatoLauncher
 
         private int _versionCountTotal = -1;
 
+        /// <summary>The game to open next, when this window closed to switch game.</summary>
+        internal Game? SwitchTo { get; private set; }
+
         /// <summary>
-        /// Saves the other game as the choice and restarts into it. Nothing is
-        /// carried over: each game has its own lists, filters and Steam session.
+        /// Saves the other game as the choice and closes this window; Main opens
+        /// the next one for that game. Nothing is carried over: each game has its
+        /// own lists, filters and Steam session.
         /// </summary>
         private void SwitchGame(Game to)
         {
             if (to == Games.Current) return;
 
-            Log("Switching to " + Games.NameOf(to) + " - restarting the launcher.");
+            Log("Switching to " + Games.NameOf(to) + ".");
             Games.Save(ServerStore.BaseDir, to);
-            try { Application.Restart(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show("The launcher could not restart itself (" + ex.Message + ").\r\n\r\n"
-                                + "Close it and open it again; it will start on " + Games.NameOf(to) + ".",
-                                "Switch game", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+            SwitchTo = to;
+
+            // After the dropdown's own event has finished, not inside it.
+            BeginInvoke((Action)Close);
+        }
+
+        /// <summary>
+        /// Makes another game current between windows.
+        ///
+        /// THE STEAM SESSION MOVES WITHOUT A RESTART. It is shut down and
+        /// opened again as the other game's app - SwitchApp, the same move that
+        /// takes DayZ between stable and Experimental - using the steam_api64.dll
+        /// already loaded, so Steam shows the new game at once. Then the caches
+        /// that live outside the window, each of which belongs to one game's
+        /// folders, are dropped so the new window reads its own.
+        /// </summary>
+        internal static void BeginGame(Game g)
+        {
+            Games.SetCurrent(g);
+            Program.LogLine("Switched to " + Games.Name + ".");
+
+            if (SteamWorkshop.Initialised && SteamWorkshop.SessionApp != Games.WorkshopApp)
+                SteamWorkshop.SwitchApp(Games.WorkshopApp, null, Program.LogLine);
+
+            _steamAnswer = null;               // the library holding the OTHER game
+            ServerStore.ForgetCaches();
+            SteamWorkshop.ForgetItemPaths();
+            SteamWorkshop.ForgetConfirmed();
+            ModIndex.Invalidate();
+            ModOverrides.Forget();
+            WorkshopLinks.Forget();
+            Zomboid.Invalidate();
+            Zomboid.SteamPathForScan = null;
         }
 
         private static int IndexForMode(string mode)
@@ -3847,6 +3879,9 @@ namespace ABeautifulPotatoLauncher
             var rows = new List<Row>(cache.Count);
             foreach (var srv in cache)
             {
+                // Other games' servers in Zomboid's list - see IsZomboidServer.
+                if (Games.IsZomboid && !Zomboid.IsZomboidServer(srv)) continue;
+
                 string reason = FakeReason(srv);
                 if (reason != null)
                 {
