@@ -9,12 +9,12 @@
 //
 //  SWITCHING GAME
 //    Every cache, filter, index and the Steam session belongs to one game, so
-//    switching closes the window and opens a fresh one for the other game -
-//    in the same process, without restarting it. In between, the Steam
-//    session is re-opened as the other game's app (the same SwitchApp that
-//    moves DayZ between stable and Experimental), so Steam shows the new game
-//    straight away, and the few caches held outside the window are dropped.
-//    See MainForm.BeginGame.
+//    switching builds a fresh launcher for the other game and swaps it into
+//    the same window - the window itself never closes (see LauncherWindow).
+//    In between, the Steam session is re-opened as the other game's app (the
+//    same SwitchApp that moves DayZ between stable and Experimental), so Steam
+//    shows the new game straight away, and the few caches held outside the
+//    launcher are dropped. See MainForm.BeginGame.
 //
 //  WHERE EACH GAME KEEPS ITS FILES
 //    DayZ stays exactly where it always was, so an existing install loses

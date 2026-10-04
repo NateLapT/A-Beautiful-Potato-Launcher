@@ -177,16 +177,9 @@ namespace ABeautifulPotatoLauncher
             }
             catch (Exception ex) { LogCrash("installer", ex); }
 
-            // One window per game. Choosing the other game in the rail closes
-            // this window, and the next one opens for that game - same process,
-            // no restart. See MainForm.BeginGame.
-            while (true)
-            {
-                var form = new MainForm();
-                Application.Run(form);
-                if (form.SwitchTo == null) break;
-                MainForm.BeginGame(form.SwitchTo.Value);
-            }
+            // One window for the whole run. Choosing the other game swaps the
+            // launcher inside it - see LauncherWindow.
+            Application.Run(new LauncherWindow());
         }
 
         /// <summary>A line in the log file, for the moments no window is open to show it.</summary>
@@ -952,18 +945,18 @@ namespace ABeautifulPotatoLauncher
             // Elevation belongs in the title bar: it changes who owns every
             // file the launcher and the game write from here on, and it is not
             // otherwise visible at a glance.
+            // LauncherWindow shows this as the window's title.
             Text = "A Beautiful Potato Launcher  -  " + Games.Name
                  + (Elevation.Self ? "   (elevated User: Administrator)" : "");
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1180, 800);
-            MinimumSize = new Size(1020, 680);
-            RestoreWindow();
 
-            ResizeEnd += (s, e) => RememberWindow();
+            // A starting size to lay the panels out against; the window docks
+            // this to fill it straight after. The window's own size, place and
+            // minimum belong to LauncherWindow.
+            ClientSize = new Size(1180, 800);
             BackColor = Ink;
             ForeColor = Color.Gainsboro;
             Font = new Font("Segoe UI", 9f);
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            Active = this;
 
             _favourites = ServerStore.LoadFavourites();
             _allowed = ServerStore.LoadAllowed();
@@ -979,7 +972,7 @@ namespace ABeautifulPotatoLauncher
             // Once the window is up, never before: a slow or absent network
             // must not hold up the launcher opening. Then every six hours, for
             // a launcher left open all day.
-            Shown += (s, e) => CheckForUpdates();
+            Load += (s, e) => CheckForUpdates();     // hosted forms get Load, not Shown
             _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
             _updateTimer.Tick += (s, e) => CheckForUpdates();
             _updateTimer.Start();
@@ -1196,7 +1189,7 @@ namespace ABeautifulPotatoLauncher
                 TabStop = false
             };
             _updateButton.FlatAppearance.BorderColor = UpdateGold;
-            _updateButton.Click += (s, e) => UpdateDialog.Show(this, _updates);
+            _updateButton.Click += (s, e) => UpdateDialog.Show(Host, _updates);
             bottomBar.Controls.Add(_updateButton);
 
             var settings = new Button
@@ -2391,24 +2384,34 @@ namespace ABeautifulPotatoLauncher
 
         private int _versionCountTotal = -1;
 
-        /// <summary>The game to open next, when this window closed to switch game.</summary>
-        internal Game? SwitchTo { get; private set; }
-
         /// <summary>
-        /// Saves the other game as the choice and closes this window; Main opens
-        /// the next one for that game. Nothing is carried over: each game has its
-        /// own lists, filters and Steam session.
+        /// Raised when the player picks the other game. LauncherWindow swaps in
+        /// that game's launcher in the same window; nothing is carried over -
+        /// each game has its own lists, filters and Steam session.
         /// </summary>
+        internal event Action<Game> SwitchRequested;
+
+        /// <summary>The launcher currently in the window, for the windows it opens.</summary>
+        internal static MainForm Active { get; private set; }
+
         private void SwitchGame(Game to)
         {
             if (to == Games.Current) return;
 
             Log("Switching to " + Games.NameOf(to) + ".");
             Games.Save(ServerStore.BaseDir, to);
-            SwitchTo = to;
+            var handler = SwitchRequested;
+            if (handler != null) handler(to);
+        }
 
-            // After the dropdown's own event has finished, not inside it.
-            BeginInvoke((Action)Close);
+        /// <summary>
+        /// The window this launcher sits in - the owner for every dialog it
+        /// opens, so they centre on and stay above the real window rather than
+        /// the panel hosted inside it.
+        /// </summary>
+        private IWin32Window Host
+        {
+            get { return (IWin32Window)TopLevelControl ?? this; }
         }
 
         /// <summary>
@@ -4827,7 +4830,7 @@ namespace ABeautifulPotatoLauncher
         private void OnSettings(object sender, EventArgs e)
         {
             bool hide;
-            bool changed = SettingsDialog.Show(this, Flagged, _allowed, _filters.HideFakes, out hide, FindSteam());
+            bool changed = SettingsDialog.Show(Host, Flagged, _allowed, _filters.HideFakes, out hide, FindSteam());
             if (!changed) return;
 
             _filters.HideFakes = hide;
@@ -6784,7 +6787,7 @@ namespace ABeautifulPotatoLauncher
                 ? existing.Folder
                 : ServerStore.LoadExtraModPath();
 
-            string folder = FindModDialog.Ask(this, "@" + mod.BareName, start);
+            string folder = FindModDialog.Ask(Host, "@" + mod.BareName, start);
             if (folder == null) return null;
 
             ModOverrides.Set(mod, new ModOverride { Enabled = true, Folder = folder });
@@ -6820,7 +6823,7 @@ namespace ABeautifulPotatoLauncher
                 }
 
                 // Reads local files, so it works even with Steam shut.
-                ModInfoDialog.Show(this, mod, FindSteam());
+                ModInfoDialog.Show(Host, mod, FindSteam());
                 return;
             }
 
@@ -7194,7 +7197,7 @@ private void Launch(Row srv)
                 Log("Fetching " + missing.Count + " mod(s) that are missing, out of date, or still downloading...");
                 using (var dl = new ModDownloadForm(steam, gameDir, missing.ToArray()))
                 {
-                    if (dl.ShowDialog(this) != DialogResult.OK)
+                    if (dl.ShowDialog(Host) != DialogResult.OK)
                     {
                         Log("Download cancelled - not launching.");
                         return;
@@ -7290,7 +7293,7 @@ private void Launch(Row srv)
             // into a refusal the player cannot read.
             if (live.Password || srv.Password)
             {
-                string pw = PasswordDialog.Ask(this, srv.Name);
+                string pw = PasswordDialog.Ask(Host, srv.Name);
                 if (pw == null)
                 {
                     Log("Password required, and none was given - not launching.");
@@ -7310,7 +7313,7 @@ private void Launch(Row srv)
             string playerName = _name.Text.Trim();
             if (playerName.Length == 0 || NameDialog.IsDefault(playerName))
             {
-                playerName = NameDialog.Ask(this);
+                playerName = NameDialog.Ask(Host);
                 _name.Text = playerName;
                 ServerStore.SaveName(playerName);
                 Log("Player name set to " + playerName + " - saved for next time.");
@@ -7506,7 +7509,7 @@ private void Launch(Row srv)
             BeginLaunchCooldown();
 
             var waiting = new LaunchingForm(srv.Name, GameExe, started, Log, EndLaunchCooldown);
-            waiting.Show(this);
+            waiting.Show(Host);
 
             Log("");
             Log("Started. DayZ takes a minute or two to appear - be patient.");
@@ -7599,7 +7602,7 @@ private void Launch(Row srv)
             // just before the game starts. See ZomboidJoinHelper.
             string problem;
             var accounts = ZomboidAccounts.For(srv.Host, srv.Port, out problem);
-            var choice = ZomboidJoinDialog.Ask(this, srv.Name, live.Password || srv.Password, accounts, problem,
+            var choice = ZomboidJoinDialog.Ask(Host, srv.Name, live.Password || srv.Password, accounts, problem,
                                                ServerStore.LoadZomboidAccountChoice(srv.Endpoint));
             if (choice == null)
             {
@@ -7654,7 +7657,7 @@ private void Launch(Row srv)
 
             BeginLaunchCooldown();
             var waiting = new LaunchingForm(srv.Name, Zomboid.GameExe, started, Log, EndLaunchCooldown);
-            waiting.Show(this);
+            waiting.Show(Host);
 
             Log("");
             Log("Started. The game opens its connect window with the server filled in - "
@@ -7694,7 +7697,7 @@ private void Launch(Row srv)
                 + "NO - leave it. Close Steam completely, start it normally, then press CONNECT "
                 + "again. This is the fix that lasts.";
 
-            var answer = MessageBox.Show(this, text, "The game cannot see Steam",
+            var answer = MessageBox.Show(Host, text, "The game cannot see Steam",
                                          MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                                          MessageBoxDefaultButton.Button2);
 
@@ -7707,7 +7710,7 @@ private void Launch(Row srv)
 
             if (RestartElevated()) return false;    // this instance is closing
 
-            MessageBox.Show(this,
+            MessageBox.Show(Host,
                 "The launcher was not given administrator rights, so nothing has changed."
                 + Environment.NewLine + Environment.NewLine
                 + "Close Steam completely and start it normally instead - that fixes this "
@@ -7742,7 +7745,7 @@ private void Launch(Row srv)
             }
 
             Log("Restarting as administrator to match Steam.");
-            BeginInvoke((Action)Close);
+            BeginInvoke((Action)(() => ((TopLevelControl as Form) ?? this).Close()));
             return true;
         }
 
@@ -7881,7 +7884,7 @@ private static ServerRules QueryModsChecked(Row row)
             string host;
             int port;
             bool save;
-            if (!DirectConnectDialog.Show(this, out host, out port, out save)) return;
+            if (!DirectConnectDialog.Show(Host, out host, out port, out save)) return;
 
             var row = new Row { Host = host, Port = port, Name = host + ":" + port };
             if (save && !_favourites.Contains(row.Endpoint))
@@ -7937,7 +7940,7 @@ private static ServerRules QueryModsChecked(Row row)
 
             _modManager = new ModManagerForm(steam, gameDir);
             _modManager.FormClosed += (s2, e2) => _modManager = null;
-            _modManager.Show(this);
+            _modManager.Show(Host);
         }
 
         /// <summary>The mod library window, while it is open.</summary>
@@ -8228,26 +8231,33 @@ private static ServerRules QueryModsChecked(Row row)
             return new Bitmap(1, 1);
         }
 
-        private void RememberWindow()
-        {
-            if (WindowState == FormWindowState.Normal)
-                ServerStore.SaveWindow(Location, Size);
-        }
-
-        private void RestoreWindow()
-        {
-            Point loc; Size sz;
-            if (ServerStore.LoadWindow(out loc, out sz))
-            {
-                StartPosition = FormStartPosition.Manual;
-                Location = loc;
-                Size = sz;
-            }
-        }
-
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            Shutdown();
+            base.OnFormClosing(e);
+        }
+
+        private bool _shutDown;
+
+        /// <summary>
+        /// Stops everything this launcher has running and saves what it learnt.
+        /// Called by LauncherWindow when the window closes and when the game is
+        /// switched - a form hosted inside another is never sent FormClosing.
+        /// Safe to call more than once.
+        /// </summary>
+        internal void Shutdown()
+        {
+            if (_shutDown) return;
+            _shutDown = true;
+            if (Active == this) Active = null;
+
             _closing = true;
+            _updateTimer.Stop();
+            if (_cooldownTimer != null) _cooldownTimer.Stop();
+
+            // The mod library window is DayZ's, and belongs to this launcher.
+            if (_modManager != null && !_modManager.IsDisposed) _modManager.Close();
+
             _pollTimer.Stop();
             _visTimer.Stop();
             _typeTimer.Stop();
@@ -8264,11 +8274,9 @@ private static ServerRules QueryModsChecked(Row row)
             SaveIndex();
             SaveServerMods();
 
-            RememberWindow();
             RememberAllSplits();
 
             SteamServerList.Stop();
-            base.OnFormClosing(e);
         }
     }
 }
