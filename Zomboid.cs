@@ -76,6 +76,24 @@ namespace ABeautifulPotatoLauncher
             return "";
         }
 
+        /// <summary>
+        /// Whether a list entry is a Project Zomboid server at all.
+        ///
+        /// Steam's list for app 108600 is not only Zomboid. Measured 3 October
+        /// 2026, of 35,536 entries: 33,440 report the game folder "zomboid", and
+        /// the rest are other games - 711 V Rising, 570 "usermaps", 228 CS:GO,
+        /// 106 Left 4 Dead and a tail of others - all of which the game could
+        /// never join. Every server states its game folder, so that is the test.
+        /// An entry with none (one found by asking a single address directly)
+        /// is given the benefit of the doubt.
+        /// </summary>
+        public static bool IsZomboidServer(BrowserServer s)
+        {
+            if (s == null) return false;
+            string dir = (s.GameDir ?? "").Trim();
+            return dir.Length == 0 || dir.Equals("zomboid", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool IsModded(string tags) { return HasTag(tags, "modded"); }
         public static bool IsPvp(string tags)    { return HasTag(tags, "pvp"); }
 

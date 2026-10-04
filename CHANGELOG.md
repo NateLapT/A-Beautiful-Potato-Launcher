@@ -16,13 +16,13 @@ arbitrary until you know what they were measured against.
 
 ---
 
-## [0.7] - 2026-09-26
+## [0.8] - 2026-10-03
 
 ### Added
 
 - **Project Zomboid.** A Game picker at the top of the left rail switches the
-  launcher between DayZ and Project Zomboid (it restarts to switch; each game
-  keeps its own lists, favourites and settings - Zomboid's in a `zomboid`
+  launcher between DayZ and Project Zomboid (each game keeps its own lists,
+  favourites and settings - Zomboid's in a `zomboid`
   folder beside DayZ's, which does not move). For Zomboid:
   - The Steam session is opened as app 108600, so Steam shows Project Zomboid,
     and the list is Steam's master list for that app.
@@ -72,6 +72,16 @@ arbitrary until you know what they were measured against.
   `SteamAPI_Init` export, only `SteamAPI_InitFlat`; both are now tried. Only
   one `steam_api64.dll` is ever loaded per process, and the server browser
   binds through it rather than loading a second copy.
+- **Switching game no longer restarts the launcher.** Choosing the other
+  game closes the window and opens a fresh one for it in the same process; in
+  between, the Steam session is re-opened as the other game's app (the same
+  SwitchApp that moves DayZ between stable and Experimental), so Steam shows
+  the new game at once. The re-open now holds the Steam API lock, so a
+  background Workshop lookup can never be mid-call while it happens.
+- **Project Zomboid logo** in the rail, recoloured light for the dark theme,
+  with the same unofficial-launcher disclaimer as DayZ's.
+
+## [0.7] - 2026-09-26
 
 ### Changed
 

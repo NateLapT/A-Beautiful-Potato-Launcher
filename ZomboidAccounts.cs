@@ -43,11 +43,8 @@ namespace ABeautifulPotatoLauncher
     {
         public static string DatabasePath
         {
-            get { return DatabaseOverride ?? Path.Combine(Zomboid.UserFolder, "db", "ServerListSteam.db"); }
+            get { return Path.Combine(Zomboid.UserFolder, "db", "ServerListSteam.db"); }
         }
-
-        /// <summary>Points everything here at a copy instead - for testing only.</summary>
-        internal static string DatabaseOverride;
 
         private static readonly string[] ServerColumns = { "id", "name", "ip", "port", "serverPassword" };
         private static readonly string[] AccountColumns =

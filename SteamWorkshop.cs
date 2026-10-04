@@ -801,6 +801,13 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static bool SwitchApp(uint appId, string gameDir, Action<string> log)
         {
+            // Under the lock: a background lookup must never be part-way
+            // through a call while the session it belongs to is shut down.
+            lock (ApiLock) return SwitchAppLocked(appId, gameDir, log);
+        }
+
+        private static bool SwitchAppLocked(uint appId, string gameDir, Action<string> log)
+        {
             if (_sessionApp == appId && _initialised) return Available;
 
             // ORDER MATTERS, AND GETTING IT WRONG KILLS THE PROCESS.
@@ -1517,6 +1524,15 @@ namespace ABeautifulPotatoLauncher
                 ServerStore.SaveSteamConfirmed(Confirmed);
             }
         }
+
+        /// <summary>Forgets the loaded confirmations, which belong to one game's data folder.</summary>
+        public static void ForgetConfirmed()
+        {
+            lock (ConfirmedLock) _confirmed = null;
+        }
+
+        /// <summary>Whether the Steam session is open at all, whichever app it claims.</summary>
+        public static bool Initialised { get { return _initialised; } }
 
         /// <summary>Steam has vouched for this copy at the current publication time.</summary>
         public static bool IsConfirmedCurrent(ulong id)

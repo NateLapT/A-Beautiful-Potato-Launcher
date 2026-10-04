@@ -217,6 +217,12 @@ namespace ABeautifulPotatoLauncher
         private static readonly Dictionary<string, string> Names =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Drops what is held in memory for the current game, before switching game.</summary>
+        public static void ForgetCaches()
+        {
+            Names.Clear();
+        }
+
         public static HashSet<string> LoadFavourites()
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
