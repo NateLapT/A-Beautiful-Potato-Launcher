@@ -21,7 +21,7 @@ arbitrary until you know what they were measured against.
 ### Added
 
 - **Ready-made server lists.** The launcher downloads Community/Official
-  lists from serverlist.beautifulpotato.com - a service that rebuilds them
+  lists from the Beautiful Potato server list - a service that rebuilds them
   continuously from Steam's Web API - in a second or two, instead of asking
   Steam itself (rationed to about one request a minute once a sweep is under
   way; a full Project Zomboid index took half an hour). The same service

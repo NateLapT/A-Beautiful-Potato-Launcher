@@ -22,8 +22,8 @@
 //    held so an unchanged file costs a few bytes. Nothing about the player.
 //
 //  ADDRESS
-//    serverlist.beautifulpotato.com. A "relay.txt" in the launcher's data
-//    folder overrides it - another address for testing, or "off".
+//    DefaultBase below. A "relay.txt" in the launcher's data folder overrides
+//    it - another address for testing, or "off".
 // ---------------------------------------------------------------------------
 
 using System;
