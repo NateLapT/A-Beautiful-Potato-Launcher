@@ -15,6 +15,10 @@ is out and can update itself.
 - Browses Steam's full master list - past Steam's 10,000-server limit - and
   searches and filters it instantly: name, map, region, country, players, ping,
   password, game modes (PvP, PvE, RP...), and the mods a server runs.
+- The list, with every server's mods and description, is downloaded in a
+  second or two from `serverlist.beautifulpotato.com`, which keeps a copy of
+  Steam's list up to date. Nothing about you is sent - just a request for the
+  file. If it can't be reached, the launcher asks Steam itself as before.
 - Live player counts and pings for the servers on screen; favourites, recent,
   friends and LAN tabs.
 - Shows each server's required mods and whether you have them, with Sub,

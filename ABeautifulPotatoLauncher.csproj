@@ -17,9 +17,9 @@
          [Unreleased] section of CHANGELOG.md under the same number. -->
     <!-- Written and compared like a decimal: 0.55 comes BEFORE 0.6. The
          GitHub release tag must match, with a v: v0.55. See Updater. -->
-    <Version>0.8</Version>
+    <Version>0.8.1</Version>
     <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
-    <FileVersion>0.8.0.0</FileVersion>
+    <FileVersion>0.8.1.0</FileVersion>
 
     <!-- The build time, appended to the informational version as
          "0.3+20260921.0510" (UTC). The version number only changes on a

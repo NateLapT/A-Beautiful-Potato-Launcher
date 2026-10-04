@@ -16,7 +16,7 @@ arbitrary until you know what they were measured against.
 
 ---
 
-## [Unreleased]
+## [0.8.1] - 2026-10-04
 
 ### Added
 
