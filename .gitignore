@@ -14,6 +14,9 @@ source/
 # tools/build-default-servers.py.
 !assets/default-servers.tsv.gz
 
+# ...and the Project Zomboid logo, embedded in the rail the way DayZ's is.
+!assets/ZomboidLogo.png
+
 # Build output
 bin/
 obj/
