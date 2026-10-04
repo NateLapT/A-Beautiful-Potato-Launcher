@@ -7558,17 +7558,30 @@ private void Launch(Row srv)
             if (rules != null)
                 Log("Server lists " + rules.Mods.Count + " mod(s); the game downloads any you are missing as it connects.");
 
-            string password = null;
-            if (live.Password || srv.Password)
+            // WHICH ACCOUNT, AND HOW. The command line carries only the server
+            // password; the account and Steam Relay come from the game's own
+            // saved accounts, so the one chosen here is put first for this
+            // server before the game starts. See ZomboidAccounts.
+            string problem;
+            var accounts = ZomboidAccounts.For(srv.Host, srv.Port, out problem);
+            var choice = ZomboidJoinDialog.Ask(this, srv.Name, live.Password || srv.Password, accounts, problem,
+                                               ServerStore.LoadZomboidAccountChoice(srv.Endpoint));
+            if (choice == null)
             {
-                password = PasswordDialog.Ask(this, srv.Name);
-                if (password == null)
-                {
-                    Log("Password required, and none was given - not launching.");
-                    return;
-                }
-                Log("Password supplied.");
+                Log("Join cancelled.");
+                return;
             }
+
+            string password = choice.ServerPassword;
+            if (password != null) Log("Server password supplied.");
+
+            if (choice.AccountsUsable && !string.IsNullOrEmpty(choice.Username))
+            {
+                if (ZomboidAccounts.PrepareJoin(srv.Host, srv.Port, srv.Name, choice.Account,
+                                                choice.NewUsername, choice.SteamRelay, Log))
+                    ServerStore.SaveZomboidAccountChoice(srv.Endpoint, choice.Username);
+            }
+            else Log("No account chosen - the game will ask for one.");
 
             string exe = Path.Combine(gameDir, Zomboid.GameExe);
             if (!CanRead(exe))

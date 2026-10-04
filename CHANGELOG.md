@@ -48,6 +48,20 @@ arbitrary until you know what they were measured against.
     after warning if the server's version differs from yours. The game asks
     for the account name in its own connect window, and downloads missing
     mods itself while connecting.
+  - **Join window: server password, account and Steam Relay.** The game's
+    command line takes only `+connect` and `+password`; its connect window
+    fills the account name, that account's saved password and Steam Relay
+    from `Zomboid\db\ServerListSteam.db` - always the server's FIRST saved
+    account (`Server.getUserName()` is `accounts.get(0)`, loaded in row-id
+    order). So the launcher asks which account, then makes that one first
+    for the server by swapping row ids (the whole row moves: saved password
+    hash, play time, relay) and sets its relay flag. "New account..." saves
+    the name only - passwords are bcrypt hashes the game makes, so it asks
+    for a new account's password once. The database is backed up to
+    `ServerListSteam.db.launcher-backup` before each change, its layout is
+    checked first (anything unexpected: no change, the game asks as before),
+    it is never created by the launcher, and nothing is written while the game
+    runs. SQLite through Windows' own `winsqlite3.dll`, so still one exe.
   - No fake-server screening: Zomboid's list does not have DayZ's redirect
     farms, and its real servers run 170-200 slots, which the DayZ capacity
     rules would hide.
