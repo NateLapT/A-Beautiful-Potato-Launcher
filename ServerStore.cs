@@ -60,6 +60,9 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
+        /// <summary>The current game's data folder, for files kept beside its lists.</summary>
+        internal static string GameDir { get { return Dir; } }
+
         /// <summary>
         /// Where the current game's data lives. DayZ keeps the top level it has
         /// always used, so nothing an existing player has built up moves;
@@ -996,7 +999,6 @@ namespace ABeautifulPotatoLauncher
             {
                 string file = ListFile(key);
                 IEnumerable<string> lines;
-                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 bool seeded = false;
                 if (File.Exists(file))
                     lines = File.ReadAllLines(file, System.Text.Encoding.UTF8);
@@ -1005,44 +1007,59 @@ namespace ABeautifulPotatoLauncher
                 else
                     return result;
 
-                long cutoff = now - (long)ListMaxAge.TotalSeconds;
-                foreach (string line in lines)
-                {
-                    if (line.Length == 0) continue;
-                    string[] f = line.Split('\t');
-                    if (f.Length < 14) continue;
-                    try
-                    {
-                        long seen = long.Parse(f[13]);
-                        if (seen > 0 && seen < cutoff) continue;
-
-                        // The built-in list carries no dates. Stamped as seen
-                        // now, so anything a real refresh never finds again
-                        // ages out after ListMaxAge like any other server,
-                        // rather than living for ever at 0.
-                        if (seeded) seen = now;
-
-                        var s = new BrowserServer
-                        {
-                            Name = f[0], Map = f[1], GameDir = f[2], Tags = f[3],
-                            Host = f[4],
-                            Port = int.Parse(f[5]),
-                            QueryPort = int.Parse(f[6]),
-                            Players = int.Parse(f[7]),
-                            MaxPlayers = int.Parse(f[8]),
-                            Ping = int.Parse(f[9]),
-                            AppId = uint.Parse(f[10]),
-                            Password = f[11] == "1",
-                            Secure = f[12] == "1"
-                        };
-                        if (s.Host.Length == 0 || s.Port <= 0) continue;
-                        result.Add(s);
-                        if (lastSeen != null) lastSeen[s.Endpoint] = seen;
-                    }
-                    catch { }
-                }
+                result = ParseList(lines, lastSeen, seeded);
             }
             catch { }
+            return result;
+        }
+
+        /// <summary>
+        /// Reads list lines in the 14-column format SaveList writes - from the
+        /// saved file, the built-in seed list, or a list downloaded from the
+        /// server-list relay (see Relay). Entries older than ListMaxAge are
+        /// dropped; <paramref name="seeded"/> stamps undated lines as seen now.
+        /// </summary>
+        public static List<BrowserServer> ParseList(IEnumerable<string> lines, IDictionary<string, long> lastSeen,
+                                                    bool seeded)
+        {
+            var result = new List<BrowserServer>();
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long cutoff = now - (long)ListMaxAge.TotalSeconds;
+            foreach (string line in lines)
+            {
+                if (line.Length == 0) continue;
+                string[] f = line.Split('\t');
+                if (f.Length < 14) continue;
+                try
+                {
+                    long seen = long.Parse(f[13]);
+                    if (seen > 0 && seen < cutoff) continue;
+
+                    // The built-in list carries no dates. Stamped as seen
+                    // now, so anything a real refresh never finds again
+                    // ages out after ListMaxAge like any other server,
+                    // rather than living for ever at 0.
+                    if (seeded) seen = now;
+
+                    var s = new BrowserServer
+                    {
+                        Name = f[0], Map = f[1], GameDir = f[2], Tags = f[3],
+                        Host = f[4],
+                        Port = int.Parse(f[5]),
+                        QueryPort = int.Parse(f[6]),
+                        Players = int.Parse(f[7]),
+                        MaxPlayers = int.Parse(f[8]),
+                        Ping = int.Parse(f[9]),
+                        AppId = uint.Parse(f[10]),
+                        Password = f[11] == "1",
+                        Secure = f[12] == "1"
+                    };
+                    if (s.Host.Length == 0 || s.Port <= 0) continue;
+                    result.Add(s);
+                    if (lastSeen != null) lastSeen[s.Endpoint] = seen;
+                }
+                catch { }
+            }
             return result;
         }
 

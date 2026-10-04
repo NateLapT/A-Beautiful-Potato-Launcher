@@ -16,6 +16,28 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Ready-made server lists.** The launcher downloads Community/Official
+  lists from serverlist.beautifulpotato.com - a service that rebuilds them
+  continuously from Steam's Web API - in a second or two, instead of asking
+  Steam itself (rationed to about one request a minute once a sweep is under
+  way; a full Project Zomboid index took half an hour). The same service
+  gathers every server's mods and description; the launcher parses those with
+  its own A2S parser (A2S.ParseRulesReply), so Has Mods filtering and game
+  modes work for the whole list at once. Anything going wrong - no answer, an
+  error, a list older than two hours - and it asks Steam exactly as before.
+  `relay.txt` in the data folder overrides the address, or turns it `off`.
+- **Default-named Zomboid servers hidden.** 17,679 of 35,102 were still called
+  "My PZ Server"; hidden unless searched by address or a favourite.
+
+### Changed
+
+- **The Steam session opens at startup**, so Steam shows the game being
+  browsed even when the list comes from the download or a recent copy.
+
 ## [0.8] - 2026-10-03
 
 ### Added

@@ -334,11 +334,20 @@ namespace ABeautifulPotatoLauncher
         private static byte[] RulesBlob(string host, int queryPort, int timeoutMs,
                                         out Dictionary<string, string> textRules)
         {
-            textRules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var payload = Header.Concat(new byte[] { (byte)'V', 0xFF, 0xFF, 0xFF, 0xFF }).ToArray();
             int ping;
             byte[] d = Exchange(host, queryPort, payload, timeoutMs, out ping);
-            if (d.Length < 7 || d[4] != (byte)'E') return null;
+            return BlobFromReply(d, out textRules);
+        }
+
+        /// <summary>
+        /// The packed blob and the text rules from a raw A2S_RULES reply - one
+        /// just received, or one the server-list relay gathered (see Relay).
+        /// </summary>
+        private static byte[] BlobFromReply(byte[] d, out Dictionary<string, string> textRules)
+        {
+            textRules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (d == null || d.Length < 7 || d[4] != (byte)'E') return null;
 
             int count = BitConverter.ToUInt16(d, 5);
             var tokens = new List<byte[]>();
@@ -894,23 +903,45 @@ namespace ABeautifulPotatoLauncher
             {
                 Dictionary<string, string> text;
                 byte[] blob = RulesBlob(host, queryPort, timeoutMs, out text);
-
-                // Project Zomboid has no packed blob: everything is plain text
-                // rules, including the mod list. See Zomboid.ParseRules.
-                if (Games.IsZomboid)
-                    return text == null || text.Count == 0 ? null : Zomboid.ParseRules(text);
-
-                if (blob == null) return null;
-
-                var parsed = ParseBlob(blob);
-                if (parsed == null) return null;      // never report failure as "no mods"
-                foreach (var kv in text) parsed.Text[kv.Key] = kv.Value;
-                return parsed;
+                return RulesFrom(blob, text);
             }
             catch
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Parses a raw A2S_RULES reply exactly as a live query would be - for
+        /// the replies the server-list relay collected. Null when unreadable.
+        /// </summary>
+        public static ServerRules ParseRulesReply(byte[] reply)
+        {
+            try
+            {
+                Dictionary<string, string> text;
+                byte[] blob = BlobFromReply(reply, out text);
+                return RulesFrom(blob, text);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static ServerRules RulesFrom(byte[] blob, Dictionary<string, string> text)
+        {
+            // Project Zomboid has no packed blob: everything is plain text
+            // rules, including the mod list. See Zomboid.ParseRules.
+            if (Games.IsZomboid)
+                return text == null || text.Count == 0 ? null : Zomboid.ParseRules(text);
+
+            if (blob == null) return null;
+
+            var parsed = ParseBlob(blob);
+            if (parsed == null) return null;      // never report failure as "no mods"
+            foreach (var kv in text) parsed.Text[kv.Key] = kv.Value;
+            return parsed;
         }
     }
 }

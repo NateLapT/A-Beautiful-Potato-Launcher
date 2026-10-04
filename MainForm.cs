@@ -736,6 +736,9 @@ namespace ABeautifulPotatoLauncher
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private int _hiddenFakes;
 
+        /// <summary>Zomboid servers left on the game's default name, hidden this render.</summary>
+        private int _hiddenDefaultNames;
+
         private int _sortColumn = -1;
         private bool _sortAscending = true;
 
@@ -973,6 +976,7 @@ namespace ABeautifulPotatoLauncher
             // must not hold up the launcher opening. Then every six hours, for
             // a launcher left open all day.
             Load += (s, e) => CheckForUpdates();     // hosted forms get Load, not Shown
+            Load += (s, e) => EnsureSteamSession();
             _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
             _updateTimer.Tick += (s, e) => CheckForUpdates();
             _updateTimer.Start();
@@ -3107,6 +3111,19 @@ namespace ABeautifulPotatoLauncher
         {
             ReadFilterUi();
 
+            // THE READY-MADE LIST FIRST. The Beautiful Potato server list is a
+            // complete copy of Steam's, rebuilt continuously - downloading it
+            // takes seconds and asks Steam nothing. Only the Internet list
+            // (Community and Official) comes from it; Recent, Friends and LAN
+            // are the player's own and always come from Steam. BUILD INDEX is
+            // an explicit request to ask Steam, so it does. See Relay.
+            if (KindFor(_tab) == ListKind.Internet && !_buildingIndex && !_relaySkipOnce)
+            {
+                StartRelayDownload();
+                return;
+            }
+            _relaySkipOnce = false;
+
             string steam = FindSteam();
             string gameDir = AnyGameDir(steam);
 
@@ -3191,6 +3208,150 @@ namespace ABeautifulPotatoLauncher
         }
 
         private int _pollTicks;
+
+        // ------------------------------------------- the ready-made list --
+
+        /// <summary>Set to go straight to Steam on the next query - the service just failed.</summary>
+        private bool _relaySkipOnce;
+        private bool _relayBusy;
+
+        /// <summary>The mods/descriptions file already applied, so it is not parsed twice.</summary>
+        private string _relayRulesTag;
+        private bool _relayRulesBusy;
+
+        /// <summary>
+        /// Opens the Steam session, so Steam shows the game being browsed.
+        ///
+        /// Asking Steam for the server list used to be what opened it. With the
+        /// list downloaded instead - or a recent one reused - nothing else
+        /// would until a mod was touched, and Steam stopped showing the game.
+        /// So it is opened as soon as the launcher is up, whatever the list does.
+        /// </summary>
+        private void EnsureSteamSession()
+        {
+            if (_steamReady) return;
+            string gameDir = AnyGameDir(FindSteam());
+            if (gameDir != null) _steamReady = SteamServerList.TryInit(gameDir, Log);
+        }
+
+        private void StartRelayDownload()
+        {
+            if (_relayBusy) return;
+            _relayBusy = true;
+
+            EnsureSteamSession();
+
+            string key = CacheKey;
+            var apps = new HashSet<uint>(AppsForQuery);
+            if (_cache.Count == 0) _status.Text = "Downloading the server list...";
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var seen = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                DateTime built;
+                string problem;
+                List<BrowserServer> list = null;
+                try { list = Relay.TryList(seen, out built, out problem); }
+                catch (Exception ex) { problem = ex.Message; built = DateTime.MinValue; }
+
+                try { BeginInvoke((Action)(() => OnRelayList(list, seen, built, problem, key, apps))); }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        private void OnRelayList(List<BrowserServer> list, Dictionary<string, long> seen, DateTime built,
+                                 string problem, string key, HashSet<uint> apps)
+        {
+            _relayBusy = false;
+            if (_closing) return;
+
+            if (list == null)
+            {
+                Log("Server list service unavailable (" + problem + ") - asking Steam directly.");
+                _relaySkipOnce = true;
+                if (key == CacheKey) StartCommunityQuery();
+                return;
+            }
+
+            // DayZ's list holds both builds; this tab may want only one.
+            var mine = list.Where(s => apps.Contains(s.AppId)).ToList();
+            foreach (var s in mine)
+            {
+                long t;
+                if (seen.TryGetValue(s.Endpoint, out t)) _lastSeen[s.Endpoint] = t;
+            }
+
+            _caches[key] = mine;
+            _cacheTimes[key] = DateTime.Now;
+            _indexByEndpoint.Clear();
+            ServerStore.SaveList(key, mine, _lastSeen);
+
+            Log("Server list downloaded: " + mine.Count.ToString("N0") + " servers, updated "
+                + built.ToLocalTime().ToString("HH:mm") + ". Steam was not asked.");
+
+            if (key == CacheKey && IsSteamTab(_tab))
+            {
+                _appendWhileLoading = false;
+                _lastShownCount = RenderFromCache();
+                UpdateStatus(null);
+            }
+
+            StartRelayRules();
+        }
+
+        /// <summary>
+        /// Every server's mods and description, from the same service, parsed
+        /// in the background with the launcher's own parser. Fills the Has Mods
+        /// filter and the game-mode matching for the whole list at once.
+        /// </summary>
+        private void StartRelayRules()
+        {
+            if (_relayRulesBusy) return;
+            _relayRulesBusy = true;
+            string applied = _relayRulesTag;
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                string tag = null, problem = null;
+                int read = 0;
+                try
+                {
+                    var replies = Relay.TryRules(applied, out tag, out problem);
+                    if (replies != null)
+                        foreach (var kv in replies)
+                        {
+                            if (_closing) return;
+                            var rules = A2S.ParseRulesReply(kv.Value);
+                            if (rules == null) continue;
+                            RememberServerMods(kv.Key, rules);
+                            read++;
+                        }
+                }
+                catch (Exception ex) { problem = ex.Message; }
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _relayRulesBusy = false;
+                        if (_closing) return;
+                        if (read == 0)
+                        {
+                            if (problem != null && problem != "unchanged")
+                                Log("Mods and descriptions not downloaded (" + problem + ") - read from each server as before.");
+                            return;
+                        }
+                        _relayRulesTag = tag;
+                        Log("Mods and descriptions downloaded for " + read.ToString("N0") + " servers.");
+                        SaveServerMods();
+                        if (IsSteamTab(_tab) && (_filters.RequiredMods.Count > 0 || _filters.GameModes.Count > 0))
+                            RenderFromCache();
+                        UpdateStatus(null);
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
 
         /// <summary>
         /// Ticks left to wait before asking again for a pass that came back
@@ -3877,6 +4038,11 @@ namespace ABeautifulPotatoLauncher
             RecomputeFarms(cache);
 
             _hiddenFakes = 0;
+            _hiddenDefaultNames = 0;
+
+            // Searching by address is how an owner finds their own server, so
+            // the default-name rule steps aside for it. See IsDefaultName.
+            bool addressSearch = !string.IsNullOrEmpty((_filters.Address ?? "").Trim());
             Flagged.Clear();
 
             var rows = new List<Row>(cache.Count);
@@ -3884,6 +4050,16 @@ namespace ABeautifulPotatoLauncher
             {
                 // Other games' servers in Zomboid's list - see IsZomboidServer.
                 if (Games.IsZomboid && !Zomboid.IsZomboidServer(srv)) continue;
+
+                // Never renamed from "My PZ Server" - half the list, and the name
+                // says nothing. Kept when it is a favourite or being searched for
+                // by address.
+                if (Games.IsZomboid && !addressSearch && Zomboid.IsDefaultName(srv.Name)
+                    && !_favourites.Contains(srv.Endpoint))
+                {
+                    _hiddenDefaultNames++;
+                    continue;
+                }
 
                 string reason = FakeReason(srv);
                 if (reason != null)
@@ -4810,6 +4986,8 @@ namespace ABeautifulPotatoLauncher
 
             text += servers + " servers";
             if (_hiddenFakes > 0) text += "  (" + _hiddenFakes + " fake hidden)";
+            if (_hiddenDefaultNames > 0)
+                text += "  (" + _hiddenDefaultNames.ToString("N0") + " named \"My PZ Server\" hidden - search an address to find one)";
 
             // A mod filter can only match servers whose mods have been read, so
             // say how far along that is. Without it the filter looks broken: it

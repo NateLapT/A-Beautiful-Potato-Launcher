@@ -94,6 +94,23 @@ namespace ABeautifulPotatoLauncher
             return dir.Length == 0 || dir.Equals("zomboid", StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// The game's own default server name, never changed by the owner.
+        ///
+        /// Measured 3 October 2026: 17,679 of 35,102 Zomboid servers - half the
+        /// list - are named exactly "My PZ Server", and a hosting panel adds
+        /// variants like "My PZ Server - powered by Sophie". The name tells a
+        /// player nothing, so these are hidden from the list; an owner still
+        /// finds their own by searching its address.
+        /// </summary>
+        public static bool IsDefaultName(string name)
+        {
+            string n = (name ?? "").Trim();
+            return n.Length == 0
+                || n.Equals("My PZ Server", StringComparison.OrdinalIgnoreCase)
+                || n.StartsWith("My PZ Server -", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool IsModded(string tags) { return HasTag(tags, "modded"); }
         public static bool IsPvp(string tags)    { return HasTag(tags, "pvp"); }
 
