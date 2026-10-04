@@ -836,7 +836,7 @@ namespace ABeautifulPotatoLauncher
             // existed - getting no answer. Clearing that lets the mod panel
             // pick up the real publication date instead of treating the miss
             // as final.
-            var main = Owner as MainForm;
+            var main = MainForm.Active;
             if (main != null) main.ForgetModTimeChecks();
 
             Rescan();

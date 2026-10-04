@@ -72,12 +72,19 @@ arbitrary until you know what they were measured against.
   `SteamAPI_Init` export, only `SteamAPI_InitFlat`; both are now tried. Only
   one `steam_api64.dll` is ever loaded per process, and the server browser
   binds through it rather than loading a second copy.
-- **Switching game no longer restarts the launcher.** Choosing the other
-  game closes the window and opens a fresh one for it in the same process; in
-  between, the Steam session is re-opened as the other game's app (the same
-  SwitchApp that moves DayZ between stable and Experimental), so Steam shows
-  the new game at once. The re-open now holds the Steam API lock, so a
-  background Workshop lookup can never be mid-call while it happens.
+- **Switching game is seamless.** The window never closes: it is now a small
+  host (`LauncherWindow`) that owns the size, position, title and icon, and
+  the launcher itself is embedded inside it. Choosing the other game builds
+  that game's launcher and swaps it in, with drawing held off so there is no
+  half-built frame; the window and its taskbar button stay put. In between,
+  the Steam session is re-opened as the other game's app (the same SwitchApp
+  that moves DayZ between stable and Experimental), so Steam shows the new
+  game at once. That re-open now holds the Steam API lock, so a background
+  Workshop lookup can never be mid-call while it happens.
+- **Other games' servers are left out of Zomboid's list.** Steam's list for
+  app 108600 also carries ~2,100 servers whose game folder is not `zomboid` -
+  711 V Rising, 228 CS:GO, 106 Left 4 Dead and others. Only `zomboid` servers
+  are shown. (Not fake-server screening - these are simply other games.)
 - **Project Zomboid logo** in the rail, recoloured light for the dark theme,
   with the same unofficial-launcher disclaimer as DayZ's.
 
