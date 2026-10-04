@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -1186,6 +1187,45 @@ namespace ABeautifulPotatoLauncher
         public static void SaveName(string name)
         {
             try { File.WriteAllText(SettingsFile, name ?? ""); }
+            catch { }
+        }
+
+        // ---- Project Zomboid: the account last chosen for each server ----
+
+        private static string ZomboidAccountChoiceFile { get { return Path.Combine(Dir, "accounts.tsv"); } }
+
+        /// <summary>
+        /// The account name the player last joined this server with, from the
+        /// launcher's join window. Names only - never a password.
+        /// </summary>
+        public static string LoadZomboidAccountChoice(string endpoint)
+        {
+            try
+            {
+                if (!File.Exists(ZomboidAccountChoiceFile)) return null;
+                foreach (string line in File.ReadAllLines(ZomboidAccountChoiceFile))
+                {
+                    int tab = line.IndexOf('\t');
+                    if (tab > 0 && string.Equals(line.Substring(0, tab), endpoint, StringComparison.OrdinalIgnoreCase))
+                        return line.Substring(tab + 1);
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static void SaveZomboidAccountChoice(string endpoint, string username)
+        {
+            if (string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(username)) return;
+            try
+            {
+                var lines = File.Exists(ZomboidAccountChoiceFile)
+                    ? File.ReadAllLines(ZomboidAccountChoiceFile)
+                          .Where(l => !l.StartsWith(endpoint + "\t", StringComparison.OrdinalIgnoreCase)).ToList()
+                    : new List<string>();
+                lines.Add(endpoint + "\t" + Clean(username));
+                File.WriteAllLines(ZomboidAccountChoiceFile, lines.ToArray());
+            }
             catch { }
         }
 
