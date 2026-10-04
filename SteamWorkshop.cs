@@ -827,7 +827,7 @@ namespace ABeautifulPotatoLauncher
             {
                 try { if (_shutdown != null) _shutdown(); }
                 catch { }
-                log("Steam API: closing the session as app " + _sessionApp + ".");
+                log("Steam: switching from " + AppName(_sessionApp) + " to " + AppName(appId) + ".");
             }
 
             _initialised = false;
@@ -843,9 +843,21 @@ namespace ABeautifulPotatoLauncher
             _sessionApp = appId;
 
             bool ok = TryInit(gameDir, log);
-            log(ok ? "Steam API: session re-opened as app " + appId + "."
-                   : "Steam API: could not re-open the session as app " + appId + ".");
+            log(ok ? "Steam now shows " + AppName(appId) + "."
+                   : "Steam could not be switched to " + AppName(appId) + " - mods may not update until the launcher is restarted.");
             return ok;
+        }
+
+        /// <summary>The game a Steam app id belongs to, for messages a player reads.</summary>
+        private static string AppName(uint appId)
+        {
+            switch (appId)
+            {
+                case DayZAppId: return "DayZ";
+                case 1024020: return "DayZ Experimental";
+                case Zomboid.AppId: return "Project Zomboid";
+                default: return "app " + appId;
+            }
         }
 
         /// <summary>
@@ -917,7 +929,7 @@ namespace ABeautifulPotatoLauncher
                     _ugc = accessor();
                     if (_ugc != IntPtr.Zero)
                     {
-                        log("Steam API: connected (ISteamUGC v" + v.ToString("000") + ").");
+                        log("Connected to Steam (workshop interface v" + v.ToString("000") + ").");
                         break;
                     }
                 }

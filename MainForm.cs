@@ -2491,9 +2491,8 @@ namespace ABeautifulPotatoLauncher
                 shown = RenderFromCache();
                 DateTime at;
                 _cacheTimes.TryGetValue(CacheKey, out at);
-                Log("Showing " + _cache.Count + " remembered " + TabName(_tab).ToLower()
-                    + " servers" + (at == DateTime.MinValue ? "" : " from " + at.ToString("HH:mm"))
-                    + " while Steam is asked for the current list.");
+                Log("Showing " + _cache.Count.ToString("N0") + " saved " + TabName(_tab).ToLower()
+                    + " servers" + (at == DateTime.MinValue ? "" : " from " + at.ToString("HH:mm")) + ".");
                 _status.Text = string.Format("{0} of {1} servers shown  (updating...)",
                                              shown, _cache.Count);
             }
@@ -3267,7 +3266,8 @@ namespace ABeautifulPotatoLauncher
 
             if (list == null)
             {
-                Log("Server list service unavailable (" + problem + ") - asking Steam directly.");
+                Log("Couldn't reach the Beautiful Potato server list (" + problem + ") - getting servers "
+                    + "from Steam instead, which can take a few minutes.");
                 _relaySkipOnce = true;
                 if (key == CacheKey) StartCommunityQuery();
                 return;
@@ -3286,8 +3286,8 @@ namespace ABeautifulPotatoLauncher
             _indexByEndpoint.Clear();
             ServerStore.SaveList(key, mine, _lastSeen);
 
-            Log("Server list downloaded: " + mine.Count.ToString("N0") + " servers, updated "
-                + built.ToLocalTime().ToString("HH:mm") + ". Steam was not asked.");
+            Log("Server list updated: " + mine.Count.ToString("N0") + " servers (as of "
+                + built.ToLocalTime().ToString("HH:mm") + ").");
 
             if (key == CacheKey && IsSteamTab(_tab))
             {
@@ -3338,11 +3338,12 @@ namespace ABeautifulPotatoLauncher
                         if (read == 0)
                         {
                             if (problem != null && problem != "unchanged")
-                                Log("Mods and descriptions not downloaded (" + problem + ") - read from each server as before.");
+                                Log("Couldn't load mod lists in bulk (" + problem + ") - they'll be read from "
+                                    + "each server as you browse.");
                             return;
                         }
                         _relayRulesTag = tag;
-                        Log("Mods and descriptions downloaded for " + read.ToString("N0") + " servers.");
+                        Log("Mod lists and descriptions loaded for " + read.ToString("N0") + " servers.");
                         SaveServerMods();
                         if (IsSteamTab(_tab) && (_filters.RequiredMods.Count > 0 || _filters.GameModes.Count > 0))
                             RenderFromCache();
