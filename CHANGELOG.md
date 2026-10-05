@@ -16,6 +16,16 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.8.2] - 2026-10-05
+
+### Fixed
+
+- **Favourite servers missing from Community.** A favourite, or an address
+  un-flagged in Settings, could be absent from the downloaded list and so
+  vanish from the Community tab (it still showed under Favorites). Such
+  servers now always stay in the list - from the previous copy, or rebuilt
+  from the favourite itself, with the live query filling in the rest.
+
 ## [0.8.1] - 2026-10-04
 
 ### Added

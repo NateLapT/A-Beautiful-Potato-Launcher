@@ -3275,6 +3275,37 @@ namespace ABeautifulPotatoLauncher
 
             // DayZ's list holds both builds; this tab may want only one.
             var mine = list.Where(s => apps.Contains(s.AppId)).ToList();
+
+            // NEVER LOSE A SERVER THE PLAYER CHOSE. The download leaves out
+            // entries the service judged fabricated or unnamed, and a favourite
+            // or an address the player un-flagged in Settings is exactly the
+            // kind of server they expect to see regardless. Anything like that
+            // missing from the download keeps the entry it had before.
+            var have = new HashSet<string>(mine.Select(s => s.Endpoint), StringComparer.OrdinalIgnoreCase);
+            List<BrowserServer> before;
+            if (_caches.TryGetValue(key, out before))
+                foreach (var s in before)
+                {
+                    if (have.Contains(s.Endpoint)) continue;
+                    bool chosen = _favourites.Contains(s.Endpoint)
+                               || _allowed.Contains(s.Host ?? "")
+                               || _allowed.Contains(BrowserFilters.Subnet24(s.Host));
+                    if (!chosen) continue;
+                    mine.Add(s);
+                    have.Add(s.Endpoint);
+                }
+
+            // A favourite in neither list - dropped by an earlier download -
+            // comes back from the favourite itself; the live query fills in
+            // its map, players and build within seconds.
+            foreach (string ep in _favourites)
+            {
+                if (have.Contains(ep)) continue;
+                var e = MakeEntryFromEndpoint(ep);
+                if (e == null) continue;
+                mine.Add(new BrowserServer { Name = e.Name, Host = e.Host, Port = e.Port });
+                have.Add(ep);
+            }
             foreach (var s in mine)
             {
                 long t;
