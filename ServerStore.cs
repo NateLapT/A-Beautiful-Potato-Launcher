@@ -1213,6 +1213,37 @@ namespace ABeautifulPotatoLauncher
             catch { }
         }
 
+        // ---- query ports learnt by asking ----
+
+        private static string QueryPortFile { get { return Path.Combine(Dir, "queryports.tsv"); } }
+
+        /// <summary>
+        /// Query ports found by trying, for servers known only by their game
+        /// address (favourites, direct connects). "host:port" to query port.
+        /// </summary>
+        public static Dictionary<string, int> LoadQueryPorts()
+        {
+            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(QueryPortFile)) return map;
+                foreach (string line in File.ReadAllLines(QueryPortFile))
+                {
+                    var f = line.Split('\t');
+                    int q;
+                    if (f.Length >= 2 && int.TryParse(f[1], out q) && q > 0 && q < 65536) map[f[0]] = q;
+                }
+            }
+            catch { }
+            return map;
+        }
+
+        public static void SaveQueryPorts(IDictionary<string, int> map)
+        {
+            try { File.WriteAllLines(QueryPortFile, map.Select(kv => kv.Key + "\t" + kv.Value).ToArray()); }
+            catch { }
+        }
+
         // ---- Project Zomboid: the account last chosen for each server ----
 
         private static string ZomboidAccountChoiceFile { get { return Path.Combine(Dir, "accounts.tsv"); } }

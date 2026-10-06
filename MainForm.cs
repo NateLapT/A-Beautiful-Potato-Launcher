@@ -4586,10 +4586,97 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>One A2S attempt, never throwing.</summary>
-        private static ServerInfo Ask(Row row)
+        private ServerInfo Ask(Row row)
         {
+            // A port found by trying earlier beats the game-port-plus-one guess,
+            // and a stale one from a list: it was only kept because it answered.
+            int learnt = LearntQueryPort(row.Endpoint);
+            if (learnt > 0) row.QueryPort = learnt;
             try { return A2S.GetInfoAt(row.Host, row.EffectiveQueryPort, 1200); }
             catch { return new ServerInfo { Error = "query failed" }; }
+        }
+
+        // ------------------------------------------- query ports, learnt --
+        //
+        // A server known only by its game address - a favourite, a direct
+        // connect - has its query port GUESSED as game port + 1. DayZ's default
+        // when steamQueryPort is not set is 27016, so a server left at the
+        // default answered nothing on the guessed port and sat in Favorites as
+        // OFFLINE while it was running (measured: a local test server on 2402,
+        // answering on 27016). Joining always worked - FindQueryPort tries the
+        // likely ports - and now the status check does the same, and remembers
+        // what worked so the next check goes straight to it.
+
+        private Dictionary<string, int> _queryPorts;
+        private readonly object _queryPortLock = new object();
+
+        /// <summary>This PC, or a private (LAN or VPN) address.</summary>
+        private static bool IsLocalNetwork(string host)
+        {
+            if (LocalServers.IsThisMachine(host)) return true;
+            System.Net.IPAddress ip;
+            if (!System.Net.IPAddress.TryParse(host ?? "", out ip)) return false;
+            byte[] b = ip.GetAddressBytes();
+            if (b.Length != 4) return false;
+            return b[0] == 10
+                || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
+                || (b[0] == 192 && b[1] == 168);
+        }
+
+        private int LearntQueryPort(string endpoint)
+        {
+            lock (_queryPortLock)
+            {
+                if (_queryPorts == null) _queryPorts = ServerStore.LoadQueryPorts();
+                int q;
+                return _queryPorts.TryGetValue(endpoint, out q) ? q : 0;
+            }
+        }
+
+        private void LearnQueryPort(string endpoint, int queryPort)
+        {
+            lock (_queryPortLock)
+            {
+                if (_queryPorts == null) _queryPorts = ServerStore.LoadQueryPorts();
+                int had;
+                if (_queryPorts.TryGetValue(endpoint, out had) && had == queryPort) return;
+                _queryPorts[endpoint] = queryPort;
+                ServerStore.SaveQueryPorts(_queryPorts);
+            }
+        }
+
+        /// <summary>
+        /// The likely query ports other than the guess, for a server that did
+        /// not answer on it: a local server's real one, then DayZ's defaults.
+        /// Only an answer for THIS game port counts - 27015/27016 are shared by
+        /// every server on a host that left them unset.
+        /// </summary>
+        private ServerInfo AskOtherQueryPorts(Row row)
+        {
+            var ports = new List<int>();
+            if (LocalServers.IsThisMachine(row.Host))
+            {
+                int local = LocalServers.QueryPortFor(row.Port);
+                if (local > 0) ports.Add(local);
+            }
+            foreach (int p in LocalServers.DefaultQueryPorts)
+                if (!ports.Contains(p)) ports.Add(p);
+            ports.Remove(row.EffectiveQueryPort);
+
+            foreach (int p in ports)
+            {
+                if (_closing) return null;
+                ServerInfo info;
+                try { info = A2S.GetInfoAt(row.Host, p, 800); }
+                catch { continue; }
+                if (info == null || !info.Online) continue;
+                if (info.GamePort > 0 && info.GamePort != row.Port) continue;
+
+                row.QueryPort = p;
+                LearnQueryPort(row.Endpoint, p);
+                return info;
+            }
+            return null;
         }
 
         private void PingLoop()
@@ -4643,6 +4730,20 @@ namespace ABeautifulPotatoLauncher
                 // costs nothing for the servers that answer first time.
                 ServerInfo info = Ask(row);
                 if (!info.Online && !_closing) info = Ask(row);
+
+                // No answer on the port we had - try the other likely ones when
+                // that port was only a guess, or when the server is on this PC
+                // or the local network, where a restarted test server often
+                // answers somewhere else than Steam's LAN list last said
+                // (measured: listed on 27015, answering on 27016). Internet
+                // servers with a reported port are not retried: thousands are
+                // simply offline. DayZ only - Zomboid answers on its game port.
+                if (!info.Online && !_closing && !Games.IsZomboid
+                    && (row.QueryPort <= 0 || IsLocalNetwork(row.Host)))
+                {
+                    var found = AskOtherQueryPorts(row);
+                    if (found != null) info = found;
+                }
 
                 // WHILE WE HAVE ITS ATTENTION, ASK WHAT IT RUNS.
                 //
@@ -8035,6 +8136,7 @@ private static bool IsRunning(string exeName)
                 if (info.GamePort > 0 && info.GamePort != srv.Port) continue;
 
                 srv.QueryPort = p;
+                LearnQueryPort(srv.Endpoint, p);      // the status check uses it from now on
                 return info;
             }
             last.Online = false;

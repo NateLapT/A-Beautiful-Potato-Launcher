@@ -262,6 +262,7 @@ namespace ABeautifulPotatoLauncher
             {
                 int ping;
                 byte[] d = Exchange(host, queryPort, InfoPayload, timeoutMs, out ping);
+                if (d == null) { info.Error = "no reply"; return info; }
                 if (d.Length < 6 || d[4] != (byte)'I') { info.Error = "unexpected reply"; return info; }
 
                 int i = 5;
