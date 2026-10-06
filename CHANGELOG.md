@@ -16,6 +16,22 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.8.3] - 2026-10-05
+
+### Fixed
+
+- **Local and LAN servers shown as offline while running.** A server known
+  only by its address (a favourite, a direct connect) had its query port
+  guessed as game port + 1, and DayZ's default when steamQueryPort is not set
+  is 27016 - so a local test server sat as Offline in Favorites. Steam's LAN
+  list could also carry a stale port. When a check gets no answer and the port
+  was a guess, or the server is on this PC or a private network, the likely
+  ports are tried (the local server's own, 27015, 27016); only an answer for
+  the right game port counts, and the port that worked is remembered. CONNECT
+  records the port it finds too.
+- A server that does not reply logs "no reply" instead of a null-reference
+  message.
+
 ## [0.8.2] - 2026-10-05
 
 ### Fixed
