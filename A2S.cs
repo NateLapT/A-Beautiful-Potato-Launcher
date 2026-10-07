@@ -604,11 +604,16 @@ namespace ABeautifulPotatoLauncher
             var result = new ServerRules();
             int at = start;
             int skipped = 0;
+            int textBuilt = 0;
 
             while (at < blob.Length)
             {
                 if (result.Mods.Count > 0 && TailFits(blob, at))
                 {
+                    // See MadeOfText: a list in which EVERY record was built out
+                    // of signature names is a reading of the signature list.
+                    if (textBuilt == result.Mods.Count) return null;
+
                     ReadTail(blob, at, result);
                     result.Complete = true;
                     return result;
@@ -618,6 +623,7 @@ namespace ABeautifulPotatoLauncher
                 if (TryRecord(blob, at, canonicalOnly, out id, out name, out next)
                     && !string.IsNullOrWhiteSpace(name) && LooksLikeModName(name))
                 {
+                    if (MadeOfText(blob, at, next, name, id)) textBuilt++;
                     result.Mods.Add(new Mod(name, id));
                     at = next;
                     continue;
@@ -627,7 +633,55 @@ namespace ABeautifulPotatoLauncher
                 if (++skipped > MaxResyncBytes) break;
             }
 
+            if (result.Mods.Count > 0 && textBuilt == result.Mods.Count) return null;
             return result.Mods.Count > 0 ? result : null;
+        }
+
+        /// <summary>
+        /// Is this "record" really a run of signature names that happens to
+        /// have the record's shape?
+        ///
+        /// WHY THIS IS NEEDED
+        ///   The signature list is length-prefixed names, and three of them in
+        ///   a row can line up exactly like a record. Measured on a LAN server
+        ///   loading 3 mods and 107 signing keys: the names "aicsm" and "AJ45"
+        ///   read as hash "icsm", id length 4, id "AJ45" (= 892619329), then
+        ///   "Akol.MountsAndSights" as the name. A walk starting there found
+        ///   four such records and ALSO ended exactly on the last byte - so it
+        ///   was a complete list, and with 4 mods it beat the real list of 3.
+        ///   The player was shown four mods the server does not run.
+        ///
+        /// THE TEST
+        ///   A real record's hash is four random bytes and its id is a binary
+        ///   number; the chance that all eight are printable characters is
+        ///   about one in 250,000. A record cut out of the signature names is
+        ///   ALL printable, every time. Local mods (id 0) are never text-built.
+        ///   A list is rejected only when every record in it is text-built, so
+        ///   one unlucky real record can never cost a server its list.
+        /// </summary>
+        private static bool MadeOfText(byte[] b, int at, int next, string name, ulong id)
+        {
+            if (id == 0) return false;
+
+            int nameBytes = Encoding.UTF8.GetByteCount(name);
+            int lenAt = next - nameBytes - 1;            // the name's length byte
+
+            // Walk back to the id-length byte: the id is that many bytes long
+            // (fakes cut from names claim 1 to 4), and the hash is the four
+            // bytes before the length byte.
+            for (int idLen = 1; idLen <= 8; idLen++)
+            {
+                int markerAt = lenAt - idLen - 1;
+                int hashAt = markerAt - 4;
+                if (hashAt < 0 || hashAt < at) break;
+                if (b[markerAt] != idLen) continue;
+
+                bool text = true;
+                for (int k = hashAt; k < markerAt && text; k++) text = b[k] >= 32 && b[k] <= 126;
+                for (int k = markerAt + 1; k < lenAt && text; k++) text = b[k] >= 32 && b[k] <= 126;
+                if (text) return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -856,7 +910,11 @@ namespace ABeautifulPotatoLauncher
                 for (int k = 0; k < count && i < b.Length; k++)
                 {
                     int len = b[i]; i++;
-                    if (len <= 0 || i + len > b.Length) return;
+                    // An empty entry is real - a LAN server sent one between
+                    // "NotABananaV3" and "NRPT2" - and stopping at it lost the
+                    // 37 signatures after it. Skip it, keep reading.
+                    if (len == 0) continue;
+                    if (i + len > b.Length) return;
                     result.Signatures.Add(Encoding.UTF8.GetString(b, i, len));
                     i += len;
                 }

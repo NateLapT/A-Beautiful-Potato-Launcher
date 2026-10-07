@@ -16,6 +16,28 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.8.4] - 2026-10-07
+
+### Fixed
+
+- **A server could be shown with mods it does not run.** The signature list at
+  the end of a server's reply is a run of length-prefixed key names, and three
+  names in a row can line up exactly like a mod record - "aicsm", "AJ45",
+  "Akol.MountsAndSights" read as a hash, a workshop id of 892619329 and a mod
+  name. A reading built that way can also end exactly on the last byte, and
+  with more records than the real list it won. Measured on a LAN server
+  running 3 mods with 107 signing keys: it was shown 4 mods made of key names
+  instead of "Zombie Bikes (testing)", "@COT_dzpmtest" and "Community
+  Framework". A real record's hash and id are binary - all eight bytes
+  printable is about a 1 in 250,000 chance - while a record cut out of key
+  names is printable every time, so a reading in which EVERY record is text is
+  now rejected. Checked on 189 live servers: 188 read exactly as before, and
+  the one that changed had the same fault ("DannyDoom", "Wardog.v3" listed as
+  mods instead of Dogtags, BodyBags, ATPL Pack and Community Framework).
+- **Signing keys after an empty entry were lost.** A server can send a
+  zero-length key name; reading stopped there instead of skipping it, losing
+  37 of 107 keys on the LAN server above.
+
 ## [0.8.3] - 2026-10-05
 
 ### Fixed
