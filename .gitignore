@@ -17,6 +17,9 @@ source/
 # ...and the Project Zomboid logo, embedded in the rail the way DayZ's is.
 !assets/ZomboidLogo.png
 
+# Design mockups and concept images - local only.
+concepts/
+
 # Build output
 bin/
 obj/

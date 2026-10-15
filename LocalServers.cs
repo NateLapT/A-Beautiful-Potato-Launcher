@@ -85,6 +85,87 @@ namespace ABeautifulPotatoLauncher
             catch { return 0; }
         }
 
+        /// <summary>Is a DayZ server process running on this PC at all?</summary>
+        public static bool AnyRunning()
+        {
+            foreach (string exe in ServerExes)
+            {
+                try { if (Process.GetProcessesByName(exe).Length > 0) return true; }
+                catch { }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The last resort, and only with the player's permission: every UDP
+        /// port on 127.0.0.1 is sent one A2S_INFO, from ONE socket, and whatever
+        /// answers like a Steam query port is then asked properly - only an
+        /// answer naming this game port counts. A few seconds for all 64,511
+        /// ports above 1024, because a closed port on loopback is refused at
+        /// once. Returns the query port, or 0.
+        /// </summary>
+        public static int ScanForQueryPort(int gamePort)
+        {
+            var answered = new List<int>();
+            using (var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+            {
+                // Windows reports a refused port by failing the NEXT receive with
+                // "connection reset"; switch that off, or one closed port ends
+                // the scan. SIO_UDP_CONNRESET = 0x9800000C.
+                try { sock.IOControl(unchecked((int)0x9800000C), new byte[] { 0, 0, 0, 0 }, null); }
+                catch { }
+                sock.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                sock.ReceiveTimeout = 400;
+
+                byte[] info = { 0xFF, 0xFF, 0xFF, 0xFF, 0x54, (byte)'S', (byte)'o', (byte)'u', (byte)'r', (byte)'c',
+                                (byte)'e', (byte)' ', (byte)'E', (byte)'n', (byte)'g', (byte)'i', (byte)'n', (byte)'e',
+                                (byte)' ', (byte)'Q', (byte)'u', (byte)'e', (byte)'r', (byte)'y', 0 };
+                int self = ((IPEndPoint)sock.LocalEndPoint).Port;
+
+                var buf = new byte[1400];
+                Action drain = () =>
+                {
+                    while (sock.Available > 0)
+                    {
+                        EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                        int n;
+                        try { n = sock.ReceiveFrom(buf, ref from); }
+                        catch { continue; }
+                        if (n >= 5 && buf[0] == 0xFF && buf[1] == 0xFF && buf[2] == 0xFF && buf[3] == 0xFF)
+                        {
+                            int p = ((IPEndPoint)from).Port;
+                            if (!answered.Contains(p)) answered.Add(p);
+                        }
+                    }
+                };
+
+                for (int port = 1025; port <= 65535; port++)
+                {
+                    if (port == self) continue;
+                    try { sock.SendTo(info, new IPEndPoint(IPAddress.Loopback, port)); }
+                    catch { }
+                    if ((port & 255) == 0) drain();
+                }
+
+                // Stragglers.
+                var until = DateTime.UtcNow.AddMilliseconds(800);
+                while (DateTime.UtcNow < until)
+                {
+                    drain();
+                    System.Threading.Thread.Sleep(50);
+                }
+            }
+
+            // Confirm with a real query: the right game port, not another server.
+            foreach (int p in answered)
+            {
+                var i = A2S.GetInfoAt("127.0.0.1", p, 1000);
+                if (i != null && i.Online && (i.GamePort == gamePort || (i.GamePort == 0 && answered.Count == 1)))
+                    return p;
+            }
+            return 0;
+        }
+
         /// <summary>Is this address one of this machine's own?</summary>
         public static bool IsThisMachine(string host)
         {

@@ -6,6 +6,12 @@
 //  deliberately different from the usual toggle: a toggle left switched on
 //  leaves the password sitting on screen for as long as the dialog is open,
 //  which is exactly what hiding it was meant to prevent.
+//
+//  REMEMBERED PASSWORDS. The last password used for a server is filled in
+//  next time (encrypted on disk - see ServerStore.LoadPassword). SHOW does
+//  nothing for a filled-in one: it reveals only what the player types here,
+//  so a saved password can never be read off the screen by whoever is
+//  sitting at the PC. Unticking "Remember" forgets it.
 // ---------------------------------------------------------------------------
 
 using System;
@@ -21,10 +27,15 @@ namespace ABeautifulPotatoLauncher
         private static readonly Color Dim = Color.FromArgb(150, 150, 158);
 
         private readonly TextBox _box;
+        private readonly CheckBox _remember;
+
+        /// <summary>True while the box still holds the remembered password, untouched.</summary>
+        private bool _filledIn;
 
         public string Password { get { return _box.Text; } }
+        public bool Remember { get { return _remember.Checked; } }
 
-        private PasswordDialog(string serverName)
+        private PasswordDialog(string serverName, string saved)
         {
             Text = "Password required";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -32,7 +43,7 @@ namespace ABeautifulPotatoLauncher
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(430, 150);
+            ClientSize = new Size(430, 172);
             BackColor = Ink;
             ForeColor = Color.Gainsboro;
             Font = new Font("Segoe UI", 9f);
@@ -46,9 +57,11 @@ namespace ABeautifulPotatoLauncher
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold)
             });
 
+            bool haveSaved = !string.IsNullOrEmpty(saved);
             Controls.Add(new Label
             {
-                Text = "This server is password protected.",
+                Text = haveSaved ? "This server is password protected. Your last password is filled in."
+                                 : "This server is password protected.",
                 Bounds = new Rectangle(14, 34, 400, 18),
                 ForeColor = Dim
             });
@@ -61,7 +74,26 @@ namespace ABeautifulPotatoLauncher
                 BorderStyle = BorderStyle.FixedSingle,
                 UseSystemPasswordChar = true
             };
+            if (haveSaved)
+            {
+                _box.Text = saved;
+                _filledIn = true;
+            }
+            // Any edit makes it the player's own typing again, which SHOW may reveal.
+            _box.TextChanged += (s, e) => _filledIn = false;
             Controls.Add(_box);
+
+            _remember = new CheckBox
+            {
+                Text = "Remember password",
+                Checked = true,
+                Bounds = new Rectangle(14, 92, 300, 22),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.Gainsboro
+            };
+            new ToolTip().SetToolTip(_remember,
+                "Saved encrypted for your Windows account only, and filled in next time. Untick to forget it.");
+            Controls.Add(_remember);
 
             var show = new Button
             {
@@ -76,16 +108,17 @@ namespace ABeautifulPotatoLauncher
 
             // Held, not toggled - and every way of letting go is covered, including
             // the pointer sliding off the button while still down.
-            show.MouseDown += (s, e) => _box.UseSystemPasswordChar = false;
+            show.MouseDown += (s, e) => { if (!_filledIn) _box.UseSystemPasswordChar = false; };
             show.MouseUp += (s, e) => _box.UseSystemPasswordChar = true;
             show.MouseLeave += (s, e) => _box.UseSystemPasswordChar = true;
             show.LostFocus += (s, e) => _box.UseSystemPasswordChar = true;
+            if (haveSaved) new ToolTip().SetToolTip(show, "A remembered password stays hidden. Type a new one to see it.");
             Controls.Add(show);
 
             var ok = new Button
             {
                 Text = "Connect",
-                Bounds = new Rectangle(228, 100, 92, 30),
+                Bounds = new Rectangle(228, 126, 92, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(60, 95, 60),
                 ForeColor = Color.White,
@@ -97,7 +130,7 @@ namespace ABeautifulPotatoLauncher
             var cancel = new Button
             {
                 Text = "Cancel",
-                Bounds = new Rectangle(328, 100, 86, 30),
+                Bounds = new Rectangle(328, 126, 86, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(70, 55, 55),
                 ForeColor = Color.White,
@@ -118,13 +151,17 @@ namespace ABeautifulPotatoLauncher
         /// box counts as cancelling: a blank password would just be refused by
         /// the server and look like a failure with no cause.
         /// </summary>
-        public static string Ask(IWin32Window owner, string serverName)
+        public static string Ask(IWin32Window owner, string serverName, string endpoint)
         {
-            using (var dlg = new PasswordDialog(serverName))
+            using (var dlg = new PasswordDialog(serverName, ServerStore.LoadPassword(endpoint)))
             {
                 if (dlg.ShowDialog(owner) != DialogResult.OK) return null;
                 string v = dlg.Password;
-                return string.IsNullOrEmpty(v) ? null : v;
+                if (string.IsNullOrEmpty(v)) return null;
+
+                // Remembered, or forgotten, only once the player has said Connect.
+                ServerStore.SavePassword(endpoint, dlg.Remember ? v : null);
+                return v;
             }
         }
     }

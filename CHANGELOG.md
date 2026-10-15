@@ -16,6 +16,70 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.0] - 2026-10-15
+
+### Added
+
+- **Launch options.** A LAUNCH OPTIONS button on the filter panel opens a
+  window for extra game arguments added to every DayZ start: CPU cores
+  (-cpuCount), extra threads (-exThreads), maximum memory (-maxMem), switches
+  for -noPause, -noSplash, -skipIntro and -window, and a box for anything
+  else. It shows exactly what will be added. The launcher's own arguments
+  (-connect, -port, -mod, -name, -password and the rest) cannot be overridden
+  from here - typing one is flagged and ignored, because a second copy would
+  break the join. Saved per game; empty means the game starts as before.
+- **Server passwords are remembered.** The last password used for a server is
+  filled in next time, shown only as dots. It is stored encrypted with
+  Windows' own per-user encryption, so the file is useless on another PC or to
+  another Windows account. SHOW never reveals a remembered password - only
+  what is typed into the box - so nobody at the PC can read one off the
+  screen. Untick "Remember password" to forget it.
+- **Finding a local server's query port.** Joining a server on this PC now
+  tries the port that answered last time first. If none of the usual ports
+  answer, the launcher offers - once per join - to scan this PC's ports for
+  it, which takes about two seconds. If it still cannot be found, it says so:
+  "Local server query port not found, Please configure in ServerDZ", with the
+  steamQueryPort line to add. If no DayZ server is running at all, it says
+  that instead.
+- **Game version check before joining.** The server's DayZ version is compared
+  with the installed game's before anything starts. When they differ, the
+  launcher says which is newer and what to do - let Steam update the game, or
+  wait for the server - and asks before starting anyway, instead of the game
+  loading for a minute only to be refused with a version mismatch.
+- **F5 refreshes the server list**, like the REFRESH button.
+- **Pick which copy of a mod is loaded, from the mod list.** A mod with other
+  versions on this PC shows a ▾ after its name; click the name and a
+  drop-down lists every copy of that mod on this PC - its normal copy, and your local builds - with a tick on the one that
+  will be loaded, plus Browse and "Don't load this mod". Copies are found by
+  the PBOs inside them (the prefix in each PBO's header), so @MotoX_261007
+  is offered for MotoX and nothing else is.
+
+### Changed
+
+- **Choosing a different copy of a mod now shows.** The choice always reached
+  the game, but the mod list kept showing the Workshop copy's state, so it
+  looked as if it had not worked. The row now says "your copy: @Folder" (or
+  "OFF - not loaded"), the Info window shows where it loads from, and its
+  Explorer button opens that folder. The Edit window lists only copies of
+  the same mod - it used to add every local mod, and guessed relatives from
+  the start of the name.
+
+### Fixed
+
+- **The launcher could crash, mostly as it closed.** It never shut its Steam
+  connection down, so Steam's own threads were still running while Windows
+  ended the process, and Steam's crash handler aborted it - Windows had logged
+  it dozens of times. Steam is now shut down properly once the last window
+  closes. Steam's in-game overlay, which Steam was loading into the launcher,
+  is also asked not to draw there.
+- **A server's mods could stay on "Querying server rules..." for ever.** The
+  mod query asked game port + 1 even when the status check had already found
+  the server's real query port (a server left at DayZ's default answers on
+  27015 or 27016), and a query that got no answer was simply started again
+  on the next redraw, endlessly. It now uses the same port the status check
+  found, falls back the same way, and when a server really does not answer it
+  says so and waits 30 seconds (or a refresh) before asking again.
+
 ## [0.8.4] - 2026-10-07
 
 ### Fixed

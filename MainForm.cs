@@ -180,6 +180,12 @@ namespace ABeautifulPotatoLauncher
             // One window for the whole run. Choosing the other game swaps the
             // launcher inside it - see LauncherWindow.
             Application.Run(new LauncherWindow());
+
+            // Every window is closed and every launcher has saved and stopped
+            // (LauncherWindow -> MainForm.Shutdown). Only now let go of Steam -
+            // see SteamWorkshop.Shutdown for the crash this ends.
+            SteamWorkshop.Shutdown();
+            LogLine("Launcher closed.");
         }
 
         /// <summary>A line in the log file, for the moments no window is open to show it.</summary>
@@ -790,6 +796,11 @@ namespace ABeautifulPotatoLauncher
             new Dictionary<string, ServerRules>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _modLoading =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>When each server last failed to answer a mod query. See ShowMods.</summary>
+        private readonly Dictionary<string, DateTime> _modFailedAt =
+            new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan ModRetryAfter = TimeSpan.FromSeconds(30);
         private readonly Dictionary<string, ServerInfo> _live =
             new Dictionary<string, ServerInfo>(StringComparer.OrdinalIgnoreCase);
 
@@ -1045,6 +1056,10 @@ namespace ABeautifulPotatoLauncher
             {
                 _modIndexStart.Stop();
                 BeginBackgroundModIndex();
+
+                // Reads local mods' PBO headers now, so the first drop-down
+                // under a mod's name opens at once. See ModCopies.
+                if (!Games.IsZomboid) ModCopies.WarmUp(FindSteam());
             };
             _modIndexStart.Start();
 
@@ -1567,8 +1582,12 @@ namespace ABeautifulPotatoLauncher
             // Info, Repair, Sub and Remove are all cells that do something when
             // clicked, so the pointer says so. A local mod's Steam actions are
             // drawn blank and HandOverColumns leaves those alone.
-            UiCursors.HandOverColumns(_mods, null,
-                                      MColInfo, MColRepair, MColSub, MColRemove);
+            // The name is clickable too (it drops down the copies on this PC) -
+            // DayZ only; see OnModClick.
+            if (Games.IsZomboid)
+                UiCursors.HandOverColumns(_mods, null, MColInfo, MColRepair, MColSub, MColRemove);
+            else
+                UiCursors.HandOverColumns(_mods, null, MColName, MColInfo, MColRepair, MColSub, MColRemove);
             detailSplit.Panel1.Controls.Add(_mods);        // Fill, so it docks innermost
 
             // Search within THIS server's mod list. A busy server asks for
@@ -1628,6 +1647,14 @@ namespace ABeautifulPotatoLauncher
             KeyDown += (s, e) =>
             {
                 if (e.Control && e.KeyCode == Keys.F) { _search.Focus(); _search.SelectAll(); e.Handled = true; }
+
+                // F5 is REFRESH, as everywhere else - and exactly the button, so
+                // it does nothing the button would not (e.g. while disabled).
+                if (e.KeyCode == Keys.F5 && !e.Control && !e.Alt && !e.Shift)
+                {
+                    if (_refresh != null && _refresh.Enabled && _refresh.Visible) _refresh.PerformClick();
+                    e.Handled = true;
+                }
             };
         }
 
@@ -1787,6 +1814,7 @@ namespace ABeautifulPotatoLauncher
 
             _refresh = MakeBtn("REFRESH", new Rectangle(20, ry, 170, 30), Panel2);
             _refresh.Click += (s, e) => RefreshCurrent(true);
+            new ToolTip().SetToolTip(_refresh, "Refresh the server list (F5)");
             rail.Controls.Add(_refresh);
             ry += 34;
 
@@ -2082,6 +2110,22 @@ namespace ABeautifulPotatoLauncher
             var clear = MakeBtn("CLEAR", new Rectangle(rx + 240, 133, 140, 25), Panel2);
             clear.Click += (s, e) => { ClearFilterUi(); ApplyFilters(); };
             p.Controls.Add(clear);
+
+            // Not a filter, but this is the panel of "how I want to play"
+            // settings, and it keeps the main window free of another button.
+            // DayZ only: Project Zomboid starts through its own path.
+            var launchOpts = MakeBtn("LAUNCH OPTIONS", new Rectangle(rx + 240, 164, 140, 25), Panel2);
+            launchOpts.Visible = !Games.IsZomboid;
+            launchOpts.Click += (s, e) =>
+            {
+                if (!LaunchOptions.Show(this)) return;
+                var extra = LaunchOptions.Arguments();
+                Log(extra.Count == 0 ? "Launch options cleared."
+                                     : "Launch options saved: " + string.Join(" ", extra));
+            };
+            new ToolTip { AutoPopDelay = 15000 }.SetToolTip(launchOpts,
+                "Extra arguments added every time the game starts - CPU cores, threads, memory and more.");
+            p.Controls.Add(launchOpts);
 
             // The footnote goes below everything else, wherever that turns out
             // to be, rather than at a measured-once position.
@@ -6288,16 +6332,30 @@ namespace ABeautifulPotatoLauncher
 
             ServerRules rules;
             bool loading;
+            DateTime failedAt;
             lock (_modLock)
             {
-                if (force) _modCache.Remove(row.Endpoint);
+                if (force) { _modCache.Remove(row.Endpoint); _modFailedAt.Remove(row.Endpoint); }
                 _modCache.TryGetValue(row.Endpoint, out rules);
                 loading = _modLoading.Contains(row.Endpoint);
+                if (!_modFailedAt.TryGetValue(row.Endpoint, out failedAt)) failedAt = DateTime.MinValue;
             }
 
             if (rules != null)
             {
                 PopulateMods(row, rules);
+                return;
+            }
+
+            // Asked recently and got no answer: say so, rather than asking again
+            // on every redraw. Refreshing the server (or waiting) asks again.
+            if (!loading && DateTime.UtcNow - failedAt < ModRetryAfter)
+            {
+                _modsShownFor = null;
+                _modsHeader.Text = "No answer to the mod query from " + row.Endpoint
+                                 + "  -  refresh the server to try again";
+                _mods.Items.Clear();
+                _desc.Clear();
                 return;
             }
 
@@ -6318,7 +6376,15 @@ namespace ABeautifulPotatoLauncher
             ServerRules rules = null;
             try
             {
+                // The same port the status check found, not the game-port-plus-
+                // one guess: a server left at DayZ's default answers on 27015 or
+                // 27016, and asking the guess got nothing, every time.
+                int learnt = LearntQueryPort(row.Endpoint);
+                if (learnt > 0) row.QueryPort = learnt;
                 rules = A2S.GetRulesAt(row.Host, row.EffectiveQueryPort, 1800);
+
+                if (rules == null && AskOtherQueryPorts(row) != null)
+                    rules = A2S.GetRulesAt(row.Host, row.EffectiveQueryPort, 1800);
             }
             catch { }
 
@@ -6328,7 +6394,14 @@ namespace ABeautifulPotatoLauncher
                 if (rules != null)
                 {
                     _modCache[row.Endpoint] = rules;
+                    _modFailedAt.Remove(row.Endpoint);
                     RememberServerMods(row.Endpoint, rules);
+                }
+                else
+                {
+                    // Remembered, so the redraw below shows the failure instead
+                    // of starting the same query again - which it did, forever.
+                    _modFailedAt[row.Endpoint] = DateTime.UtcNow;
                 }
             }
 
@@ -6401,6 +6474,9 @@ namespace ABeautifulPotatoLauncher
                 }
 
                 FillModFindChoices(rules);
+
+                // Which of these have other versions on this PC - see ModNameText.
+                FindOtherCopies(row.Endpoint, rules.Mods);
 
                 // ASK STEAM WHEN THESE WERE LAST PUBLISHED.
                 //
@@ -6771,6 +6847,9 @@ namespace ABeautifulPotatoLauncher
         ///   a mod is present, broken or behind the workshop is the entire point
         ///   of the panel.
         /// </summary>
+        /// <summary>A mod loaded from a copy the player picked, not its normal one.</summary>
+        private static readonly Color ChosenCopy = Color.FromArgb(130, 190, 230);
+
         private ListViewItem MakeModRow(Mod m, string steam)
         {
             if (Games.IsZomboid) return MakeZomboidModRow(m, steam);
@@ -6787,13 +6866,15 @@ namespace ABeautifulPotatoLauncher
                 bool havePicked = !string.IsNullOrEmpty(picked) && Directory.Exists(picked);
 
                 var found = havePicked ? null : ModIndex.FindLocalByName(m.BareName, steam);
+                bool localOff = chosen != null && !chosen.Enabled;
                 var localRow = new ListViewItem(new[]
                 {
-                    m.Name,
+                    ModNameText(m),
                     "Local",
-                    havePicked ? "installed (you found it)"
-                               : found != null ? "installed (local)"
-                                               : "NOT FOUND - click to say where it is",
+                    localOff ? "OFF - not loaded"
+                             : havePicked ? "your copy: " + Path.GetFileName(picked.TrimEnd('\\'))
+                             : found != null ? "installed (local)"
+                                             : "NOT FOUND - click to say where it is",
                     // Blank, not greyed-out words: Steam has no item here to
                     // repair, subscribe to or remove, so offering the words at
                     // all only invites a click that can do nothing.
@@ -6811,7 +6892,9 @@ namespace ABeautifulPotatoLauncher
                               + "under Settings - Additional mods folder."
                 };
 
-                Color lc = (found != null || havePicked) ? Good : Color.FromArgb(230, 130, 130);
+                Color lc = localOff ? Color.FromArgb(150, 150, 158)
+                         : havePicked ? ChosenCopy
+                         : found != null ? Good : Color.FromArgb(230, 130, 130);
                 localRow.SubItems[MColName].ForeColor = lc;
                 localRow.SubItems[MColId].ForeColor = Color.FromArgb(150, 150, 158);
                 localRow.SubItems[MColStatus].ForeColor = lc;
@@ -6838,14 +6921,35 @@ namespace ABeautifulPotatoLauncher
             }
             else { status = "installed"; colour = Good; }
 
+            // THE PLAYER'S CHOICE WINS, AND THE ROW SAYS SO. A copy picked from
+            // the mod's drop-down (or the Edit window) is what joining loads,
+            // so showing the workshop copy's state instead made the choice look
+            // as if it had not worked.
+            var choice = ModOverrides.For(m);
+            string tip = "Click the name to pick which copy is loaded. Repair re-downloads, Sub subscribes, "
+                       + "Remove unsubscribes, Info shows details";
+            if (choice != null && !choice.Enabled)
+            {
+                status = "OFF - not loaded";
+                colour = Color.FromArgb(150, 150, 158);
+            }
+            else if (choice != null && !string.IsNullOrEmpty(choice.Folder))
+            {
+                bool there = Directory.Exists(choice.Folder);
+                status = there ? "your copy: " + Path.GetFileName(choice.Folder.TrimEnd('\\'))
+                               : "your copy is missing - click the name";
+                colour = there ? ChosenCopy : Color.FromArgb(230, 130, 130);
+                tip = (there ? "Loaded from " : "Your chosen folder no longer exists: ") + choice.Folder + "\r\n" + tip;
+            }
+
             var it = new ListViewItem(new[]
             {
-                m.Name, m.WorkshopId.ToString(), status, "Repair", "Sub", "Remove", "Info"
+                ModNameText(m), m.WorkshopId.ToString(), status, "Repair", "Sub", "Remove", "Info"
             })
             {
                 Tag = m,
                 UseItemStyleForSubItems = false,
-                ToolTipText = "Repair re-downloads, Sub subscribes, Remove unsubscribes, Info shows details"
+                ToolTipText = tip
             };
 
             it.SubItems[MColName].ForeColor = colour;
@@ -7111,6 +7215,143 @@ namespace ABeautifulPotatoLauncher
             return folder;
         }
 
+        /// <summary>
+        /// The drop-down under a mod's name: every copy of it on this PC (the
+        /// normal one, and local folders holding the same PBOs), with a tick on
+        /// the one that will be loaded, plus Browse, and leaving it off.
+        /// </summary>
+        private void ShowModCopiesMenu(Mod mod, Rectangle cell)
+        {
+            string steam = FindSteam();
+            List<ModCopy> copies;
+            Cursor = Cursors.WaitCursor;
+            try { copies = ModCopies.For(mod, steam); }
+            finally { Cursor = Cursors.Default; }
+
+            var ov = ModOverrides.For(mod);
+            bool off = ov != null && !ov.Enabled;
+
+            var menu = new ContextMenuStrip
+            {
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro,
+                ShowImageMargin = false,
+                ShowCheckMargin = true,
+                Renderer = new ToolStripProfessionalRenderer(new DarkMenu())
+            };
+            Func<string, bool, bool, EventHandler, ToolStripMenuItem> add = (text, check, enabled, handler) =>
+            {
+                var item = new ToolStripMenuItem(text)
+                {
+                    ForeColor = enabled ? Color.Gainsboro : Color.FromArgb(110, 110, 118),
+                    BackColor = Panel2,
+                    Checked = check,
+                    Enabled = enabled
+                };
+                if (handler != null) item.Click += handler;
+                menu.Items.Add(item);
+                return item;
+            };
+
+            add("Load " + mod.Name + " from:", false, false, null);
+            foreach (var c in copies)
+            {
+                var copy = c;
+                bool exists = !string.IsNullOrEmpty(copy.Folder) && Directory.Exists(copy.Folder);
+                add(copy.Label + "   " + copy.Folder, copy.InUse && !off, exists, (s, e) =>
+                    ChooseModCopy(mod, new ModOverride { Enabled = true, Folder = copy.IsDefault ? "" : copy.Folder }));
+            }
+            if (copies.Count == 1)
+                add("No local copy shares this mod's PBOs", false, false, null);
+
+            menu.Items.Add(new ToolStripSeparator());
+            add("Browse for a folder...", false, true, (s, e) =>
+            {
+                using (var fb = new FolderBrowserDialog { Description = "Pick the folder to load " + mod.Name + " from (the one holding addons)" })
+                {
+                    if (fb.ShowDialog(Host) == DialogResult.OK)
+                        ChooseModCopy(mod, new ModOverride { Enabled = true, Folder = fb.SelectedPath });
+                }
+            });
+            add(off ? "Load this mod again" : "Don't load this mod", off, true, (s, e) =>
+            {
+                if (!off && MessageBox.Show(Host, "The server requires " + mod.Name + ". Leaving it off will usually get you kicked.\r\n\r\nLeave it off anyway?",
+                                            "Leave a mod off", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                                            MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+                var cur = ModOverrides.For(mod);
+                ChooseModCopy(mod, new ModOverride { Enabled = off, Folder = cur == null ? "" : cur.Folder });
+            });
+
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.Show(_mods, new Point(cell.Left, cell.Bottom));
+        }
+
+        // ---- "other versions on this PC" marker ----
+        //
+        // A mod whose name drops down other copies shows a ▾ after its name, so
+        // the click is discoverable without opening Info and pressing Edit.
+        // Finding copies reads PBO headers, so it is worked out off the UI
+        // thread after the list appears, remembered per mod, and the rows are
+        // redrawn once if anything turned up.
+
+        private readonly Dictionary<string, bool> _otherCopies = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private const string CopiesMark = "  ▾";
+
+        private string ModNameText(Mod m)
+        {
+            if (Games.IsZomboid) return m.Name;
+            bool more;
+            lock (_otherCopies)
+                if (_otherCopies.TryGetValue(ModOverrides.KeyFor(m) ?? "", out more) && more) return m.Name + CopiesMark;
+            return m.Name;
+        }
+
+        private void FindOtherCopies(string endpoint, List<Mod> mods)
+        {
+            if (Games.IsZomboid || mods == null || mods.Count == 0) return;
+            var todo = new List<Mod>();
+            lock (_otherCopies)
+                foreach (var m in mods)
+                    if (m != null && !_otherCopies.ContainsKey(ModOverrides.KeyFor(m) ?? "")) todo.Add(m);
+            if (todo.Count == 0) return;
+
+            string steam = FindSteam();
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool anyNew = false;
+                foreach (var m in todo)
+                {
+                    if (_closing) return;
+                    bool more;
+                    try { more = ModCopies.For(m, steam).Count > 1; }
+                    catch { more = false; }
+                    lock (_otherCopies) _otherCopies[ModOverrides.KeyFor(m) ?? ""] = more;
+                    if (more) anyNew = true;
+                }
+                if (!anyNew) return;
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (_modsShownFor == endpoint) RepopulateModsFromCache();
+                    }));
+                }
+                catch { }
+            });
+        }
+
+        private void ChooseModCopy(Mod mod, ModOverride choice)
+        {
+            ModOverrides.Set(mod, choice);
+            lock (_otherCopies) _otherCopies.Remove(ModOverrides.KeyFor(mod) ?? "");   // a browsed folder is a new copy
+            string where = !choice.Enabled ? "NOT loaded"
+                         : string.IsNullOrEmpty(choice.Folder) ? "loaded from its normal copy"
+                         : "loaded from " + choice.Folder;
+            Log(mod.Name + " will be " + where + ".");
+            ModIndex.Invalidate();
+            RepopulateModsFromCache();
+        }
+
         private void OnModClick(object sender, MouseEventArgs e)
         {
             var hit = _mods.HitTest(e.Location);
@@ -7135,6 +7376,15 @@ namespace ABeautifulPotatoLauncher
 
                 // Reads local files, so it works even with Steam shut.
                 ModInfoDialog.Show(Host, mod, FindSteam());
+                RepopulateModsFromCache();          // Edit in there may have changed the copy
+                return;
+            }
+
+            // The mod's name drops down every copy of it on this PC - see
+            // ModCopies - to pick which one is loaded.
+            if (col == MColName && !Games.IsZomboid)
+            {
+                ShowModCopiesMenu(mod, hit.SubItem.Bounds);
                 return;
             }
 
@@ -7339,6 +7589,57 @@ private void Launch(Row srv)
             Log("Asking " + srv.Endpoint + " what it is running...");
             List<int> tried;
             var live = FindQueryPort(srv, out tried);
+
+            // A SERVER ON THIS PC THAT ANSWERED ON NONE OF THE USUAL PORTS.
+            //
+            // Its query port is whatever steamQueryPort says, and the likely
+            // ones have all been tried. The last resort is to knock on every
+            // port on this PC - quick on loopback, but it IS a port scan, so it
+            // is asked first, and only once per connect.
+            if (!live.Online && LocalServers.IsThisMachine(srv.Host))
+            {
+                if (!LocalServers.AnyRunning())
+                {
+                    MessageBox.Show(this, "No DayZ server is running on this PC, so there is nothing at "
+                                    + srv.Endpoint + " to join.", "Local server not running",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Log("Local server " + srv.Endpoint + " - no DayZ server process is running.");
+                    return;
+                }
+
+                int found = 0;
+                if (MessageBox.Show(this,
+                        "The local server at " + srv.Endpoint + " did not answer on any of the usual query ports ("
+                        + string.Join(", ", tried) + ").\r\n\r\n"
+                        + "Scan this PC's ports to find it? It takes a few seconds and only looks at this PC.",
+                        "Find the query port", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    Log("Scanning this PC for the query port of " + srv.Endpoint + "...");
+                    Cursor = Cursors.WaitCursor;
+                    try { found = LocalServers.ScanForQueryPort(srv.Port); }
+                    finally { Cursor = Cursors.Default; }
+                }
+
+                if (found > 0)
+                {
+                    Log("Found it: query port " + found + ".");
+                    srv.QueryPort = found;
+                    LearnQueryPort(srv.Endpoint, found);
+                    live = A2S.GetInfoAt(srv.Host, found, 3000);
+                }
+
+                if (!live.Online)
+                {
+                    MessageBox.Show(this,
+                        "Local server query port not found, Please configure in ServerDZ.\r\n\r\n"
+                        + "Add a line like  steamQueryPort = 27016;  to the server's serverDZ.cfg, restart the "
+                        + "server, and join again.",
+                        "Query port not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Log("Local server query port not found for " + srv.Endpoint + ".");
+                    return;
+                }
+            }
+
             if (!live.Online)
                 throw new Exception("The server at " + srv.Endpoint + " did not answer on "
                                     + (tried.Count == 1 ? "query port " : "any of the query ports ")
@@ -7363,6 +7664,10 @@ private void Launch(Row srv)
                     + string.Join(Environment.NewLine + "  ", looked));
             }
             Log("Game  : " + gameDir);
+
+            // A DIFFERENT GAME VERSION WILL NOT LET YOU IN - and DayZ only says
+            // so after it has loaded. Compared here, while it costs nothing.
+            if (!VersionMatchesOrAccepted(srv, live.Version, gameDir)) return;
 
             Log("");
             Log("Asking which mods it requires...");
@@ -7604,7 +7909,7 @@ private void Launch(Row srv)
             // into a refusal the player cannot read.
             if (live.Password || srv.Password)
             {
-                string pw = PasswordDialog.Ask(Host, srv.Name);
+                string pw = PasswordDialog.Ask(Host, srv.Name, srv.Endpoint);
                 if (pw == null)
                 {
                     Log("Password required, and none was given - not launching.");
@@ -7630,6 +7935,15 @@ private void Launch(Row srv)
                 Log("Player name set to " + playerName + " - saved for next time.");
             }
             args.Add("\"-name=" + playerName + "\"");
+
+            // The player's own extras - see LaunchOptions, which never lets
+            // them replace any argument set above.
+            var extra = LaunchOptions.Arguments();
+            if (extra.Count > 0)
+            {
+                args.AddRange(extra);
+                Log("Launch options: " + string.Join(" ", extra));
+            }
 
             args.Add("-nolauncher");
             args.Add("-world=empty");
@@ -7738,6 +8052,10 @@ private void Launch(Row srv)
                 Log("  build - letting the game read its own steam_appid.txt instead.");
             }
 
+            // The launcher asks Steam not to draw its overlay in the launcher
+            // (see SteamWorkshop.TryInit); the game must not inherit that.
+            psi.EnvironmentVariables.Remove("SteamNoOverlayUIDrawing");
+
             // The launcher's own Steam session is deliberately LEFT OPEN.
             //
             // An earlier version shut it down here, to stop Steam reporting the
@@ -7821,6 +8139,9 @@ private void Launch(Row srv)
 
             var waiting = new LaunchingForm(srv.Name, GameExe, started, Log, EndLaunchCooldown);
             waiting.Show(Host);
+
+            // "Playing DayZ" in Discord until the game closes - see DiscordPresence.
+            DiscordPresence.ShowWhilePlaying(GameExe, line => { try { BeginInvoke((Action)(() => Log(line))); } catch { } });
 
             Log("");
             Log("Started. DayZ takes a minute or two to appear - be patient.");
@@ -7955,6 +8276,7 @@ private void Launch(Row srv)
             };
             psi.EnvironmentVariables["SteamAppId"] = Zomboid.AppId.ToString();
             psi.EnvironmentVariables["SteamGameId"] = Zomboid.AppId.ToString();
+            psi.EnvironmentVariables.Remove("SteamNoOverlayUIDrawing");   // the launcher's, not the game's
 
             Process started;
             try { started = Process.Start(psi); }
@@ -8100,6 +8422,73 @@ private static bool IsRunning(string exeName)
             catch { return false; }
         }
 
+        // ------------------------------------------------- game version --
+
+        /// <summary>
+        /// "1.29.163709" -> (1, 29, 163709). Zero for anything missing.
+        ///
+        /// A server reports major.minor.build. The installed exe puts the
+        /// build in different places - stable's DayZ_x64.exe reads
+        /// 1.29.0.163709, Experimental's 1.30.164014.27 (measured) - so the
+        /// build is taken as the first part after the minor that is large
+        /// enough to be a build number.
+        /// </summary>
+        internal static void ParseDayZVersion(string v, out int major, out int minor, out int build)
+        {
+            major = minor = build = 0;
+            var parts = (v ?? "").Split('.');
+            if (parts.Length >= 1) int.TryParse(parts[0], out major);
+            if (parts.Length >= 2) int.TryParse(parts[1], out minor);
+            for (int i = 2; i < parts.Length; i++)
+            {
+                int n;
+                if (int.TryParse(parts[i], out n) && n >= 1000) { build = n; break; }
+            }
+        }
+
+        /// <summary>
+        /// Warns, before anything is launched, when the installed game is not
+        /// the version the server runs. Returns false when the player chose not
+        /// to launch. Anything that cannot be read is let through silently -
+        /// a missing number is not a mismatch.
+        /// </summary>
+        private bool VersionMatchesOrAccepted(Row srv, string serverVersion, string gameDir)
+        {
+            string mine = "";
+            try { mine = FileVersionInfo.GetVersionInfo(Path.Combine(gameDir, GameExe)).ProductVersion ?? ""; }
+            catch { }
+
+            int sMaj, sMin, sBuild, mMaj, mMin, mBuild;
+            ParseDayZVersion(serverVersion, out sMaj, out sMin, out sBuild);
+            ParseDayZVersion(mine, out mMaj, out mMin, out mBuild);
+            if (sMaj == 0 || mMaj == 0) return true;
+
+            string theirs = sMaj + "." + sMin + (sBuild > 0 ? "." + sBuild : "");
+            string ours = mMaj + "." + mMin + (mBuild > 0 ? "." + mBuild : "");
+
+            bool differ = sMaj != mMaj || sMin != mMin || (sBuild > 0 && mBuild > 0 && sBuild != mBuild);
+            if (!differ)
+            {
+                Log("Version: " + ours + " - matches the server.");
+                return true;
+            }
+
+            bool serverNewer = sMaj != mMaj ? sMaj > mMaj : sMin != mMin ? sMin > mMin : sBuild > mBuild;
+            Log("Version: server " + theirs + ", installed " + ours + " - MISMATCH.");
+
+            string advice = serverNewer
+                ? "Your game is older than the server. Let Steam update DayZ, then join again."
+                : "The server has not updated to your version yet. Wait for it to update, or join another server.";
+
+            return MessageBox.Show(this,
+                       srv.Name + "\r\n\r\n"
+                       + "This server runs DayZ " + theirs + ", and you have " + ours + ".\r\n"
+                       + "DayZ will refuse to connect with a version mismatch.\r\n\r\n"
+                       + advice + "\r\n\r\nStart the game anyway?",
+                       "Game version does not match", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                       MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        }
+
         /// <summary>
         /// Finds the port this server answers queries on, and stores it in
         /// srv.QueryPort so the mod query after it asks the same place.
@@ -8116,6 +8505,7 @@ private static bool IsRunning(string exeName)
             var ports = new List<int>();
             Action<int> add = p => { if (p > 0 && p < 65535 && !ports.Contains(p)) ports.Add(p); };
 
+            add(LearntQueryPort(srv.Endpoint));      // what answered last time
             add(srv.QueryPort);
             if (LocalServers.IsThisMachine(srv.Host)) add(LocalServers.QueryPortFor(srv.Port));
             add(A2S.QueryPort(srv.Port));

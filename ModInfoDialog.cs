@@ -130,7 +130,9 @@ namespace ABeautifulPotatoLauncher
                 workshop.Click += (s, e) => SteamWorkshop.OpenWorkshopPage(mod.WorkshopId);
                 f.Controls.Add(workshop);
 
-                string folder = ModFolder(mod, steamPath);
+                // The copy that will really be loaded - the player's choice if
+                // they made one - not always the workshop copy.
+                string folder = ModCopies.InUseFolder(mod, steamPath) ?? ModFolder(mod, steamPath);
                 var openFolder = MakeBtn("Explorer", new Rectangle(154, by, 120, 30));
                 openFolder.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
                 openFolder.Enabled = folder != null && Directory.Exists(folder);
@@ -310,6 +312,12 @@ namespace ABeautifulPotatoLauncher
 
             AddContent(add, folder);
             if (folder != null) add("Installed at", folder);
+
+            // The copy joining will really load, when the player picked another.
+            var ov = ModOverrides.For(mod);
+            if (ov != null && !ov.Enabled) add("Loads from", "NOT loaded - your choice");
+            else if (ov != null && !string.IsNullOrEmpty(ov.Folder))
+                add("Loads from", ov.Folder + (Directory.Exists(ov.Folder) ? "   (your copy)" : "   (MISSING - pick again)"));
             return list;
         }
 

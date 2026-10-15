@@ -898,6 +898,14 @@ namespace ABeautifulPotatoLauncher
                 Environment.SetEnvironmentVariable("SteamAppId", _sessionApp.ToString());
                 Environment.SetEnvironmentVariable("SteamGameId", _sessionApp.ToString());
 
+                // Steam injects its in-game overlay into anything that starts
+                // the API as a game - it was found loaded into this launcher in
+                // a crash report. A launcher has nothing to overlay; ask Steam
+                // not to draw it here. Games started from here inherit this
+                // environment, so every launch removes it again - otherwise
+                // the game loses its overlay too.
+                Environment.SetEnvironmentVariable("SteamNoOverlayUIDrawing", "1");
+
                 // Loaded once and kept: a re-opened session (SwitchApp) uses the
                 // same library rather than loading a second copy - see Library.
                 if (_lib == IntPtr.Zero) _lib = LoadLibrary(dll);
@@ -1788,19 +1796,39 @@ namespace ABeautifulPotatoLauncher
             catch { return ItemState.None; }
         }
 
+        /// <summary>
+        /// Lets go of Steam as the process exits. Called once, from Program.Main,
+        /// after the last window has closed.
+        ///
+        /// WHY THIS MATTERS
+        ///   It was never called. The launcher exited with the Steam API still
+        ///   open, so Steam's own threads were still running inside the process
+        ///   while Windows tore it down - and Steam's crash handler
+        ///   (crashhandler64.dll) caught that and aborted the process. Windows
+        ///   logged it as a crash: 54 of them between 2026-09-24 and 10-08, two
+        ///   measured at the exact moment the launcher was closing.
+        ///
+        ///   Taken under ApiLock so no other thread is inside Steam at the time,
+        ///   and the interface pointers are cleared first so nothing can start a
+        ///   new call. The library is NOT unloaded: Steam may still have work
+        ///   unwinding, and unloading code that is about to run is a crash of
+        ///   its own. The process is ending; Windows reclaims it.
+        /// </summary>
         public static void Shutdown()
         {
-            try
+            lock (ApiLock)
             {
-                if (_initialised && _shutdown != null) _shutdown();
-                if (_lib != IntPtr.Zero) FreeLibrary(_lib);
-            }
-            catch { }
-            finally
-            {
+                bool wasUp = _initialised;
                 _initialised = false;
                 _ugc = IntPtr.Zero;
-                _lib = IntPtr.Zero;
+                var shutdown = _shutdown;
+                _runCallbacks = null;          // a background pump must not call into a closed API
+                try
+                {
+                    SteamServerList.Forget();
+                    if (wasUp && shutdown != null) shutdown();
+                }
+                catch { }
             }
         }
 

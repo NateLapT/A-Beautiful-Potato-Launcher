@@ -4,10 +4,11 @@
 //  Reached from the Edit button in a mod's info window. It does two things:
 //  turn a required mod off, and point it at a different copy on disk.
 //
-//  The candidate list is built from what is actually installed, with copies of
-//  the SAME mod offered first - a player keeping @Thing_v51 and @Thing_v52
-//  beside the workshop copy is choosing between builds, and that choice should
-//  be one click, not a hunt through eight hundred entries.
+//  The candidates are the copies of THIS mod on the PC - the normal one, and
+//  local folders holding the same PBOs (see ModCopies) - the same list the
+//  drop-down under a mod's name shows. A player keeping @Thing_v51 and
+//  @Thing_v52 beside the workshop copy is choosing between builds of one mod,
+//  not between every mod they own.
 // ---------------------------------------------------------------------------
 
 using System;
@@ -34,7 +35,8 @@ namespace ABeautifulPotatoLauncher
             if (mod == null) return false;
 
             var current = ModOverrides.For(mod) ?? new ModOverride();
-            var candidates = Candidates(mod, steamPath);
+            // The same list as the drop-down under the mod's name - see ModCopies.
+            var candidates = ModCopies.For(mod, steamPath);
 
             using (var f = new Form())
             {
@@ -110,17 +112,7 @@ namespace ABeautifulPotatoLauncher
                 foreach (var c in candidates) list.Items.Add(c);
 
                 // Select whatever is in force now.
-                int startIndex = 0;
-                if (!string.IsNullOrEmpty(current.Folder))
-                {
-                    for (int i = 0; i < candidates.Count; i++)
-                    {
-                        if (!string.Equals(candidates[i].Folder, current.Folder,
-                                           StringComparison.OrdinalIgnoreCase)) continue;
-                        startIndex = i;
-                        break;
-                    }
-                }
+                int startIndex = Math.Max(0, candidates.FindIndex(c => c.InUse));
                 if (list.Items.Count > 0) list.SelectedIndex = startIndex;
                 f.Controls.Add(list);
 
@@ -139,7 +131,7 @@ namespace ABeautifulPotatoLauncher
                     using (var fb = new FolderBrowserDialog { Description = "Pick the folder to load this mod from" })
                     {
                         if (fb.ShowDialog(f) != DialogResult.OK) return;
-                        var pick = new Candidate("Chosen folder", fb.SelectedPath, false);
+                        var pick = new ModCopy { Label = "Your folder", Folder = fb.SelectedPath };
                         list.Items.Add(pick);
                         list.SelectedItem = pick;
                     }
@@ -178,7 +170,7 @@ namespace ABeautifulPotatoLauncher
 
                 if (f.ShowDialog(owner) != DialogResult.OK) return false;
 
-                var chosen = list.SelectedItem as Candidate;
+                var chosen = list.SelectedItem as ModCopy;
                 var result = new ModOverride
                 {
                     Enabled = enabled.Checked,
@@ -191,79 +183,5 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
-        /// <summary>
-        /// Where this mod could be loaded from: its own workshop copy first,
-        /// then any local install that looks like the same mod, then the rest.
-        /// </summary>
-        private static List<Candidate> Candidates(Mod mod, string steamPath)
-        {
-            var list = new List<Candidate>();
-
-            if (mod.WorkshopId != 0)
-            {
-                string workshop = steamPath == null ? null : SteamWorkshop.ItemPath(steamPath, mod.WorkshopId);
-                list.Add(new Candidate("Workshop copy (normal)", workshop ?? "", true));
-            }
-            else
-            {
-                // No workshop copy exists; the default is whatever the library
-                // match finds by name.
-                var match = ModIndex.FindLocalByName(mod.BareName);
-                list.Add(new Candidate("Matched by name (normal)",
-                                       match != null ? match.Folder : "(not found)", true));
-            }
-
-            List<ModEntry> installed;
-            try { installed = ModIndex.All(); }
-            catch { installed = new List<ModEntry>(); }
-
-            // Local builds whose name resembles this mod come first: that is
-            // the version-switching case, and it should not need scrolling.
-            string stem = Stem(mod.Name);
-            var related = installed
-                .Where(m => m.IsLocal && Stem(m.Name).StartsWith(stem, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            foreach (var m in related)
-                list.Add(new Candidate("Local: " + m.Name, m.Folder, false));
-
-            foreach (var m in installed
-                        .Where(m => m.IsLocal && !related.Contains(m))
-                        .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
-                list.Add(new Candidate("Local: " + m.Name, m.Folder, false));
-
-            return list;
-        }
-
-        /// <summary>
-        /// The part of a name before any version suffix, so "Thing_v52" and
-        /// "Thing" are recognised as the same mod.
-        /// </summary>
-        private static string Stem(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return "";
-            string s = name.TrimStart('@');
-            int cut = s.IndexOfAny(new[] { '_', '-', ' ' });
-            return (cut > 2 ? s.Substring(0, cut) : s).Trim();
-        }
-
-        private sealed class Candidate
-        {
-            public readonly string Label;
-            public readonly string Folder;
-            public readonly bool IsDefault;
-
-            public Candidate(string label, string folder, bool isDefault)
-            {
-                Label = label;
-                Folder = folder;
-                IsDefault = isDefault;
-            }
-
-            public override string ToString()
-            {
-                return string.IsNullOrEmpty(Folder) ? Label : Label + "   -   " + Folder;
-            }
-        }
     }
 }

@@ -347,6 +347,111 @@ namespace ABeautifulPotatoLauncher
             catch { }
         }
 
+        // ---- remembered server passwords ----
+        //
+        // One line per server: "host:port <TAB> base64". The base64 is the
+        // password ENCRYPTED with Windows DPAPI for the current user - it can
+        // only be read back by this Windows account on this PC. Copying the
+        // file elsewhere, or opening it as another user, gives nothing.
+        private static string PasswordsFile { get { return Path.Combine(Dir, "passwords.dat"); } }
+
+        private static readonly byte[] PasswordEntropy = Encoding.UTF8.GetBytes("ABeautifulPotatoLauncher.ServerPassword");
+
+        private static Dictionary<string, string> ReadPasswordLines()
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(PasswordsFile)) return d;
+                foreach (string line in File.ReadAllLines(PasswordsFile))
+                {
+                    int tab = line.IndexOf('\t');
+                    if (tab > 0) d[line.Substring(0, tab)] = line.Substring(tab + 1);
+                }
+            }
+            catch { }
+            return d;
+        }
+
+        /// <summary>The password last used for this server, or null.</summary>
+        public static string LoadPassword(string endpoint)
+        {
+            try
+            {
+                string b64;
+                if (string.IsNullOrEmpty(endpoint) || !ReadPasswordLines().TryGetValue(endpoint, out b64)) return null;
+                byte[] plain = System.Security.Cryptography.ProtectedData.Unprotect(
+                    Convert.FromBase64String(b64), PasswordEntropy,
+                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(plain);
+            }
+            catch { return null; }          // unreadable (another user, another PC): as if never saved
+        }
+
+        /// <summary>Remembers a password for this server; null or empty forgets it.</summary>
+        public static void SavePassword(string endpoint, string password)
+        {
+            if (string.IsNullOrEmpty(endpoint)) return;
+            try
+            {
+                var d = ReadPasswordLines();
+                if (string.IsNullOrEmpty(password)) d.Remove(endpoint);
+                else
+                    d[endpoint] = Convert.ToBase64String(System.Security.Cryptography.ProtectedData.Protect(
+                        Encoding.UTF8.GetBytes(password), PasswordEntropy,
+                        System.Security.Cryptography.DataProtectionScope.CurrentUser));
+                File.WriteAllLines(PasswordsFile, d.Select(kv => kv.Key + "\t" + kv.Value));
+            }
+            catch { }
+        }
+
+        // "Playing DayZ" in Discord - see DiscordPresence. On unless turned off.
+        private static string DiscordFile { get { return Path.Combine(Dir, "discord.txt"); } }
+
+        public static bool LoadDiscordStatus()
+        {
+            try { return !File.Exists(DiscordFile) || File.ReadAllText(DiscordFile).Trim() != "0"; }
+            catch { return true; }
+        }
+
+        public static void SaveDiscordStatus(bool on)
+        {
+            try { File.WriteAllText(DiscordFile, on ? "1" : "0"); }
+            catch { }
+        }
+
+        // The player's own extra game arguments - see LaunchOptions. Kept per
+        // game, like everything else in Dir.
+        private static string LaunchFile { get { return Path.Combine(Dir, "launch.txt"); } }
+
+        /// <summary>key=value lines; empty when nothing has been set.</summary>
+        public static Dictionary<string, string> LoadLaunchOptions()
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(LaunchFile)) return d;
+                foreach (string line in File.ReadAllLines(LaunchFile))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+                    d[line.Substring(0, eq).Trim()] = line.Substring(eq + 1);
+                }
+            }
+            catch { }
+            return d;
+        }
+
+        public static void SaveLaunchOptions(Dictionary<string, string> values)
+        {
+            try
+            {
+                File.WriteAllLines(LaunchFile,
+                    values.Select(kv => kv.Key + "=" + (kv.Value ?? "").Replace("\r", " ").Replace("\n", " ")));
+            }
+            catch { }
+        }
+
         // Which build the browser was last pointed at, so it reopens there.
         private static string BuildFile { get { return Path.Combine(Dir, "build.txt"); } }
 

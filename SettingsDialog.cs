@@ -315,6 +315,31 @@ namespace ABeautifulPotatoLauncher
                     ForeColor = Dim
                 });
 
+                // DayZ only: the status says "Playing DayZ".
+                var discord = new CheckBox
+                {
+                    Text = "Show \"Playing DayZ\" in my Discord status",
+                    Checked = ServerStore.LoadDiscordStatus(),
+                    Bounds = new Rectangle(14, 282, 400, 24),
+                    ForeColor = Color.Gainsboro,
+                    FlatStyle = FlatStyle.Flat,
+                    Visible = !Games.IsZomboid && DiscordPresence.Ready
+                };
+                modsPage.Controls.Add(discord);
+                modsPage.Controls.Add(new Label
+                {
+                    Text = "While DayZ is running: \"Playing DayZ - Via A Beautiful Potato Launcher\". "
+                         + "It never says\r\nwhich server you are on. Needs the Discord app running on this PC.",
+                    Bounds = new Rectangle(32, 308, 600, 34),
+                    ForeColor = Dim,
+                    Visible = !Games.IsZomboid && DiscordPresence.Ready
+                });
+                f.FormClosing += (s2, e2) =>
+                {
+                    if (f.DialogResult == DialogResult.OK && !Games.IsZomboid && DiscordPresence.Ready)
+                        ServerStore.SaveDiscordStatus(discord.Checked);
+                };
+
 
 
                 // ------------------------------------------------------ close --
