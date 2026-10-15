@@ -1867,6 +1867,7 @@ namespace ABeautifulPotatoLauncher
     internal static class Junction
     {
         private const uint FSCTL_SET_REPARSE_POINT      = 0x000900A4;
+        private const uint FSCTL_GET_REPARSE_POINT      = 0x000900A8;
         private const uint IO_REPARSE_TAG_MOUNT_POINT   = 0xA0000003;
         private const uint GENERIC_WRITE                = 0x40000000;
         private const uint OPEN_EXISTING                = 3;
@@ -1892,12 +1893,28 @@ namespace ABeautifulPotatoLauncher
             try
             {
                 if (!Directory.Exists(target)) return false;
-                if (Directory.Exists(link)) return true;
 
                 // The substitute name is an NT path, and it must not carry a
                 // trailing separator or the reparse point resolves to nothing.
                 target = Path.GetFullPath(target).TrimEnd('\\');
                 string substitute = @"\??\" + target;
+
+                // A link left by an earlier launch is reused ONLY if it still
+                // points where this launch wants. It used to be reused as is,
+                // so choosing a different copy of a mod changed nothing: the
+                // game went through the old link to the first folder ever used.
+                if (Directory.Exists(link) || IsReparsePoint(link))
+                {
+                    if (!IsReparsePoint(link)) return false;     // a real folder: never touched
+                    string current = TargetOf(link);
+                    if (current != null && string.Equals(current.TrimEnd('\\'), target,
+                                                         StringComparison.OrdinalIgnoreCase))
+                        return true;
+
+                    // Removing a junction removes the link only, never what it
+                    // points at - and only a reparse point gets this far.
+                    Directory.Delete(link, false);
+                }
 
                 Directory.CreateDirectory(link);
                 madeDir = true;
@@ -1947,6 +1964,43 @@ namespace ABeautifulPotatoLauncher
             finally
             {
                 if (handle != IntPtr.Zero) CloseHandle(handle);
+            }
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>The folder a junction points at, or null if it cannot be read.</summary>
+        private static string TargetOf(string link)
+        {
+            IntPtr handle = CreateFile(link, 0, 7 /* share all */, IntPtr.Zero, OPEN_EXISTING,
+                                       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                                       IntPtr.Zero);
+            if (handle == new IntPtr(-1)) return null;
+            IntPtr outBuf = Marshal.AllocHGlobal(16 * 1024);
+            try
+            {
+                int returned;
+                if (!DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, null, 0,
+                                     outBuf, 16 * 1024, out returned, IntPtr.Zero))
+                    return null;
+                if ((uint)Marshal.ReadInt32(outBuf, 0) != IO_REPARSE_TAG_MOUNT_POINT) return null;
+
+                // Same layout as written in TryCreate: the substitute name's
+                // offset and length follow the 8-byte header.
+                int subOffset = Marshal.ReadInt16(outBuf, 8);
+                int subLength = Marshal.ReadInt16(outBuf, 10);
+                string sub = Marshal.PtrToStringUni(IntPtr.Add(outBuf, 16 + subOffset), subLength / 2);
+                return sub.StartsWith(@"\??\") ? sub.Substring(4) : sub;
+            }
+            catch { return null; }
+            finally
+            {
+                Marshal.FreeHGlobal(outBuf);
+                CloseHandle(handle);
             }
         }
     }

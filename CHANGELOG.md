@@ -16,6 +16,18 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.1] - 2026-10-15
+
+### Fixed
+
+- **Choosing a different copy of a mod did not change what the game loaded.**
+  The game is given short links (in the game folder's !m) to each mod's
+  folder, and a link made by an earlier launch was reused as it was - so the
+  game kept loading whichever folder that mod had first been loaded from,
+  whatever was chosen since. A link is now reused only while it points at the
+  folder this launch wants, and is pointed at the new one otherwise. Only the
+  link changes; no mod folder is touched.
+
 ## [0.9.0] - 2026-10-15
 
 ### Added
