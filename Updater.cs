@@ -12,13 +12,25 @@
 //
 //  THE SWAP. Windows will not let a running exe be overwritten, but it WILL
 //  let one be renamed. So an update is:
-//      download   -> ABeautifulPotatoLauncher.exe.new   (checked before use)
+//      download   -> ABeautifulPotatoLauncher.update.exe   (checked before use)
 //      rename     running exe -> ABeautifulPotatoLauncher.exe.old
-//      rename     .new -> ABeautifulPotatoLauncher.exe
-//      start the new one, exit this one
+//      rename     update.exe -> ABeautifulPotatoLauncher.exe
+//      start the new one, wait for it to say it is running, exit this one
 //  and the new copy deletes the .old on its next start. No installer, no
 //  administrator - as long as the exe's folder is writable, which is why the
 //  launcher belongs under LocalAppData rather than Program Files.
+//
+//  ANTIVIRUS. Players have had updates blocked. Nothing here can or should
+//  get past an antivirus - the cure for a false alarm is a signed exe - but
+//  a block must never leave a player WITHOUT a launcher, which the plain
+//  swap could: the new exe in place, then quarantined when it started. So:
+//    * The download is saved as an .exe, not ".new". Scanners look at
+//      executables as they are written, so a verdict arrives while the old
+//      launcher is still untouched - and the file is re-read after a pause
+//      to make sure it is still there and readable before the swap.
+//    * The new copy signals a named event as soon as it runs. If it cannot
+//      be started, or exits without signalling, the swap is undone and the
+//      player is told plainly, with the download page to fall back on.
 // ---------------------------------------------------------------------------
 
 using System;
@@ -29,6 +41,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -45,6 +58,12 @@ namespace ABeautifulPotatoLauncher
         public long ExeSize;
         public bool PreRelease;
         public DateTime Published;
+    }
+
+    /// <summary>The update was stopped - almost always by an antivirus - and nothing was changed.</summary>
+    internal sealed class UpdateBlockedException : Exception
+    {
+        public UpdateBlockedException(string message) : base(message) { }
     }
 
     internal static class Updater
@@ -188,17 +207,24 @@ namespace ABeautifulPotatoLauncher
         /// anything is replaced: the size GitHub reported, a real .NET
         /// assembly, and the version the release claims to be. A half download
         /// or an HTML error page must never become the launcher.
-        /// Returns the path of the verified .new file.
+        /// Returns the path of the verified download.
         /// </summary>
         public static async Task<string> DownloadAsync(ReleaseInfo r, Action<int> progress)
         {
-            string target = ExePath + ".new";
+            string target = DownloadPath;
             try { File.Delete(target); } catch { }
 
             using (var wc = NewClient())
             {
                 wc.DownloadProgressChanged += (s, e) => { if (progress != null) progress(e.ProgressPercentage); };
                 await wc.DownloadFileTaskAsync(new Uri(r.ExeUrl), target);
+            }
+
+            // Removed the moment it was written: that is an antivirus.
+            if (!File.Exists(target))
+            {
+                Log("Update: the download vanished as soon as it was saved.");
+                throw Blocked("Your antivirus removed the new version as it downloaded.");
             }
 
             var fi = new FileInfo(target);
@@ -228,15 +254,44 @@ namespace ABeautifulPotatoLauncher
                 throw new Exception("The release says v" + r.Version + " but the file inside it is v" + got
                                     + ". Nothing was changed.");
             }
+
+            // Give a scanner the moment it takes to decide, then read the file
+            // through. Quarantined or locked shows up here - while the old
+            // launcher is still in place - instead of after the swap.
+            await Task.Delay(2000);
+            try
+            {
+                using (var fs = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    var buf = new byte[81920];
+                    while (fs.Read(buf, 0, buf.Length) > 0) { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Update: the download could not be read back - " + ex.GetType().Name + ": " + ex.Message);
+                try { File.Delete(target); } catch { }
+                throw Blocked("Your antivirus blocked the new version after it downloaded.");
+            }
             return target;
         }
 
+        private static string DownloadPath
+        {
+            get { return Path.Combine(Path.GetDirectoryName(ExePath), "ABeautifulPotatoLauncher.update.exe"); }
+        }
+
+        /// <summary>The argument the new copy signals through - see SignalStarted.</summary>
+        private const string SignalArg = "--started-signal";
+
         /// <summary>
-        /// Swaps the verified download in and starts it. The caller exits
-        /// straight after. If the second rename fails the first is undone, so
-        /// the player is never left without a launcher.
+        /// Swaps the verified download in, starts it, and waits for it to say
+        /// it is running. The caller exits once this returns. If the new copy
+        /// is blocked - it cannot start, or dies without signalling - the
+        /// swap is undone and UpdateBlockedException says so; the player is
+        /// never left without a launcher.
         /// </summary>
-        public static void ApplyAndRestart(string downloaded)
+        public static async Task ApplyAndRestartAsync(string downloaded)
         {
             string exe = ExePath;
             string old = exe + ".old";
@@ -253,12 +308,99 @@ namespace ABeautifulPotatoLauncher
                 throw;
             }
 
-            Log("Updated to the downloaded version; restarting.");
-            Process.Start(new ProcessStartInfo(exe, "--updated-from " + Program.Version)
+            string name = "ABeautifulPotatoLauncher-started-" + Guid.NewGuid().ToString("N");
+            using (var started = new EventWaitHandle(false, EventResetMode.ManualReset, name))
             {
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(exe)
-            });
+                Process p;
+                try
+                {
+                    p = Process.Start(new ProcessStartInfo(exe,
+                            "--updated-from " + Program.Version + " " + SignalArg + " " + name)
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = Path.GetDirectoryName(exe)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // 225 ERROR_VIRUS_INFECTED, 226 ERROR_VIRUS_DELETED - and
+                    // access denied or not found when it was quarantined.
+                    var w = ex as System.ComponentModel.Win32Exception;
+                    Log("Update: the new version would not start - " + ex.GetType().Name
+                        + (w != null ? " (error " + w.NativeErrorCode + ")" : "") + ": " + ex.Message);
+                    RollBack(exe, old);
+                    throw Blocked("Your antivirus stopped the new version from starting.");
+                }
+
+                // Up to half a minute: a first run can wait on a cloud scan.
+                // Still running at the end of it is a slow start, not a block,
+                // and is left alone - undoing the swap under a running copy
+                // would do more harm than good.
+                bool ok = await Task.Run(() =>
+                {
+                    var until = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < until)
+                    {
+                        if (started.WaitOne(250)) return true;
+                        try { if (p != null && p.HasExited) return started.WaitOne(0); }
+                        catch { }
+                    }
+                    return true;
+                });
+
+                if (!ok)
+                {
+                    int code = -1;
+                    try { code = p.ExitCode; } catch { }
+                    Log("Update: the new version closed before it started (exit code " + code + ").");
+                    RollBack(exe, old);
+                    throw Blocked("The new version was closed as it started - most likely by your antivirus.");
+                }
+            }
+            Log("Updated to the downloaded version; restarting.");
+        }
+
+        /// <summary>Puts the old launcher back where it was, whatever is left of the new one.</summary>
+        private static void RollBack(string exe, string old)
+        {
+            try
+            {
+                if (File.Exists(exe))
+                {
+                    try { File.Delete(exe); }
+                    catch { File.Move(exe, exe + ".blocked"); }
+                }
+                File.Move(old, exe);
+                Log("Update: undone - the previous version is back in place.");
+            }
+            catch (Exception ex)
+            {
+                Log("Update: could not put the previous version back - " + ex.Message);
+            }
+        }
+
+        private static UpdateBlockedException Blocked(string what)
+        {
+            return new UpdateBlockedException(what + " This launcher is unchanged.\r\n\r\n"
+                + "The new version can be downloaded from the release page instead - your "
+                + "antivirus may ask you to allow it.");
+        }
+
+        /// <summary>
+        /// Called first thing by a copy an update started: tells the old copy
+        /// it is running, so the old one can exit. See ApplyAndRestartAsync.
+        /// </summary>
+        public static void SignalStarted(string[] args)
+        {
+            int i = Array.FindIndex(args, a => a.Equals(SignalArg, StringComparison.OrdinalIgnoreCase));
+            if (i < 0 || i + 1 >= args.Length) return;
+            try
+            {
+                EventWaitHandle h;
+                if (EventWaitHandle.TryOpenExisting(args[i + 1], out h))
+                    using (h) h.Set();
+            }
+            catch { }
         }
 
         /// <summary>
@@ -267,14 +409,14 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static void CleanUpAfterUpdate()
         {
-            string old = ExePath + ".old";
-            string half = ExePath + ".new";
+            // ".new" is where versions before 0.9.2 downloaded to.
+            var leftovers = new[] { ExePath + ".old", ExePath + ".new", ExePath + ".blocked", DownloadPath };
             Task.Run(async () =>
             {
-                for (int i = 0; i < 10 && (File.Exists(old) || File.Exists(half)); i++)
+                for (int i = 0; i < 10 && leftovers.Any(File.Exists); i++)
                 {
-                    try { if (File.Exists(old)) File.Delete(old); } catch { }
-                    try { if (File.Exists(half)) File.Delete(half); } catch { }
+                    foreach (string f in leftovers)
+                        try { if (File.Exists(f)) File.Delete(f); } catch { }
                     await Task.Delay(1000);
                 }
             });

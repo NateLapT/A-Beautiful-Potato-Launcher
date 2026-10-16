@@ -15,6 +15,7 @@
 //    battleye,no3rd,external,privHive,shard123ABC,lqs0,etm3.000000,
 //    entm64.000000,mod,isDLC,16:48
 //  so "3rd person", "has mods" and the in-game clock all come from there.
+//  (Since 1.30 "no3rd" means third person is ON - see ViewModes.)
 // ---------------------------------------------------------------------------
 
 using System.Collections.Generic;
@@ -551,8 +552,12 @@ namespace ABeautifulPotatoLauncher
             }
             else
             {
-                if (ThirdPerson == TriState.Enabled && !s.ThirdPerson) return false;
-                if (ThirdPerson == TriState.Disabled && s.ThirdPerson) return false;
+                // Vehicles only counts as first person, as the game's own
+                // browser counts it: on foot, which is most of the game, it is.
+                var view = s.View;
+                if (ThirdPerson == TriState.Enabled && view != ViewMode.ThirdPerson) return false;
+                if (ThirdPerson == TriState.Disabled
+                    && view != ViewMode.FirstPerson && view != ViewMode.VehiclesOnly) return false;
             }
 
             if (Mods == TriState.Enabled && !s.HasMods) return false;

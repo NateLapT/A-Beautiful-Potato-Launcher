@@ -68,7 +68,7 @@ namespace ABeautifulPotatoLauncher
         /// always used, so nothing an existing player has built up moves;
         /// another game gets a folder of its own beneath it. See Games.
         /// </summary>
-        private static string Dir
+        internal static string Dir
         {
             get
             {

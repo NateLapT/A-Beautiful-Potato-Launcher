@@ -123,7 +123,9 @@ namespace ABeautifulPotatoLauncher
             try { Directory.CreateDirectory(LogDirectory); }
             catch { }
 
-            // The exe an update replaced, if this is the first run after one.
+            // Started by an update: tell the old copy this one is running
+            // before anything else, then clear away what the update left.
+            Updater.SignalStarted(Environment.GetCommandLineArgs());
             Updater.CleanUpAfterUpdate();
 
             // Which game this run is for. Everything per-game - the data
@@ -457,8 +459,8 @@ namespace ABeautifulPotatoLauncher
         // ListView cannot host real buttons, so the cell is hit-tested instead.
         private const int ColRefresh = 0, ColStar = 1, ColName = 2, ColGame = 3,
                           ColStatus = 4, ColMap = 5, ColCountry = 6, ColPlayers = 7,
-                          ColTime = 8, ColPing = 9, ColMods = 10, ColPassword = 11,
-                          ColAddress = 12;
+                          ColTime = 8, ColPing = 9, ColMods = 10, ColView = 11,
+                          ColPassword = 12, ColAddress = 13;
 
         // Row colours, kept in one place so the list reads consistently:
         //   normal   - listed, and either answered or not yet asked
@@ -1494,6 +1496,8 @@ namespace ABeautifulPotatoLauncher
             _list.Columns.Add(Games.IsZomboid ? "" : "Time", Games.IsZomboid ? 0 : 54, HorizontalAlignment.Center);
             _list.Columns.Add("Ping", 56, HorizontalAlignment.Center);
             _list.Columns.Add("Mods", 48, HorizontalAlignment.Center);
+            // 1PP / 3PP / V3PP - DayZ only; see ViewModes.
+            _list.Columns.Add(Games.IsZomboid ? "" : "View", Games.IsZomboid ? 0 : 52, HorizontalAlignment.Center);
             _list.Columns.Add("Password", 66, HorizontalAlignment.Center);
             _list.Columns.Add("Address", 132);
             _list.DoubleClick += OnConnect;
@@ -2637,7 +2641,7 @@ namespace ABeautifulPotatoLauncher
         {
             string[] titles = { "", "", "Name", Games.IsZomboid ? "Version" : "Game", "Status", "Map",
                                 "Country", "Players", Games.IsZomboid ? "" : "Time", "Ping", "Mods",
-                                "Password", "Address" };
+                                Games.IsZomboid ? "" : "View", "Password", "Address" };
             for (int i = 0; i < _list.Columns.Count && i < titles.Length; i++)
             {
                 string label = titles[i];
@@ -2837,6 +2841,10 @@ namespace ABeautifulPotatoLauncher
                 case ColMods:
                     byColumn = (a, b) => Modded(a.Tags).CompareTo(Modded(b.Tags));
                     break;
+                case ColView:
+                    // 1PP, V3PP, 3PP - by how much third person there is; unknown last.
+                    byColumn = (a, b) => ViewOrder(a).CompareTo(ViewOrder(b));
+                    break;
                 case ColPassword:
                     byColumn = (a, b) => a.Password.CompareTo(b.Password);
                     break;
@@ -2936,6 +2944,17 @@ namespace ABeautifulPotatoLauncher
             return r.Ping > 0 ? r.Ping : int.MaxValue;
         }
 
+        private static int ViewOrder(Row r)
+        {
+            switch (ViewModes.Of(r.Tags, r.Name))
+            {
+                case ViewMode.FirstPerson: return 0;
+                case ViewMode.VehiclesOnly: return 1;
+                case ViewMode.ThirdPerson: return 2;
+                default: return 3;
+            }
+        }
+
         private void OnRetrieveItem(object sender, RetrieveVirtualItemEventArgs e)
         {
             if (e.ItemIndex >= 0 && e.ItemIndex < _rows.Count && _rows[e.ItemIndex].IsHeading)
@@ -2976,6 +2995,7 @@ namespace ABeautifulPotatoLauncher
                 TagTime(row.Tags),
                 row.Ping > 0 ? row.Ping + " ms" : (row.Offline ? "-" : ""),
                 Modded(row.Tags) ? "yes" : "",
+                ViewModes.Label(ViewModes.Of(row.Tags, row.Name)),
                 row.Password ? "Yes" : "No",
                 row.Endpoint
             })
@@ -3623,7 +3643,10 @@ namespace ABeautifulPotatoLauncher
 
             var passes = new List<SweepPass>
             {
-                new SweepPass(app, "first-person", "gametagsand", "no3rd"),
+                // Since 1.30 the no3rd tag marks third-person servers (see
+                // ViewModes). Either way it splits the list, which is all a
+                // sweep pass needs.
+                new SweepPass(app, "no3rd-tag",    "gametagsand", "no3rd"),
                 new SweepPass(app, "populated",    "empty",       "1"),
                 new SweepPass(app, "modded",       "gametagsand", "mod")
             };
@@ -7834,7 +7857,7 @@ private void Launch(Row srv)
             // argument be relative and tiny, and the working directory below is
             // the game folder so they resolve. Verified in a real launch.
             var modArgs = new List<string>();
-            string shortRoot = Path.Combine(gameDir, "!m");
+            var loadedKeys = new List<string>();      // for the Mod Manager - see LoadedMods
             foreach (var m in mods)
             {
                 // The player may have turned this mod off, or pointed it at a
@@ -7885,11 +7908,10 @@ private void Launch(Row srv)
                 // Local mods have no id to name a link after, so the mod's own
                 // name is used - it is unique within a server's list.
                 string linkName = m.IsLocal ? SafeLinkName(m.BareName) : m.WorkshopId.ToString();
-                string link = Path.Combine(shortRoot, linkName);
-                try { Directory.CreateDirectory(shortRoot); } catch { }
+                modArgs.Add(ModArg(gameDir, linkName, source));
 
-                if (Junction.TryCreate(link, source)) modArgs.Add("!m\\" + linkName);
-                else modArgs.Add(source);            // long, but it still works
+                loadedKeys.Add(m.IsLocal || source != SteamWorkshop.ItemPath(steam, m.WorkshopId)
+                    ? LoadedMods.FolderKey(source) : m.WorkshopId.ToString());
             }
 
             var args = new List<string>();
@@ -7926,15 +7948,7 @@ private void Launch(Row srv)
             // set one. Asked once, on the first join that has no name, and
             // remembered from then on. Pressing OK with the box empty is a
             // real answer: it means "you pick".
-            string playerName = _name.Text.Trim();
-            if (playerName.Length == 0 || NameDialog.IsDefault(playerName))
-            {
-                playerName = NameDialog.Ask(Host);
-                _name.Text = playerName;
-                ServerStore.SaveName(playerName);
-                Log("Player name set to " + playerName + " - saved for next time.");
-            }
-            args.Add("\"-name=" + playerName + "\"");
+            args.Add("\"-name=" + PlayerNameForLaunch() + "\"");
 
             // The player's own extras - see LaunchOptions, which never lets
             // them replace any argument set above.
@@ -7948,6 +7962,94 @@ private void Launch(Row srv)
             args.Add("-nolauncher");
             args.Add("-world=empty");
 
+            string bePath = CheckGameFiles(gameDir);
+            if (bePath == null) return;             // the player chose to fix it properly
+
+            string full = BeArgs + " -exe " + GameExe + " " + string.Join(" ", args.ToArray());
+            Log("");
+            Log("Launching through " + BeExe + " so BattlEye attaches:");
+            Log("  " + BeExe + " " + full);
+
+            Process started = StartGame(bePath, gameDir, full, live.AppId, live.GameLabel);
+            FollowGameApp(live.AppId, live.GameLabel, gameDir);
+
+            // Remember which mods this server actually used, so the Mod
+            // Manager can show when each was last needed. Written now rather
+            // than on exit: the launcher is often closed while the game runs.
+            try { ModIndex.MarkLoaded(mods.Select(m => m.WorkshopId)); }
+            catch { }
+
+            // The Mod Manager's checked mods become this server's, so its
+            // START WITH MODS starts the same set - see LoadedMods.
+            LoadedMods.Replace(loadedKeys, srv.Name, null);
+
+            // SAY IT WHERE IT WILL BE SEEN.
+            //
+            // The log line below is the whole of what the launcher used to
+            // tell anyone, and the log panel is small and easy to miss - so
+            // players took the silence for failure and pressed CONNECT again.
+            // Shown modeless: the launcher stays usable behind it, and it
+            // closes itself when the game's process appears.
+            // The list and CONNECT go quiet now, not when Launch returns -
+            // the seconds being guarded against are the ones right here.
+            BeginLaunchCooldown();
+
+            var waiting = new LaunchingForm(srv.Name, GameExe, started, Log, EndLaunchCooldown);
+            waiting.Show(Host);
+
+            // "Playing DayZ" in Discord until the game closes - see DiscordPresence.
+            DiscordPresence.ShowWhilePlaying(GameExe, line => { try { BeginInvoke((Action)(() => Log(line))); } catch { } });
+
+            Log("");
+            Log("Started. DayZ takes a minute or two to appear - be patient.");
+            _status.Text = "Launched " + srv.Endpoint;
+        }
+
+        /// <summary>
+        /// The -mod entry for one mod: a short link in the game folder's !m
+        /// when one can be made, else the full path. Absolute !Workshop paths
+        /// run ~90 characters each; junctions inside the game folder let the
+        /// argument be relative and tiny, and the game starts in its own folder
+        /// so they resolve.
+        /// </summary>
+        private static string ModArg(string gameDir, string linkName, string source)
+        {
+            string shortRoot = Path.Combine(gameDir, "!m");
+            try { Directory.CreateDirectory(shortRoot); } catch { }
+            return Junction.TryCreate(Path.Combine(shortRoot, linkName), source)
+                ? "!m\\" + linkName
+                : source;                            // long, but it still works
+        }
+
+        /// <summary>
+        /// A NAME, ALWAYS, AND NEVER "SURVIVOR".
+        ///
+        /// DayZ takes the name only from the command line, and with none it
+        /// calls the player Survivor - as it does everyone else who never set
+        /// one. Asked once, on the first start that has no name, and remembered
+        /// from then on. Pressing OK with the box empty is a real answer: it
+        /// means "you pick".
+        /// </summary>
+        private string PlayerNameForLaunch()
+        {
+            string playerName = _name.Text.Trim();
+            if (playerName.Length == 0 || NameDialog.IsDefault(playerName))
+            {
+                playerName = NameDialog.Ask(Host);
+                _name.Text = playerName;
+                ServerStore.SaveName(playerName);
+                Log("Player name set to " + playerName + " - saved for next time.");
+            }
+            return playerName;
+        }
+
+        /// <summary>
+        /// Checks the game can be started at all, and returns the BattlEye exe
+        /// to start it through. Throws with the reason when it cannot; null when
+        /// the player chose to restart the launcher to fix Steam access instead.
+        /// </summary>
+        private string CheckGameFiles(string gameDir)
+        {
             string bePath = Path.Combine(gameDir, BeExe);
             if (!File.Exists(bePath))
                 throw new Exception(BeExe + " not found in:\r\n" + gameDir +
@@ -7994,14 +8096,18 @@ private void Launch(Row srv)
                 Log("Steam API: SteamAPI_IsSteamRunning() says no - the game would refuse to start.");
                 Log(Elevation.Describe());
 
-                if (!OfferElevation()) return;     // the player chose to fix it properly
+                if (!OfferElevation()) return null;     // the player chose to fix it properly
             }
+            return bePath;
+        }
 
-            string full = BeArgs + " -exe " + GameExe + " " + string.Join(" ", args.ToArray());
-            Log("");
-            Log("Launching through " + BeExe + " so BattlEye attaches:");
-            Log("  " + BeExe + " " + full);
-
+        /// <summary>
+        /// Starts BattlEye's launcher with <paramref name="full"/>, under the
+        /// app id of the build being started. Throws with an explanation when
+        /// Windows refuses.
+        /// </summary>
+        private Process StartGame(string bePath, string gameDir, string full, ulong appId, string gameLabel)
+        {
             // THE GAME MUST START UNDER ITS OWN APP ID, NOT THE LAUNCHER'S.
             //
             // Stable DayZ and Experimental are separate Steam applications -
@@ -8033,22 +8139,22 @@ private void Launch(Row srv)
                 UseShellExecute = false
             };
             // Only ever set a value that is actually one of DayZ's two apps.
-            // live.AppId is decoded from the server's reply, and a server that
-            // answered oddly must not lead to inventing an app id - clearing the
-            // variables instead lets the game fall back to the steam_appid.txt
-            // sitting in its own folder, which is correct for both builds.
-            if (live.AppId == A2S.StableAppId || live.AppId == A2S.ExperimentalAppId)
+            // For a join, the id is decoded from the server's reply, and a
+            // server that answered oddly must not lead to inventing an app id -
+            // clearing the variables instead lets the game fall back to the
+            // steam_appid.txt sitting in its own folder, which is correct for
+            // both builds.
+            if (appId == A2S.StableAppId || appId == A2S.ExperimentalAppId)
             {
-                psi.EnvironmentVariables["SteamAppId"] = live.AppId.ToString();
-                psi.EnvironmentVariables["SteamGameId"] = live.AppId.ToString();
-                Log("  SteamAppId for the game process: " + live.AppId
-                    + " (" + live.GameLabel + ")");
+                psi.EnvironmentVariables["SteamAppId"] = appId.ToString();
+                psi.EnvironmentVariables["SteamGameId"] = appId.ToString();
+                Log("  SteamAppId for the game process: " + appId + " (" + gameLabel + ")");
             }
             else
             {
                 psi.EnvironmentVariables.Remove("SteamAppId");
                 psi.EnvironmentVariables.Remove("SteamGameId");
-                Log("  The server reported app " + live.AppId + ", which is neither DayZ");
+                Log("  The server reported app " + appId + ", which is neither DayZ");
                 Log("  build - letting the game read its own steam_appid.txt instead.");
             }
 
@@ -8088,7 +8194,11 @@ private void Launch(Row srv)
                         + "Verify integrity puts that right," + Environment.NewLine
                         + "  - the game folder is on a drive that is no longer attached.")));
             }
+            return started;
+        }
 
+        private void FollowGameApp(ulong appId, string gameLabel, string gameDir)
+        {
             // ONE GAME RUNNING, NOT TWO.
             //
             // The launcher's Steam session claims DayZ (221100), because that
@@ -8098,12 +8208,12 @@ private void Launch(Row srv)
             // both for as long as the launcher is open. The session is moved
             // onto the build actually being played; it moves back to 221100 by
             // itself the next time anything needs the workshop.
-            if (live.AppId == A2S.ExperimentalAppId || SteamWorkshop.SessionApp != SteamWorkshop.DayZAppId)
+            if (appId == A2S.ExperimentalAppId || SteamWorkshop.SessionApp != SteamWorkshop.DayZAppId)
             {
                 Log("");
-                Log("Moving the launcher's Steam session onto " + live.GameLabel
+                Log("Moving the launcher's Steam session onto " + gameLabel
                     + " so Steam does not count both builds as running.");
-                SteamWorkshop.SwitchApp((uint)live.AppId, gameDir, Log);
+                SteamWorkshop.SwitchApp((uint)appId, gameDir, Log);
 
                 // NOTHING ON SCREEN SHOULD CHANGE.
                 //
@@ -8119,33 +8229,138 @@ private void Launch(Row srv)
                 if (!_steamReady)
                     Log("The browser will reconnect to Steam on the next REFRESH.");
             }
+        }
 
-            // Remember which mods this server actually used, so the Mod
-            // Manager can show when each was last needed. Written now rather
-            // than on exit: the launcher is often closed while the game runs.
-            try { ModIndex.MarkLoaded(mods.Select(m => m.WorkshopId)); }
+        /// <summary>
+        /// The Mod Manager's START WITH MODS: DayZ with the checked mods and no
+        /// server - to the main menu, where the player can play offline or pick
+        /// a server in the game's own browser. Errors are shown, never thrown.
+        /// </summary>
+        internal void StartWithMods(List<ModEntry> mods, ulong appId, int notOnPc)
+        {
+            if (InLaunchCooldown)
+            {
+                MessageBox.Show(Host, "DayZ is already starting - give it a minute.", "Already starting",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            Cursor = Cursors.WaitCursor;
+            try { StartWithModsCore(mods, appId, notOnPc); }
+            catch (Exception ex)
+            {
+                Log("ERROR: " + ex.Message);
+                MessageBox.Show(Host, ex.Message, "A Beautiful Potato Launcher",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally { Cursor = Cursors.Default; }
+        }
+
+        private void StartWithModsCore(List<ModEntry> mods, ulong appId, int notOnPc)
+        {
+            ServerStore.SaveName(_name.Text.Trim());
+            if (IsRunning(GameExe))
+            {
+                MessageBox.Show(Host,
+                    "DayZ is already running.\r\n\r\nClose it completely - check Task Manager for " +
+                    "DayZ_x64.exe and DayZ_BE.exe - then try again.",
+                    "Close DayZ first", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string label = appId == A2S.ExperimentalAppId ? "DayZ Experimental" : "DayZ";
+            string steam = FindSteam();
+            if (steam == null) throw new Exception("Could not find Steam.");
+            string gameDir = FindGameDir(steam, appId);
+            if (gameDir == null) throw new Exception(label + " is not installed.");
+
+            Log("");
+            Log("Starting " + label + " with the Mod Manager's " + mods.Count + " loaded mod(s), no server:");
+            Log("Game  : " + gameDir);
+
+            // Unfinished downloads and vanished folders would stop the game
+            // with a missing-file error, so they are left out - after asking.
+            var ready = new List<KeyValuePair<ModEntry, string>>();
+            var left = new List<string>();
+            foreach (var m in mods)
+            {
+                string folder = m.Folder;
+                if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+                    left.Add(m.Name + " - its folder is gone");
+                else if (m.Status(steam) == "Corrupt")
+                    left.Add(m.Name + " - its download never finished (Repair it in the Mod Manager)");
+                else
+                    ready.Add(new KeyValuePair<ModEntry, string>(m, folder));
+            }
+            if (notOnPc > 0)
+                left.Add(notOnPc + " mod(s) from the list that are no longer on this PC");
+
+            if (left.Count > 0)
+            {
+                foreach (string l in left) Log("  [SKIPPED] " + l);
+                if (MessageBox.Show(Host,
+                        "These will not be loaded:\r\n\r\n  " + string.Join("\r\n  ", left.Take(12))
+                        + (left.Count > 12 ? "\r\n  ...and " + (left.Count - 12) + " more" : "")
+                        + "\r\n\r\nStart " + label + " with the other " + ready.Count + " anyway?",
+                        "Some mods cannot be loaded", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                        MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                    return;
+            }
+
+            // Link names are unique within one start: two local builds of the
+            // same mod in different folders would otherwise share one.
+            var modArgs = new List<string>();
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in ready)
+            {
+                var m = r.Key;
+                string name = m.IsLocal
+                    ? SafeLinkName(Path.GetFileName(r.Value.TrimEnd('\\')).TrimStart('@'))
+                    : m.WorkshopId.ToString();
+                string unique = name;
+                for (int n = 2; !used.Add(unique); n++) unique = name + "_" + n;
+
+                modArgs.Add(ModArg(gameDir, unique, r.Value));
+                Log("  " + (m.IsLocal ? "[local]   " : "[ok]      ") + m.Name + " -> " + r.Value);
+            }
+
+            var args = new List<string>();
+            if (modArgs.Count > 0)
+            {
+                string joined = string.Join(";", modArgs.ToArray());
+                Log("Mod argument: " + joined.Length + " characters.");
+                args.Add("\"-mod=" + joined + "\"");
+            }
+            args.Add("\"-name=" + PlayerNameForLaunch() + "\"");
+
+            var extra = LaunchOptions.Arguments();
+            if (extra.Count > 0)
+            {
+                args.AddRange(extra);
+                Log("Launch options: " + string.Join(" ", extra));
+            }
+            args.Add("-nolauncher");
+
+            string bePath = CheckGameFiles(gameDir);
+            if (bePath == null) return;
+
+            string full = BeArgs + " -exe " + GameExe + " " + string.Join(" ", args.ToArray());
+            Log("Launching through " + BeExe + ":");
+            Log("  " + BeExe + " " + full);
+
+            Process started = StartGame(bePath, gameDir, full, appId, label);
+            FollowGameApp(appId, label, gameDir);
+
+            try { ModIndex.MarkLoaded(ready.Select(r => r.Key.WorkshopId).Where(id => id != 0)); }
             catch { }
 
-            // SAY IT WHERE IT WILL BE SEEN.
-            //
-            // The log line below is the whole of what the launcher used to
-            // tell anyone, and the log panel is small and easy to miss - so
-            // players took the silence for failure and pressed CONNECT again.
-            // Shown modeless: the launcher stays usable behind it, and it
-            // closes itself when the game's process appears.
-            // The list and CONNECT go quiet now, not when Launch returns -
-            // the seconds being guarded against are the ones right here.
             BeginLaunchCooldown();
-
-            var waiting = new LaunchingForm(srv.Name, GameExe, started, Log, EndLaunchCooldown);
+            var waiting = new LaunchingForm(label + " - " + ready.Count + " mod(s)", GameExe, started, Log, EndLaunchCooldown);
             waiting.Show(Host);
-
-            // "Playing DayZ" in Discord until the game closes - see DiscordPresence.
             DiscordPresence.ShowWhilePlaying(GameExe, line => { try { BeginInvoke((Action)(() => Log(line))); } catch { } });
 
             Log("");
             Log("Started. DayZ takes a minute or two to appear - be patient.");
-            _status.Text = "Launched " + srv.Endpoint;
+            _status.Text = "Started " + label + " with " + ready.Count + " mod(s)";
         }
 
         /// <summary>
@@ -8640,7 +8855,12 @@ private static ServerRules QueryModsChecked(Row row)
                 return;
             }
 
-            _modManager = new ModManagerForm(steam, gameDir);
+            // The DayZ builds START WITH MODS can start - stable first.
+            var builds = Games.IsZomboid ? new ulong[0]
+                : new[] { A2S.StableAppId, A2S.ExperimentalAppId }
+                      .Where(app => FindGameDir(steam, app) != null).ToArray();
+
+            _modManager = new ModManagerForm(steam, gameDir, builds, StartWithMods);
             _modManager.FormClosed += (s2, e2) => _modManager = null;
             _modManager.Show(Host);
         }

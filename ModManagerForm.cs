@@ -63,10 +63,29 @@ namespace ABeautifulPotatoLauncher
         private volatile bool _closing;
         private int _deepDone;
 
-        public ModManagerForm(string steamPath, string gameDir)
+        // ---- loaded mods, presets and START WITH MODS (DayZ only) - see LoadedMods ----
+        private readonly ulong[] _builds;
+        private readonly Action<List<ModEntry>, ulong, int> _startWithMods;
+        private ComboBox _presets, _build;
+        private Label _loadedLabel;
+        private bool _fillingPresets;
+
+        // The panel above the library: every loaded mod, then the loaded keys
+        // that match no mod on this PC.
+        private ListView _loadedList;
+        private List<ModEntry> _loadedRows = new List<ModEntry>();
+        private List<string> _missing = new List<string>();
+        private const string NoPreset = "(no preset)";
+
+        /// <param name="builds">The DayZ builds installed, by app id, for START WITH MODS.</param>
+        /// <param name="startWithMods">Starts the game with these mods: the mods, the app id, and how many checked mods are no longer on this PC.</param>
+        public ModManagerForm(string steamPath, string gameDir, ulong[] builds,
+                              Action<List<ModEntry>, ulong, int> startWithMods)
         {
             _steam = steamPath;
             _gameDir = gameDir;
+            _builds = builds ?? new ulong[0];
+            _startWithMods = startWithMods;
 
             Text = "Mod Manager";
             StartPosition = FormStartPosition.CenterParent;
@@ -101,7 +120,13 @@ namespace ABeautifulPotatoLauncher
 
             Shown += (s, e) => Start();
             FormClosing += (s, e) => { _closing = true; ModIndex.Save(); };
+
+            // A join replaces the loaded mods while this window may be open.
+            LoadedMods.Changed += OnLoadedChanged;
+            FormClosed += (s, e) => LoadedMods.Changed -= OnLoadedChanged;
         }
+
+        private static bool WithLoading { get { return !Games.IsZomboid; } }
 
         // ----------------------------------------------------------- layout --
 
@@ -119,7 +144,7 @@ namespace ABeautifulPotatoLauncher
             };
             bottom.Controls.Add(_status);
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = Ink };
+            var top = new Panel { Dock = DockStyle.Top, Height = WithLoading ? 72 : 38, BackColor = Ink };
             Controls.Add(top);
 
             var searchLabel = new Label
@@ -172,6 +197,8 @@ namespace ABeautifulPotatoLauncher
             tips.SetToolTip(validate, "Asks Steam to re-check every installed mod. This takes a long time.");
             tips.SetToolTip(unsub, "Unsubscribes from EVERY DayZ mod and deletes them from disk.");
             tips.SetToolTip(byId, "Installs a workshop item by its id, without hunting for it in Steam.");
+
+            if (WithLoading) BuildLoadingRow(top, tips);
 
             // ---- detail panel on the right ----
             _detail = new Panel { Dock = DockStyle.Right, Width = 330, BackColor = Panel, Padding = new Padding(10) };
@@ -295,7 +322,11 @@ namespace ABeautifulPotatoLauncher
                 ForeColor = Color.Gainsboro,
                 BorderStyle = BorderStyle.FixedSingle,
                 HideSelection = false,
-                ShowItemToolTips = true
+                ShowItemToolTips = true,
+                // The tick is "load this mod" - see LoadedMods. A virtual list
+                // keeps no state of its own, so the ticks are drawn from
+                // LoadedMods in OnRetrieveItem and changed in OnListClick.
+                CheckBoxes = WithLoading
             };
             _list.Columns.Add("Mod Name", 300);
             _list.Columns.Add("Workshop ID", 100);
@@ -309,6 +340,18 @@ namespace ABeautifulPotatoLauncher
             _list.SelectedIndexChanged += (s, e) => ShowDetail();
             _list.MouseClick += OnListClick;
             _list.ColumnClick += OnColumnClick;
+            _list.KeyDown += (s, e) =>
+            {
+                // Space ticks or unticks every selected row, all the same way.
+                if (!WithLoading || e.KeyCode != Keys.Space) return;
+                e.SuppressKeyPress = true;
+                var rows = _list.SelectedIndices.Cast<int>()
+                                .Where(i => i >= 0 && i < _shown.Count).Select(i => _shown[i]).ToList();
+                if (rows.Count == 0) return;
+                bool on = !LoadedMods.Contains(rows[0]);
+                foreach (var m in rows) LoadedMods.Set(m, on);
+                LoadedEdited();
+            };
             ListViewTweaks.Smooth(_list);
 
             // Repair and Remove are cells the player clicks, so say so. A local
@@ -316,11 +359,37 @@ namespace ABeautifulPotatoLauncher
             // and those cells are left blank, which HandOverColumns skips.
             UiCursors.HandOverColumns(_list, (item, col) => RowAt(item.Index) != null,
                                       ColRepair, ColRemove);
-            Controls.Add(_list);
+
+            // The loaded mods sit above the library, always in view, with a
+            // handle between the two to give either more room.
+            Control listArea = _list;
+            if (WithLoading)
+            {
+                var area = new Panel { Dock = DockStyle.Fill, BackColor = Ink };
+                var loaded = BuildLoadedPanel();
+                var split = new Splitter
+                {
+                    Dock = DockStyle.Top,
+                    Height = 7,
+                    BackColor = Color.FromArgb(70, 70, 78),
+                    MinSize = 90,         // the loaded panel never shrinks below this
+                    MinExtra = 150,       // nor the library below this
+                    Cursor = Cursors.HSplit
+                };
+                area.Controls.Add(_list);
+                area.Controls.Add(split);
+                area.Controls.Add(loaded);
+                // Same rule as the grip below: the highest index docks first.
+                area.Controls.SetChildIndex(_list, 0);
+                area.Controls.SetChildIndex(split, 1);
+                area.Controls.SetChildIndex(loaded, 2);
+                listArea = area;
+            }
+            Controls.Add(listArea);
 
             // Innermost first: the list fills what is left, the grip sits just
             // inside the detail panel, and the panel holds the right edge.
-            Controls.SetChildIndex(_list, 0);
+            Controls.SetChildIndex(listArea, 0);
             Controls.SetChildIndex(_grip, 1);
 
             FitFactColumns();
@@ -340,6 +409,356 @@ namespace ABeautifulPotatoLauncher
             return b;
         }
 
+        // ------------------------------------------- loaded mods and presets --
+
+        /// <summary>
+        /// The second row: Presets [v] SAVE EDIT DELETE | CLEAR |
+        /// build [v] START WITH MODS. The count is the loaded panel's header.
+        /// </summary>
+        private void BuildLoadingRow(Panel top, ToolTip tips)
+        {
+            const int y = 40;
+            top.Controls.Add(new Label { Text = "Presets", Bounds = new Rectangle(10, y + 4, 50, 20), ForeColor = Dim });
+
+            _presets = new ComboBox
+            {
+                Bounds = new Rectangle(62, y + 1, 190, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro
+            };
+            _presets.SelectedIndexChanged += (s, e) =>
+            {
+                if (_fillingPresets || _presets.SelectedIndex <= 0) return;
+                LoadedMods.ApplyPreset((string)_presets.SelectedItem);
+            };
+            top.Controls.Add(_presets);
+
+            var save = MakeButton("SAVE", new Rectangle(258, y, 56, 25), Panel2);
+            save.Click += (s, e) => SavePreset();
+            var edit = MakeButton("EDIT", new Rectangle(318, y, 50, 25), Panel2);
+            edit.Click += (s, e) => EditPreset();
+            var delete = MakeButton("DELETE", new Rectangle(372, y, 62, 25), Color.FromArgb(70, 55, 55));
+            delete.Click += (s, e) => DeletePreset();
+            top.Controls.AddRange(new Control[] { save, edit, delete });
+
+            var clear = MakeButton("CLEAR", new Rectangle(448, y, 60, 25), Panel2);
+            clear.Click += (s, e) =>
+            {
+                if (LoadedMods.Count == 0) return;
+                LoadedMods.Clear();
+            };
+            top.Controls.Add(clear);
+
+            var start = MakeButton("START WITH MODS", new Rectangle(0, y, 150, 25),
+                                   Color.FromArgb(55, 85, 55));
+            start.Click += (s, e) => StartWithMods();
+            top.Controls.Add(start);
+
+            _build = new ComboBox
+            {
+                Bounds = new Rectangle(0, y + 1, 124, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro
+            };
+            foreach (ulong app in _builds) _build.Items.Add(BuildName(app));
+            if (_builds.Length == 0) { _build.Items.Add("DayZ not found"); start.Enabled = false; }
+            int want = Array.IndexOf(_builds, LoadedMods.Build);
+            _build.SelectedIndex = want >= 0 ? want : 0;
+            _build.SelectedIndexChanged += (s, e) =>
+            {
+                if (_build.SelectedIndex >= 0 && _build.SelectedIndex < _builds.Length)
+                    LoadedMods.Build = _builds[_build.SelectedIndex];
+            };
+            top.Controls.Add(_build);
+
+            // START and the build sit at the right edge. Placed on every
+            // resize: the panel's width is not settled yet while the window is
+            // being built.
+            Action place = () =>
+            {
+                int w = top.ClientSize.Width;
+                start.Left = w - 160;
+                _build.Left = w - 290;
+            };
+            top.Resize += (s, e) => place();
+            place();
+
+            tips.SetToolTip(_presets, "Pick a saved set of mods to load.");
+            tips.SetToolTip(save, "Saves the ticked mods as a new preset.");
+            tips.SetToolTip(edit, "Renames the chosen preset, and can give it the mods ticked now.");
+            tips.SetToolTip(delete, "Deletes the chosen preset. No mods are touched.");
+            tips.SetToolTip(clear, "Unticks every mod.");
+            tips.SetToolTip(start, "Starts DayZ with the ticked mods, at the main menu - no server.");
+
+            FillPresets();
+        }
+
+        /// <summary>
+        /// The loaded mods, above the library: a header with the count and
+        /// where they came from, and a list of them. Unticking a row here
+        /// unloads it, the same as in the library.
+        /// </summary>
+        private Panel BuildLoadedPanel()
+        {
+            var panel = new Panel { Dock = DockStyle.Top, Height = 190, BackColor = Ink };
+
+            _loadedList = new ListView
+            {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                FullRowSelect = true,
+                VirtualMode = true,
+                BackColor = Panel,
+                ForeColor = Color.Gainsboro,
+                BorderStyle = BorderStyle.FixedSingle,
+                HideSelection = false,
+                ShowItemToolTips = true,
+                CheckBoxes = true
+            };
+            _loadedList.Columns.Add("Loaded Mod", 300);
+            _loadedList.Columns.Add("Workshop ID", 100);
+            _loadedList.Columns.Add("Status", 100);
+            _loadedList.Columns.Add("Last Update", 120);
+            _loadedList.Columns.Add("Last Loaded", 120);
+            _loadedList.Columns.Add("Size", 84);
+            _loadedList.RetrieveVirtualItem += OnRetrieveLoaded;
+            _loadedList.SelectedIndexChanged += (s, e) =>
+            {
+                if (_loadedList.SelectedIndices.Count == 0) return;
+                int i = _loadedList.SelectedIndices[0];
+                if (i >= 0 && i < _loadedRows.Count) ShowDetail(_loadedRows[i]);
+            };
+            _loadedList.MouseClick += (s, e) =>
+            {
+                var hit = _loadedList.HitTest(e.Location);
+                if (hit.Item != null && hit.Location == ListViewHitTestLocations.StateImage)
+                    Unload(new[] { hit.Item.Index });
+            };
+            _loadedList.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode != Keys.Space) return;
+                e.SuppressKeyPress = true;
+                Unload(_loadedList.SelectedIndices.Cast<int>().ToArray());
+            };
+            ListViewTweaks.Smooth(_loadedList);
+            panel.Controls.Add(_loadedList);
+
+            _loadedLabel = new Label
+            {
+                Dock = DockStyle.Top,
+                Height = 24,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0),
+                ForeColor = Good,
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                AutoEllipsis = true,
+                UseMnemonic = false
+            };
+            panel.Controls.Add(_loadedLabel);
+            panel.Controls.SetChildIndex(_loadedList, 0);
+            panel.Controls.SetChildIndex(_loadedLabel, 1);
+            return panel;
+        }
+
+        private void OnRetrieveLoaded(object sender, RetrieveVirtualItemEventArgs e)
+        {
+            int i = e.ItemIndex;
+            ListViewItem it;
+            if (i >= 0 && i < _loadedRows.Count)
+                it = MakeRow(_loadedRows[i], false);
+            else if (i >= _loadedRows.Count && i < _loadedRows.Count + _missing.Count)
+            {
+                // Loaded, but nothing in the library matches it any more.
+                string key = _missing[i - _loadedRows.Count];
+                bool local = key.StartsWith("local:");
+                it = new ListViewItem(new[]
+                {
+                    local ? Path.GetFileName(key.Substring(6)) : "Workshop item " + key,
+                    local ? "Local" : key,
+                    "Not on this PC", "", "", ""
+                })
+                { UseItemStyleForSubItems = false };
+                foreach (ListViewItem.ListViewSubItem sub in it.SubItems) sub.ForeColor = Dim;
+                it.SubItems[ColName].ForeColor = Warn;
+                it.SubItems[ColStatus].ForeColor = Warn;
+                it.ToolTipText = "Loaded, but not in the mod library on this PC - removed, or its folder moved. "
+                               + "Untick it to forget it.";
+            }
+            else it = new ListViewItem(new[] { "", "", "", "", "", "" });
+            it.StateImageIndex = 1;
+            e.Item = it;
+        }
+
+        /// <summary>Unticks the loaded panel's rows at these indexes.</summary>
+        private void Unload(int[] rows)
+        {
+            var mods = rows.Where(i => i >= 0 && i < _loadedRows.Count).Select(i => _loadedRows[i]).ToList();
+            var keys = rows.Where(i => i >= _loadedRows.Count && i < _loadedRows.Count + _missing.Count)
+                           .Select(i => _missing[i - _loadedRows.Count]).ToList();
+            if (mods.Count + keys.Count == 0) return;
+            foreach (var m in mods) LoadedMods.Set(m, false);
+            foreach (var k in keys) LoadedMods.Remove(k);
+            LoadedEdited();
+        }
+
+        private static string BuildName(ulong app)
+        {
+            return app == A2S.ExperimentalAppId ? "DayZ Experimental" : "DayZ";
+        }
+
+        private void FillPresets()
+        {
+            if (_presets == null) return;
+            _fillingPresets = true;
+            try
+            {
+                _presets.Items.Clear();
+                _presets.Items.Add(NoPreset);
+                foreach (var p in LoadedMods.Presets()) _presets.Items.Add(p.Name);
+
+                int at = 0;
+                if (LoadedMods.Preset != null)
+                    for (int i = 1; i < _presets.Items.Count; i++)
+                        if (string.Equals((string)_presets.Items[i], LoadedMods.Preset, StringComparison.OrdinalIgnoreCase))
+                            at = i;
+                _presets.SelectedIndex = at;
+            }
+            finally { _fillingPresets = false; }
+        }
+
+        private string ChosenPreset
+        {
+            get { return _presets == null || _presets.SelectedIndex <= 0 ? null : (string)_presets.SelectedItem; }
+        }
+
+        /// <summary>Rebuilds the loaded panel - its rows and its header - from LoadedMods.</summary>
+        private void ShowLoadedCount()
+        {
+            if (_loadedList == null) return;
+            List<string> missing;
+            _loadedRows = LoadedMods.In(_all, out missing);   // in the library's order
+            _missing = missing;
+
+            int n = _loadedRows.Count;
+            string text;
+            if (n + missing.Count == 0)
+                text = "LOADED MODS  -  none. Tick mods below, pick a preset, or join a server.";
+            else
+            {
+                text = "LOADED MODS  -  " + n + (n == 1 ? " mod" : " mods");
+                if (missing.Count > 0) text += " (+" + missing.Count + " not on this PC)";
+                if (LoadedMods.From.Length > 0) text += "  -  " + LoadedMods.From;
+            }
+            _loadedLabel.Text = text;
+            _loadedLabel.ForeColor = missing.Count > 0 ? Warn : n == 0 ? Dim : Good;
+
+            _loadedList.BeginUpdate();
+            try
+            {
+                _loadedList.SelectedIndices.Clear();
+                _loadedList.VirtualListSize = n + missing.Count;
+            }
+            catch { }
+            finally { _loadedList.EndUpdate(); }
+            _loadedList.Invalidate();
+        }
+
+        /// <summary>A join, a preset or CLEAR replaced the loaded mods.</summary>
+        private void OnLoadedChanged()
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { try { BeginInvoke((Action)OnLoadedChanged); } catch { } return; }
+            FillPresets();
+            ShowLoadedCount();
+            _list.Invalidate();
+        }
+
+        /// <summary>A tick was changed by hand.</summary>
+        private void LoadedEdited()
+        {
+            LoadedMods.MarkEdited();
+            ShowLoadedCount();
+            _list.Invalidate();
+        }
+
+        private void SavePreset()
+        {
+            if (LoadedMods.Count == 0)
+            {
+                MessageBox.Show(this, "Tick the mods to save first.", "Nothing to save",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            bool unused = false;
+            string name = PresetDialog.Ask(this, "Save preset",
+                "Save the " + LoadedMods.Count + " ticked mod(s) as:", ChosenPreset ?? "", null, ref unused);
+            if (name == null) return;
+
+            bool exists = LoadedMods.Presets().Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (exists && MessageBox.Show(this, "There is already a preset called \"" + name + "\". Replace it?",
+                    "Replace preset", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            LoadedMods.SavePreset(name);
+            FillPresets();
+            ShowLoadedCount();
+        }
+
+        private void EditPreset()
+        {
+            string old = ChosenPreset;
+            if (old == null)
+            {
+                MessageBox.Show(this, "Pick a preset to edit first.", "No preset chosen",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            bool take = true;
+            string name = PresetDialog.Ask(this, "Edit preset", "Name:", old,
+                "Replace its mods with the " + LoadedMods.Count + " ticked now", ref take);
+            if (name == null) return;
+
+            if (!string.Equals(name, old, StringComparison.OrdinalIgnoreCase)
+                && LoadedMods.Presets().Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                && MessageBox.Show(this, "There is already a preset called \"" + name + "\". Replace it?",
+                       "Replace preset", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            LoadedMods.EditPreset(old, name, take);
+            FillPresets();
+            ShowLoadedCount();
+        }
+
+        private void DeletePreset()
+        {
+            string name = ChosenPreset;
+            if (name == null) return;
+            if (MessageBox.Show(this, "Delete the preset \"" + name + "\"?\r\n\r\nOnly the preset goes - no mods are touched.",
+                    "Delete preset", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                return;
+            LoadedMods.DeletePreset(name);
+            FillPresets();
+        }
+
+        private void StartWithMods()
+        {
+            if (_startWithMods == null || _builds.Length == 0) return;
+            int notFound;
+            var mods = LoadedMods.In(_all, out notFound);
+            if (mods.Count == 0 && MessageBox.Show(this,
+                    "No mods are ticked. Start DayZ without mods?", "No mods",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            int b = _build.SelectedIndex;
+            _startWithMods(mods, _builds[b >= 0 && b < _builds.Length ? b : 0], notFound);
+        }
+
         // ------------------------------------------------------- the scans --
 
         private void Start()
@@ -349,6 +768,7 @@ namespace ABeautifulPotatoLauncher
             _all = ModIndex.FastScan(_steam);
             SortAll();
             ApplyFilter();
+            ShowLoadedCount();
 
             _status.Text = string.Format("{0} mods listed in {1} ms - measuring sizes in the background...",
                                          _all.Count, sw.ElapsedMilliseconds);
@@ -386,6 +806,7 @@ namespace ABeautifulPotatoLauncher
                     {
                         _status.Text = string.Format("Measuring sizes... {0} of {1}", n, todo.Count);
                         _list.Invalidate();
+                        if (_loadedList != null) _loadedList.Invalidate();
                     }));
                 }
                 catch { return; }
@@ -400,7 +821,8 @@ namespace ABeautifulPotatoLauncher
                     _status.Text = string.Format("{0} mods, {1:N1} GB on disk.",
                                                  _all.Count, total / 1073741824.0);
                     _list.Invalidate();
-                    ShowDetail();
+                    if (_loadedList != null) _loadedList.Invalidate();
+                    ShowDetail(_selected);
                 }));
             }
             catch { }
@@ -450,10 +872,9 @@ namespace ABeautifulPotatoLauncher
         private void ApplyFilter()
         {
             string q = _search.Text.Trim();
-            _shown = q.Length == 0
-                ? new List<ModEntry>(_all)
-                : _all.Where(m =>
-                        m.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+            _shown = _all.Where(m =>
+                        q.Length == 0
+                     || m.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
                      || m.WorkshopId.ToString().IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
                      || (m.Author ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
                     .ToList();
@@ -481,22 +902,30 @@ namespace ABeautifulPotatoLauncher
                 return;
             }
             var m = _shown[e.ItemIndex];
-            string status = m.Status(_steam);
+            var it = MakeRow(m, true);
+            // The state image is set outright: a new item's is "none", so an
+            // unticked row drew no box at all, only a gap.
+            if (WithLoading) it.StateImageIndex = LoadedMods.Contains(m) ? 1 : 0;
+            e.Item = it;
+        }
 
-            var it = new ListViewItem(new[]
+        /// <summary>A mod's row, for the library or - without the Repair and Remove cells - the loaded panel.</summary>
+        private ListViewItem MakeRow(ModEntry m, bool actions)
+        {
+            string status = m.Status(_steam);
+            var cells = new List<string>
             {
                 m.Name,
                 m.IdText,
                 status,
                 m.InstalledAt == DateTime.MinValue ? "" : m.InstalledAt.ToLocalTime().ToString("yyyy-MM-dd"),
                 m.LastLoaded == DateTime.MinValue ? "never" : m.LastLoaded.ToLocalTime().ToString("yyyy-MM-dd"),
-                m.SizeText,
-                // Steam owns neither of these actions for a hand-installed mod:
-                // there is nothing to re-download and no subscription to drop.
-                m.IsLocal ? "" : "Repair",
-                m.IsLocal ? "" : "Remove"
-            })
-            { UseItemStyleForSubItems = false };
+                m.SizeText
+            };
+            // Steam owns neither of these actions for a hand-installed mod:
+            // there is nothing to re-download and no subscription to drop.
+            if (actions) { cells.Add(m.IsLocal ? "" : "Repair"); cells.Add(m.IsLocal ? "" : "Remove"); }
+            var it = new ListViewItem(cells.ToArray()) { UseItemStyleForSubItems = false };
 
             // Unpacked is its own colour: it is not an error, but it is not the
             // ordinary case either, and the owner should be able to pick those
@@ -511,14 +940,16 @@ namespace ABeautifulPotatoLauncher
             it.SubItems[ColUpdated].ForeColor = Dim;
             it.SubItems[ColLoaded].ForeColor = m.LastLoaded == DateTime.MinValue ? Dim : Color.Gainsboro;
             it.SubItems[ColSize].ForeColor = Dim;
-            it.SubItems[ColRepair].ForeColor = Link;
-            it.SubItems[ColRemove].ForeColor = Bad;
+            if (actions)
+            {
+                it.SubItems[ColRepair].ForeColor = Link;
+                it.SubItems[ColRemove].ForeColor = Bad;
+            }
 
             // Hovering a row says why it is in that state. The list already has
             // ShowItemToolTips on for this.
             it.ToolTipText = m.StatusDetail(_steam);
-
-            e.Item = it;
+            return it;
         }
 
         /// <summary>
@@ -541,6 +972,13 @@ namespace ABeautifulPotatoLauncher
 
             _selected = _shown[hit.Item.Index];
 
+            if (WithLoading && hit.Location == ListViewHitTestLocations.StateImage)
+            {
+                LoadedMods.Set(_selected, !LoadedMods.Contains(_selected));
+                LoadedEdited();
+                return;
+            }
+
             // A local mod has no workshop id, so asking Steam to repair or
             // remove it would act on item 0 - which is nothing at all.
             if (_selected.IsLocal) return;
@@ -554,7 +992,13 @@ namespace ABeautifulPotatoLauncher
         private void ShowDetail()
         {
             var sel = _list.SelectedIndices.Count > 0 ? _list.SelectedIndices[0] : -1;
-            _selected = sel >= 0 && sel < _shown.Count ? _shown[sel] : null;
+            ShowDetail(sel >= 0 && sel < _shown.Count ? _shown[sel] : null);
+        }
+
+        /// <summary>Shows <paramref name="mod"/> in the pane - picked in the library or in the loaded panel.</summary>
+        private void ShowDetail(ModEntry mod)
+        {
+            _selected = mod;
 
             _facts.Items.Clear();
             if (_statusDetail != null) _statusDetail.Text = "";

@@ -98,9 +98,13 @@ namespace ABeautifulPotatoLauncher
                 if (!canSwap)
                     status.Text = "The launcher's folder is read-only, so it cannot update itself here.";
 
+                // Set once an antivirus has stopped the swap: trying again would
+                // only be stopped again, so the button becomes the way round it.
+                bool blocked = false;
+
                 go.Click += async (s, e) =>
                 {
-                    if (!canSwap)
+                    if (!canSwap || blocked)
                     {
                         try { Process.Start(newest.PageUrl.Length > 0 ? newest.PageUrl : Updater.ReleasesPage); }
                         catch { }
@@ -118,8 +122,19 @@ namespace ABeautifulPotatoLauncher
                             catch { }
                         });
                         go.Text = "INSTALLING...";
-                        Updater.ApplyAndRestart(file);
+                        await Updater.ApplyAndRestartAsync(file);
                         Application.Exit();
+                    }
+                    catch (UpdateBlockedException ex)
+                    {
+                        blocked = true;
+                        status.ForeColor = Color.FromArgb(225, 175, 90);
+                        status.Text = "Blocked, most likely by your antivirus. Nothing was changed.";
+                        go.Text = "OPEN DOWNLOAD PAGE";
+                        go.Enabled = true;
+                        f.ControlBox = true;
+                        MessageBox.Show(f, ex.Message, "Update blocked",
+                                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                     catch (Exception ex)
                     {

@@ -98,7 +98,8 @@ namespace ABeautifulPotatoLauncher
             return 0;
         }
         public bool BattlEye    { get { return HasTag("battleye"); } }
-        public bool ThirdPerson { get { return !HasTag("no3rd"); } }
+        /// <summary>First person, third, or third in vehicles only - see ViewModes for 1.30's reversed tag.</summary>
+        public ViewMode View { get { return ViewModes.Of(Tags, Name); } }
         public bool PrivateHive { get { return HasTag("privHive"); } }
 
         private bool HasTag(string t)

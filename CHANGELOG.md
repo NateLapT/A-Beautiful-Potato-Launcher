@@ -16,6 +16,48 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.2] - 2026-10-16
+
+### Fixed
+
+- **3rd person was shown backwards on DayZ 1.30 servers.** 1.30 turned the
+  third-person setting into three modes (off, on, vehicles only) and the
+  server tag the list reads now means the opposite of what it did: it is set
+  when third person is ON. The "3rd Person View" filter follows the new
+  meaning. Measured live: every 1.30 server named 3PP carries the tag.
+- **An antivirus blocking an update no longer leaves you without a launcher.**
+  The update now downloads as an .exe, so a scanner judges it before anything
+  is replaced, and is read back to check it survived. The new version then has
+  to report that it started; if it can't start, or is closed straight away,
+  the old version is put back and you're told, with the download page to fall
+  back on. What happened is written to the log. (Takes effect for updates
+  after this one.)
+
+### Added
+
+- **A View column** in the server list: 1PP, 3PP or V3PP. Servers do not
+  publish "vehicles only" - it looks the same as full third person - so V3PP
+  is shown for a server that allows third person but calls itself 1PP. The
+  filter counts V3PP as first person, as the game's own browser does.
+
+- **Load mods from the Mod Manager.** Every mod has a tick box: ticked means
+  loaded. Click a box, or select several rows and press Space. CLEAR unticks
+  everything.
+- **A Loaded Mods panel** sits above the mod list, always in view: every
+  loaded mod, the count, and where the set came from (a server, a preset).
+  Untick a row there to unload it; ticked mods no longer on this PC are listed
+  too, so they can be forgotten. Drag the bar beneath it to resize.
+- **START WITH MODS** starts DayZ (or Experimental, picked beside it) with the
+  ticked mods and no server, at the main menu. Mods whose download never
+  finished or whose folder is gone are named and left out, after asking.
+- **Joining a server makes its mods the loaded ones.** After a join from the
+  server list, the ticks are cleared and the mods that server loaded are
+  ticked - including the copy you chose for any mod - so START WITH MODS
+  starts the same set.
+- **Presets.** A Presets drop-down applies a saved set of ticks. SAVE saves
+  the ticked mods under a name, EDIT renames the chosen preset and can give
+  it the mods ticked now, DELETE removes it (no mods are touched).
+
 ## [0.9.1] - 2026-10-15
 
 ### Fixed
