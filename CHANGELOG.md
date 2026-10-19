@@ -16,6 +16,39 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.3] - 2026-10-19
+
+### Fixed
+
+- **The Recent tab showed only a few of your servers.** Steam reports the
+  whole history at once and then answers for about one server a second, so
+  the list looked finished long before it was. Recent, Friends and LAN now
+  wait for Steam to finish and count the servers that answered.
+- **A server's mod list could be read short.** In rare cases the end of the
+  list was found too early, so mods were missed and joining got you kicked
+  for one of them. Where more of the list follows, it is now read to the
+  real end.
+- **The Map dropdown offered only the maps on screen** - two or three on
+  Recent, Favorites or LAN. It now lists every DayZ map in the server list,
+  fetched once in the background. The Country dropdown counts the saved
+  Community and Official lists too.
+- **Windows' "publisher could not be verified" prompt on every start.** The
+  installed copy no longer inherits the download's "from the internet" mark,
+  so the prompt appears once, for the download, not every time.
+- **Typing in a dropdown could lag or close the launcher.** Windows'
+  autocomplete is replaced with the launcher's own: typing narrows the list
+  to entries containing what you typed, anywhere in the name.
+
+### Changed
+
+- **The filter panel opens much faster.** It is built in the background
+  after start-up instead of on first click, and opening or closing it no
+  longer re-lays out the whole window. Opening and closing it is no longer
+  written to the log.
+- **The server list and mod list draw about eight times faster**, so
+  scrolling, selecting and live updates are smoother.
+- Test builds show "Beta" before the version in the footer and the log.
+
 ## [0.9.2] - 2026-10-16
 
 ### Fixed

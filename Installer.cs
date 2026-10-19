@@ -223,7 +223,12 @@ namespace ABeautifulPotatoLauncher
                 try { File.Delete(old); } catch { }
                 File.Move(target, old);
             }
-            File.Copy(RunningExe, target);
+            // Written out as a new file rather than File.Copy, which carries
+            // the browser's "downloaded from the internet" mark across with
+            // it. An unsigned exe with that mark gets Windows' "publisher
+            // could not be verified" prompt on every start, not just the
+            // first; the player has already chosen to run this copy.
+            File.WriteAllBytes(target, File.ReadAllBytes(RunningExe));
 
             string config = RunningExe + ".config";
             if (File.Exists(config)) File.Copy(config, target + ".config", true);

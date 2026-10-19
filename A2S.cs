@@ -601,10 +601,16 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         private static ServerRules TryParseFrom(byte[] blob, int start, bool canonicalOnly)
         {
+            int textBuilt;
+            return TryParseFrom(blob, start, canonicalOnly, out textBuilt);
+        }
+
+        private static ServerRules TryParseFrom(byte[] blob, int start, bool canonicalOnly, out int textBuilt)
+        {
             var result = new ServerRules();
             int at = start;
             int skipped = 0;
-            int textBuilt = 0;
+            textBuilt = 0;
 
             while (at < blob.Length)
             {
@@ -613,6 +619,17 @@ namespace ABeautifulPotatoLauncher
                     // See MadeOfText: a list in which EVERY record was built out
                     // of signature names is a reading of the signature list.
                     if (textBuilt == result.Mods.Count) return null;
+
+                    // See ContinuePast: the end proven here can be a false one.
+                    var more = ContinuePast(blob, at, canonicalOnly);
+                    if (more != null)
+                    {
+                        result.Mods.AddRange(more.Mods);
+                        result.Signatures.AddRange(more.Signatures);
+                        result.Description = more.Description;
+                        result.Complete = true;
+                        return result;
+                    }
 
                     ReadTail(blob, at, result);
                     result.Complete = true;
@@ -635,6 +652,40 @@ namespace ABeautifulPotatoLauncher
 
             if (result.Mods.Count > 0 && textBuilt == result.Mods.Count) return null;
             return result.Mods.Count > 0 ? result : null;
+        }
+
+        /// <summary>
+        /// The rest of the list when a record starts where TailFits found an
+        /// end - or null when the end there is the real one.
+        ///
+        /// WHY AN END CAN BE FALSE
+        ///   TailFits reads the byte after a record as the signature count. On
+        ///   a local server loading 16 mods, the byte after the first record
+        ///   was the first byte of the next mod's hash, 0x6F - and 111
+        ///   length-prefixed blocks plus the description happened to finish
+        ///   exactly on the last byte. The walk from the true start stopped
+        ///   there with ONE mod, a walk that skipped into the second record
+        ///   read the other 15, and 15 won. The player was kicked for the
+        ///   first mod. Hashes change with every rebuild, so any list can hit
+        ///   this, losing every mod before the false end.
+        ///
+        ///   So where a record ALSO starts at the end found, the walk carries
+        ///   on, and the longer reading wins only if it too ends exactly on the
+        ///   last byte - the proof is kept, the false end just loses to it.
+        ///   Records cut out of signature names (see MadeOfText) are refused
+        ///   outright here: at the REAL end, those are what a continuation
+        ///   would find.
+        /// </summary>
+        private static ServerRules ContinuePast(byte[] blob, int at, bool canonicalOnly)
+        {
+            ulong id; string name; int next;
+            if (!TryRecord(blob, at, canonicalOnly, out id, out name, out next)
+                || string.IsNullOrWhiteSpace(name) || !LooksLikeModName(name)) return null;
+
+            int textBuilt;
+            var more = TryParseFrom(blob, at, canonicalOnly, out textBuilt);
+            if (more == null || !more.Complete || textBuilt > 0) return null;
+            return more;
         }
 
         /// <summary>

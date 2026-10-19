@@ -17,9 +17,15 @@
          [Unreleased] section of CHANGELOG.md under the same number. -->
     <!-- Written and compared like a decimal: 0.55 comes BEFORE 0.6. The
          GitHub release tag must match, with a v: v0.55. See Updater. -->
-    <Version>0.9.2</Version>
+    <Version>0.9.3</Version>
     <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
-    <FileVersion>0.9.2.0</FileVersion>
+    <FileVersion>0.9.3.0</FileVersion>
+
+    <!-- An unpublished build: the footer and the log say "Beta v0.9.3", so a
+         test copy is never mistaken for the release. The version number
+         itself is untouched - update checks compare that alone. Set to false
+         when cutting the release, and back to true once it is out. -->
+    <Beta>false</Beta>
 
     <!-- The build time, appended to the informational version as
          "0.3+20260921.0510" (UTC). The version number only changes on a
@@ -32,6 +38,13 @@
          not resources, so they are kept out of the build. -->
     <EnableDefaultItems>true</EnableDefaultItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Beta</_Parameter1>
+      <_Parameter2>$(Beta)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 
   <ItemGroup>
     <!-- JavaScriptSerializer, for reading GitHub's release list. Part of

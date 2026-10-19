@@ -87,13 +87,33 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
-        /// <summary>"v1.0.0 · 2026-09-21 05:10", local time - the footer text.</summary>
+        /// <summary>
+        /// An unpublished test build - see Beta in the project file. Shown in
+        /// the version label only; Version stays the plain number.
+        /// </summary>
+        internal static bool IsBeta
+        {
+            get
+            {
+                try
+                {
+                    foreach (System.Reflection.AssemblyMetadataAttribute a in
+                             System.Reflection.Assembly.GetExecutingAssembly()
+                                   .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                        if (a.Key == "Beta") return string.Equals(a.Value, "true", StringComparison.OrdinalIgnoreCase);
+                }
+                catch { }
+                return false;
+            }
+        }
+
+        /// <summary>"v1.0.0 · 2026-09-21 05:10", local time - the footer text. "Beta v1.0.0 · ..." on a test build.</summary>
         internal static string VersionLabel
         {
             get
             {
                 DateTime built = BuiltUtc;
-                return "v" + Version + (built == DateTime.MinValue
+                return (IsBeta ? "Beta v" : "v") + Version + (built == DateTime.MinValue
                     ? ""
                     : "  ·  " + built.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
             }
@@ -711,19 +731,7 @@ namespace ABeautifulPotatoLauncher
 
         private List<BrowserServer> _cache
         {
-            get
-            {
-                List<BrowserServer> c;
-                if (_caches.TryGetValue(CacheKey, out c)) return c;
-
-                c = ServerStore.LoadList(CacheKey, _lastSeen);
-                _caches[CacheKey] = c;
-                if (c.Count > 0)
-                {
-                    _cacheTimes[CacheKey] = ServerStore.ListSavedAt(CacheKey);
-                }
-                return c;
-            }
+            get { return SavedList(_tab); }
         }
 
         private readonly System.Windows.Forms.Timer _visTimer = new System.Windows.Forms.Timer();
@@ -892,6 +900,8 @@ namespace ABeautifulPotatoLauncher
 
         /// <summary>Keeps the filter dropdowns stocked while the panel is open.</summary>
         private readonly System.Windows.Forms.Timer _choicesTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer _prebuildTimer = new System.Windows.Forms.Timer();
+        private Queue<Control> _prebuildQueue;
 
         /// <summary>The player-count range, with a grip at each end.</summary>
         private RangeSlider _playerRange;
@@ -1105,17 +1115,20 @@ namespace ABeautifulPotatoLauncher
                 }
             };
 
-            // While the panel is open the choices go stale as servers arrive,
-            // so they are topped up on a slow tick. Doing it here rather than
-            // on DropDown is the whole point: the work never coincides with the
-            // list being opened.
+            // The choices go stale as servers arrive, so they are topped up on
+            // a slow tick - open or closed, so opening the panel finds them
+            // ready. Doing it here rather than on DropDown is the whole point:
+            // the work never coincides with the list being opened.
             _choicesTimer.Interval = 4000;
-            _choicesTimer.Tick += (s, e) =>
-            {
-                if (_filterPanel == null || !_filterPanel.Visible) return;
-                RefreshFilterChoices();
-            };
+            _choicesTimer.Tick += (s, e) => RefreshFilterChoices();
             _choicesTimer.Start();
+
+            // The filter panel is built in the background shortly after
+            // start, so the first click on FILTERS only has to show it.
+            // See PrebuildFilterPanelStep.
+            _prebuildTimer.Interval = 3000;
+            _prebuildTimer.Tick += (s, e) => PrebuildFilterPanelStep();
+            _prebuildTimer.Start();
 
             _modSweepTimer.Interval = 3000;
             _modSweepTimer.Tick += (s, e) =>
@@ -1180,15 +1193,17 @@ namespace ABeautifulPotatoLauncher
                 Text = Program.VersionLabel,
                 Dock = DockStyle.Right,
                 AutoSize = false,
-                Width = 170,
+                Width = Program.IsBeta ? 200 : 170,
                 TextAlign = ContentAlignment.MiddleRight,
                 Padding = new Padding(0, 0, 8, 0),
                 BackColor = Panel,
-                ForeColor = Color.FromArgb(150, 150, 158),
+                // Amber on an unpublished build, so it is plain at a glance.
+                ForeColor = Program.IsBeta ? Color.FromArgb(225, 175, 90) : Color.FromArgb(150, 150, 158),
                 Font = new Font("Segoe UI", 8f)
             };
             new ToolTip().SetToolTip(version,
                 "A Beautiful Potato Launcher " + Program.Version
+                + (Program.IsBeta ? " (beta - not yet published)" : "")
                 + (Program.BuiltUtc == DateTime.MinValue ? ""
                    : "\r\nBuilt " + Program.BuiltUtc.ToString("yyyy-MM-dd HH:mm") + " UTC")
                 + "\r\nChanges are listed in CHANGELOG.md.");
@@ -1379,24 +1394,7 @@ namespace ABeautifulPotatoLauncher
             _searchHint.BringToFront();
 
             _filterToggle = MakeBtn("FILTERS", new Rectangle(4, 4, 92, 25), Panel2);
-            _filterToggle.Click += (s, e) =>
-            {
-                _filterPanel.Visible = !_filterPanel.Visible;
-                PaintFilterToggle();
-
-                // Filled on the way in, so the lists are ready before the first
-                // click rather than being built by it. If the mod index has not
-                // been read yet, that is brought forward too - opening Filters
-                // is a clear signal the player is about to want it, and waiting
-                // out the startup delay would show them an empty list.
-                if (_filterPanel.Visible)
-                {
-                    WarmModIndexNow();
-                    RefreshFilterChoices();
-                }
-
-                Log("Filter panel " + (_filterPanel.Visible ? "shown." : "hidden."));
-            };
+            _filterToggle.Click += (s, e) => SetFiltersOpen(!_filterPanel.Visible);
             searchArea.Controls.Add(_filterToggle);
 
             var apply = MakeBtn("SEARCH", new Rectangle(102, 4, 92, 25), Color.FromArgb(60, 95, 60));
@@ -1453,7 +1451,7 @@ namespace ABeautifulPotatoLauncher
             _filterPanel = BuildFilterPanel();
             main.Controls.Add(_filterPanel);
 
-            _list = new ListView
+            _list = new FastListView
             {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -1563,7 +1561,7 @@ namespace ABeautifulPotatoLauncher
             descBox.Controls.SetChildIndex(_desc, 0);
             descBox.Controls.SetChildIndex(_descHeader, 1);
 
-            _mods = new ListView
+            _mods = new FastListView
             {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -1892,13 +1890,28 @@ namespace ABeautifulPotatoLauncher
                 // nothing left for the scrolling to solve.
             };
 
-            Action<string, int, int> lab = (t, lx, ly) => p.Controls.Add(new Label
+            // THE CAPTIONS ARE DRAWN ON THE PANEL, NOT LABELS.
+            //
+            // Every control is a window of its own, and showing the panel
+            // costs Windows a round of messages per window. A dozen captions
+            // that never change or take a click were a third of them.
+            var captions = new List<Caption>();
+            Action<string, int, int> lab = (t, lx, ly) =>
             {
-                Text = t,
-                Bounds = new Rectangle(lx, ly + 3, 108, 20),
-                TextAlign = ContentAlignment.MiddleRight,
-                ForeColor = Dim
-            });
+                captions.Add(new Caption(t, new Rectangle(lx, ly + 3, 108, 20), null, Dim,
+                                         TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak));
+            };
+            p.Paint += (s, e) =>
+            {
+                // Clipped to each caption's box, as a label is to its window.
+                foreach (var c in captions)
+                {
+                    e.Graphics.SetClip(c.Bounds);
+                    TextRenderer.DrawText(e.Graphics, c.Text, c.Font ?? p.Font, c.Bounds, c.Colour,
+                                          c.Flags | TextFormatFlags.TextBoxControl | TextFormatFlags.PreserveGraphicsClipping);
+                    e.Graphics.ResetClip();
+                }
+            };
 
             Func<int, int, TextBox> box = (bx, by) =>
             {
@@ -1947,10 +1960,9 @@ namespace ABeautifulPotatoLauncher
                 ForeColor = Color.Gainsboro,
                 FlatStyle = FlatStyle.Flat,
                 // Editable, so typing narrows the list rather than only picking.
-                DropDownStyle = ComboBoxStyle.DropDown,
-                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                AutoCompleteSource = AutoCompleteSource.ListItems
+                DropDownStyle = ComboBoxStyle.DropDown
             };
+            TypeAhead.Attach(_fMap);
             _fMap.TextChanged += (s2, e2) => QueueFilter();
             // Opening the list is when the choices need to be right, so they are
             // gathered from whatever is currently loaded rather than kept in
@@ -1976,10 +1988,9 @@ namespace ABeautifulPotatoLauncher
                 BackColor = Panel2,
                 ForeColor = Color.Gainsboro,
                 FlatStyle = FlatStyle.Flat,
-                DropDownStyle = ComboBoxStyle.DropDown,
-                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                AutoCompleteSource = AutoCompleteSource.ListItems
+                DropDownStyle = ComboBoxStyle.DropDown
             };
+            TypeAhead.Attach(_fCountry);
             _fCountry.TextChanged += (s2, e2) => QueueFilter();
             // NOT filled from DropDown. See RefreshFilterChoices.
             p.Controls.Add(_fCountry);
@@ -2135,16 +2146,13 @@ namespace ABeautifulPotatoLauncher
             // to be, rather than at a measured-once position.
             int footY = 0;
             foreach (Control c in p.Controls) footY = Math.Max(footY, c.Bottom);
+            foreach (var c in captions) footY = Math.Max(footY, c.Bounds.Bottom);
 
-            p.Controls.Add(new Label
-            {
-                Text = "Filters apply as you change them, against the list already downloaded.  "
+            const string footnote = "Filters apply as you change them, against the list already downloaded.  "
                      + "Name, map, players and password are also sent to Steam on the next REFRESH, "
-                     + "which is how a narrowed refresh reaches past the 10,000 servers it returns at once.",
-                Bounds = new Rectangle(8, footY + 8, 920, 18),
-                ForeColor = Color.FromArgb(110, 110, 118),
-                Font = new Font("Segoe UI", 7.5f)
-            });
+                     + "which is how a narrowed refresh reaches past the 10,000 servers it returns at once.";
+            captions.Add(new Caption(footnote, new Rectangle(8, footY + 8, 920, 18), new Font("Segoe UI", 7.5f),
+                                     Color.FromArgb(110, 110, 118), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak));
 
             // THE PANEL IS SIZED TO ITS CONTENTS, NOT TO A NUMBER.
             //
@@ -2153,9 +2161,25 @@ namespace ABeautifulPotatoLauncher
             // means the next thing added cannot silently fall off the bottom.
             int bottom = 0;
             foreach (Control c in p.Controls) bottom = Math.Max(bottom, c.Bottom);
+            foreach (var c in captions) bottom = Math.Max(bottom, c.Bounds.Bottom);
             p.Height = bottom + 10;
 
             return p;
+        }
+
+        /// <summary>A line of text drawn straight onto a panel - see BuildFilterPanel.</summary>
+        private sealed class Caption
+        {
+            public readonly string Text;
+            public readonly Rectangle Bounds;
+            public readonly Font Font;
+            public readonly Color Colour;
+            public readonly TextFormatFlags Flags;
+
+            public Caption(string text, Rectangle bounds, Font font, Color colour, TextFormatFlags flags)
+            {
+                Text = text; Bounds = bounds; Font = font; Colour = colour; Flags = flags;
+            }
         }
 
         private ComboBox MakeCombo(Rectangle bounds, object[] items)
@@ -2957,21 +2981,47 @@ namespace ABeautifulPotatoLauncher
 
         private void OnRetrieveItem(object sender, RetrieveVirtualItemEventArgs e)
         {
-            if (e.ItemIndex >= 0 && e.ItemIndex < _rows.Count && _rows[e.ItemIndex].IsHeading)
-            {
-                e.Item = HeadingItem(_rows[e.ItemIndex]);
-                return;
-            }
-
             var rows = _rows;
             if (e.ItemIndex < 0 || e.ItemIndex >= rows.Count)
             {
                 e.Item = new ListViewItem("");
                 return;
             }
-            e.Item = BuildItem(rows[e.ItemIndex],
-                               (e.ItemIndex & 1) == 0 ? RowBandA : RowBandB);
+
+            // ONE BUILD PER ROW PER REPAINT.
+            //
+            // Windows asks for a row again and again while drawing it - once
+            // for the row, then for every column's colours and every column's
+            // text - and a virtual list answers each ask by raising this event.
+            // Building the row afresh every time came to about thirty builds
+            // per visible row, every repaint: the bulk of what made resizing
+            // the list, and so opening the filter panel, slow.
+            //
+            // Kept only until the current message is done, so whatever changes
+            // a row before the next paint is always picked up by it.
+            var row = rows[e.ItemIndex];
+            KeyValuePair<Row, ListViewItem> built;
+            if (_paintItems.TryGetValue(e.ItemIndex, out built) && ReferenceEquals(built.Key, row))
+            {
+                e.Item = built.Value;
+                return;
+            }
+
+            e.Item = row.IsHeading
+                ? HeadingItem(row)
+                : BuildItem(row, (e.ItemIndex & 1) == 0 ? RowBandA : RowBandB);
+
+            _paintItems[e.ItemIndex] = new KeyValuePair<Row, ListViewItem>(row, e.Item);
+            if (!_paintItemsDropQueued && IsHandleCreated)
+            {
+                _paintItemsDropQueued = true;
+                BeginInvoke((Action)(() => { _paintItems.Clear(); _paintItemsDropQueued = false; }));
+            }
         }
+
+        private readonly Dictionary<int, KeyValuePair<Row, ListViewItem>> _paintItems =
+            new Dictionary<int, KeyValuePair<Row, ListViewItem>>();
+        private bool _paintItemsDropQueued;
 
         private ListViewItem BuildItem(Row row)
         {
@@ -3989,14 +4039,24 @@ namespace ABeautifulPotatoLauncher
             int minTicks = PollingSmallList ? 2 : 5;
             if (_pollTicks < minTicks) done = false;
 
+            // RECENT, FRIENDS AND LAN COUNT EVERY ENTRY FROM THE START. Steam's
+            // history holds up to 100 servers and reports all 100 at once,
+            // then pings them about one a second - measured, 32 of 100
+            // answering over 27 s before Steam called it done. A count that
+            // never moves is not a finished list there, so those lists wait
+            // for Steam to say so, and progress is the servers that answered.
+            int listed = raw;
+            if (PollingSmallList) raw = _browser.Count;
+
             if (raw > 0 && raw == _lastRawCount) _stableTicks++;
             else _stableTicks = 0;
 
-            if (_stableTicks >= (PollingSmallList ? 4 : 12)) done = true;
+            if (!PollingSmallList && _stableTicks >= 12) done = true;
 
-            if (PollingSmallList && raw == 0 && _pollTicks >= 8) done = true;
+            // Nothing in the list at all - no history, no friends playing.
+            if (PollingSmallList && listed == 0 && _pollTicks >= 8) done = true;
 
-            if (_pollTicks > (PollingSmallList ? 80 : 150)) done = true;
+            if (_pollTicks > (PollingSmallList ? 240 : 150)) done = true;
 
             var combined = _merged.Count == 0 ? _browser : Combine(_browser);
             _caches[CacheKey] = combined;
@@ -5386,35 +5446,102 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>
-        /// Puts every map currently in the list into the dropdown.
+        /// Puts every map the launcher knows into the dropdown.
         ///
-        /// Built from the cache rather than a hard-coded list: DayZ gains maps
-        /// constantly and a fixed list would be wrong within a month.
+        /// Built from what has been seen rather than a hard-coded list: DayZ
+        /// gains maps constantly and a fixed list would be wrong within a month.
+        ///
+        /// NOT ONLY THE MAPS ON SCREEN. That was the whole of it, so on LAN,
+        /// Recent or Favorites - a handful of servers - the dropdown offered
+        /// two or three maps. Every map in the Beautiful Potato server list is
+        /// offered (see Relay.TryMaps), fetched once in the background, plus
+        /// any on screen it does not have - a LAN server's own map, say.
+        ///
+        /// Not maps.txt, which KnownMaps searches by: Steam's master list
+        /// answers with other games' servers now and then, and their maps are
+        /// in there too.
         /// </summary>
         private void FillMapChoices()
         {
             if (_fMap == null || _fMap.DroppedDown) return;
+
+            if (!_listMapsAsked)
+            {
+                _listMapsAsked = true;
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    var found = Relay.TryMaps();
+                    if (found == null || found.Count == 0) return;
+                    try
+                    {
+                        BeginInvoke((Action)(() =>
+                        {
+                            if (_closing) return;
+                            _listMaps = found;
+                            FillMapChoices();
+                        }));
+                    }
+                    catch { }     // the window closed meanwhile
+                });
+            }
 
             try
             {
                 var maps = _cache
                     .Select(s2 => (s2.Map ?? "").Trim())
                     .Where(m => m.Length > 0)
+                    .Concat(_listMaps ?? new List<string>())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
                 // Rebuilding while the list is open would close it, so only
                 // touch it when the contents have actually changed.
-                if (_fMap.Items.Count == maps.Length + 1) return;
+                if (TypeAhead.ChoiceCount(_fMap) == maps.Length + 1) return;
 
                 var all = new string[maps.Length + 1];
                 all[0] = "(any map)";
                 Array.Copy(maps, 0, all, 1, maps.Length);
 
-                RefillCombo(_fMap, all, _fMap.Text);
+                RefillCombo(_fMap, all);
             }
             catch { }
+        }
+
+        /// <summary>Map names from the server list - see FillMapChoices.</summary>
+        private List<string> _listMaps;
+        private bool _listMapsAsked;
+
+        /// <summary>
+        /// The servers the Country dropdown is counted from: the list on screen
+        /// plus the saved Community and Official lists, each once. Without the
+        /// saved lists, LAN, Recent or Favorites - a handful of servers -
+        /// offered one or two countries.
+        /// </summary>
+        private IEnumerable<BrowserServer> ChoiceServers()
+        {
+            var lists = new List<List<BrowserServer>> { _cache };
+            foreach (var tab in new[] { Tab.Community, Tab.Official })
+            {
+                var l = SavedList(tab);
+                if (!lists.Contains(l)) lists.Add(l);
+            }
+            return lists.SelectMany(l => l);
+        }
+
+        /// <summary>
+        /// A tab's servers, as saved - read from disk once and then kept.
+        /// </summary>
+        private List<BrowserServer> SavedList(Tab tab)
+        {
+            string key = tab + "/" + (Games.IsZomboid || TabForcesAllBuilds(tab) ? "all" : _browseMode);
+            List<BrowserServer> c;
+            if (_caches.TryGetValue(key, out c)) return c;
+
+            c = ServerStore.LoadList(key, _lastSeen);
+            _caches[key] = c;
+            if (c.Count > 0) _cacheTimes[key] = ServerStore.ListSavedAt(key);
+            return c;
         }
 
         /// <summary>
@@ -5527,7 +5654,7 @@ namespace ABeautifulPotatoLauncher
             try
             {
                 var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                foreach (var srv in _cache)
+                foreach (var srv in ChoiceServers())
                 {
                     string cc = IpRegion.Country(srv.Host);
                     if (cc.Length == 0) continue;
@@ -5539,13 +5666,13 @@ namespace ABeautifulPotatoLauncher
                                     .Select(k => k.Key + "   (" + k.Value + ")")
                                     .ToArray();
 
-                if (_fCountry.Items.Count == ordered.Length + 1) return;
+                if (TypeAhead.ChoiceCount(_fCountry) == ordered.Length + 1) return;
 
                 var all = new string[ordered.Length + 1];
                 all[0] = "(any country)";
                 Array.Copy(ordered, 0, all, 1, ordered.Length);
 
-                RefillCombo(_fCountry, all, _fCountry.Text);
+                RefillCombo(_fCountry, all);
             }
             catch { }
         }
@@ -5580,6 +5707,143 @@ namespace ABeautifulPotatoLauncher
                 if (exclude) _filters.HiddenCountries.Add(t);
                 else _filters.Countries.Add(t);
             }
+        }
+
+        /// <summary>
+        /// Opens or closes the filter panel.
+        ///
+        /// THE AREA UNDER THE SERVER LIST KEEPS ITS LAYOUT.
+        ///
+        /// Opening the panel takes room from everything below it. Left to
+        /// WinForms, every control in the lower area - the mod list, its
+        /// search bar, the description, the log - was resized to fit, twenty-odd
+        /// windows, and that was most of the pause on every open and close.
+        /// Instead the lower area is held at its size while the panel is open,
+        /// and its bottom edge runs off the bottom of the window. Closing the
+        /// panel gives it back its room exactly, with nothing to recalculate.
+        ///
+        /// The panel's lists are already filled (see RefreshFilterChoices) and
+        /// its windows already built (see PrebuildFilterPanelStep), so there
+        /// is nothing else to do here.
+        /// </summary>
+        private void SetFiltersOpen(bool open)
+        {
+            if (_filterPanel == null || _filterPanel.Visible == open) return;
+
+            // Opening Filters is a clear sign the player is about to want the
+            // mod list; waiting out the startup delay would show it empty.
+            if (open) WarmModIndexNow();
+
+            // Still being built in the background - finish it now.
+            if (_prebuildQueue == null || _prebuildQueue.Count > 0)
+            {
+                _prebuildTimer.Stop();
+                CreateWindows(_filterPanel);
+                _prebuildQueue = new Queue<Control>();
+            }
+
+            if (open) HoldLowerArea(true);
+
+            _filterPanel.Visible = open;
+            PaintFilterToggle();
+
+            if (!open) HoldLowerArea(false);
+        }
+
+        /// <summary>
+        /// Stops, or restarts, the area under the server list following its
+        /// container's size. See SetFiltersOpen.
+        /// </summary>
+        private void HoldLowerArea(bool hold)
+        {
+            SplitContainer outer;
+            if (!_splitters.TryGetValue("list", out outer) || hold == _lowerHeld) return;
+
+            var holder = outer.Panel2;
+            _lowerHeld = hold;
+            if (hold)
+            {
+                holder.SuspendLayout();
+                holder.Resize += FollowHolder;
+            }
+            else
+            {
+                holder.Resize -= FollowHolder;
+                holder.ResumeLayout(true);
+            }
+        }
+
+        /// <summary>
+        /// While held, the lower area still follows anything that would leave
+        /// a gap - the window widened, or the split dragged to give it more
+        /// room. It is only ever allowed to be cut off, never to fall short.
+        /// </summary>
+        private void FollowHolder(object sender, EventArgs e)
+        {
+            var holder = (Control)sender;
+            foreach (Control c in holder.Controls)
+            {
+                if (c.Dock != DockStyle.Fill) continue;
+                if (c.Width == holder.ClientSize.Width && c.Height >= holder.ClientSize.Height) continue;
+
+                holder.ResumeLayout(true);
+                holder.SuspendLayout();
+                return;
+            }
+        }
+
+        private bool _lowerHeld;
+
+        /// <summary>
+        /// Creates the windows of a control and everything in it, shown or
+        /// not. Reading Handle creates it; a child's window is created inside
+        /// its parent's, which is why the parent goes first.
+        /// </summary>
+        private static void CreateWindows(Control root)
+        {
+            if (root == null || root.IsDisposed) return;
+            IntPtr unused = root.Handle;
+            foreach (Control child in root.Controls) CreateWindows(child);
+        }
+
+        /// <summary>
+        /// Builds the filter panel's windows while it is still closed, a few
+        /// at a time, then fills its lists.
+        ///
+        /// WinForms only creates a control's window when it is first shown, so
+        /// the first click on FILTERS used to build thirty-odd of them at once.
+        /// Done here in small slices between everything else, no single step
+        /// is long enough to notice.
+        /// </summary>
+        private void PrebuildFilterPanelStep()
+        {
+            if (_filterPanel == null || _filterPanel.IsDisposed) { _prebuildTimer.Stop(); return; }
+
+            if (_prebuildQueue == null)
+            {
+                // Parents before children: a window is created inside its parent's.
+                _prebuildQueue = new Queue<Control>();
+                var pending = new Stack<Control>();
+                pending.Push(_filterPanel);
+                while (pending.Count > 0)
+                {
+                    var c = pending.Pop();
+                    _prebuildQueue.Enqueue(c);
+                    for (int i = c.Controls.Count - 1; i >= 0; i--) pending.Push(c.Controls[i]);
+                }
+                _prebuildTimer.Interval = 30;
+            }
+
+            var sw = Stopwatch.StartNew();
+            while (_prebuildQueue.Count > 0 && sw.ElapsedMilliseconds < 12)
+            {
+                var c = _prebuildQueue.Dequeue();
+                if (!c.IsDisposed && !c.IsHandleCreated) { IntPtr unused = c.Handle; }
+            }
+
+            if (_prebuildQueue.Count > 0) return;
+            _prebuildTimer.Stop();
+            RefreshFilterChoices();
         }
 
         /// <summary>
@@ -5732,8 +5996,9 @@ namespace ABeautifulPotatoLauncher
                 //      them, over and over.
                 //   2. It then handed a ComboBox three thousand items with
                 //      AutoCompleteSource.ListItems set, and WinForms rebuilds
-                //      its autocomplete index every time the collection
-                //      changes. That alone is worth seconds.
+                //      the whole box every time the collection changes. That
+                //      alone is worth seconds - see TypeAhead, which replaced
+                //      the autocomplete.
                 //
                 // Now the tally is kept up to date as mod lists arrive, so this
                 // copies a small dictionary under a brief lock and sorts it
@@ -5743,6 +6008,9 @@ namespace ABeautifulPotatoLauncher
                 KeyValuePair<string, int>[] tally;
                 lock (_modListLock)
                 {
+                    // Unchanged since the last fill - nothing to sort.
+                    if (_modPopularity.Count == _modChoiceCount
+                        && TypeAhead.ChoiceCount(_fMod) > 0) return;
                     tally = _modPopularity.ToArray();
                 }
 
@@ -5755,7 +6023,7 @@ namespace ABeautifulPotatoLauncher
 
                 // Rebuilding an unchanged list would pay the autocomplete cost
                 // for nothing.
-                if (_fMod.Items.Count == ordered.Length && _modChoiceCount == tally.Length) return;
+                if (TypeAhead.ChoiceCount(_fMod) == ordered.Length && _modChoiceCount == tally.Length) return;
                 _modChoiceCount = tally.Length;
 
                 // Belt and braces: nothing this method does should be able to
@@ -5764,8 +6032,7 @@ namespace ABeautifulPotatoLauncher
                 if (_fillingModChoices) return;
                 _fillingModChoices = true;
 
-                string typed = _fMod.Text;
-                try { RefillCombo(_fMod, ordered, typed); }
+                try { RefillCombo(_fMod, ordered); }
                 finally { _fillingModChoices = false; }
             }
             catch { _fillingModChoices = false; }
@@ -5774,52 +6041,20 @@ namespace ABeautifulPotatoLauncher
         private bool _fillingModChoices;
 
         /// <summary>
-        /// Replaces a combo's items without killing the process.
+        /// Replaces a combo's items, keeping what is typed in it.
         ///
-        /// WHY THIS IS NOT JUST Items.Clear() + AddRange()
-        ///   A ComboBox with AutoCompleteMode set and AutoCompleteSource of
-        ///   ListItems hands its list to the Windows shell autocomplete COM
-        ///   object. Rebuilding Items while that is attached can fault inside
-        ///   the unmanaged object - and an access violation there is not a .NET
-        ///   exception. There is no stack trace, no handler runs, the log gets
-        ///   no entry and the launcher simply vanishes. Which is exactly what
-        ///   clicking the mod dropdown did, with nothing in launcher.log to
-        ///   show for it.
-        ///
-        ///   Detaching autocomplete first makes it an ordinary list update, and
-        ///   reattaching afterwards rebuilds the index once against the final
-        ///   contents rather than against a list being mutated underneath it.
+        /// These boxes no longer use Windows' autocomplete at all - attaching
+        /// it cost half a second a refill and could crash the launcher with no
+        /// trace. TypeAhead narrows the list as the player types instead.
         /// </summary>
-        private static void RefillCombo(ComboBox box, string[] items, string keepText)
+        private static void RefillCombo(ComboBox box, string[] items)
         {
-            if (box == null) return;
-
-            var mode = box.AutoCompleteMode;
-            var source = box.AutoCompleteSource;
-
-            try
-            {
-                box.AutoCompleteMode = AutoCompleteMode.None;
-                box.AutoCompleteSource = AutoCompleteSource.None;
-
-                box.BeginUpdate();
-                box.Items.Clear();
-                if (items != null && items.Length > 0) box.Items.AddRange(items);
-                box.EndUpdate();
-
-                box.Text = keepText ?? "";
-            }
-            finally
-            {
-                box.AutoCompleteMode = mode;
-                box.AutoCompleteSource = source;
-            }
+            TypeAhead.SetChoices(box, items);
         }
 
         /// <summary>
         /// How many mods the dropdown offers. The rest are still filterable by
-        /// typing - this is about what is worth scrolling, and about keeping
-        /// WinForms' autocomplete index small enough to build instantly.
+        /// typing - this is about what is worth scrolling.
         /// </summary>
         private const int ModChoicesShown = 400;
 
@@ -6166,13 +6401,35 @@ namespace ABeautifulPotatoLauncher
         ///   exception: no stack trace, nothing in the log, the launcher just
         ///   disappears.
         ///
-        ///   So the lists are built BEFORE anyone can click them - when the
-        ///   panel is opened, and again as new data arrives while it is open.
-        ///   By the time a dropdown is clicked there is nothing left to do.
+        ///   So the lists are built BEFORE anyone can click them - in the
+        ///   background whether the panel is open or not, and again as new
+        ///   data arrives. By the time the panel is opened, or a dropdown
+        ///   clicked, there is nothing left to do.
         ///
         /// Skips any list that is currently open, because replacing the items
         /// under an open dropdown is the thing being avoided.
         /// </summary>
+        private void RefreshFilterChoices()
+        {
+            if (_filterPanel == null) return;
+
+            // Closed, the map and country lists only need redoing when the
+            // server list has changed size - they walk every server.
+            int servers = _cache == null ? 0 : _cache.Count;
+            bool stale = _filterPanel.Visible || servers != _choicesServerCount;
+            _choicesServerCount = servers;
+
+            try
+            {
+                if (stale && _fMap != null && !_fMap.DroppedDown) FillMapChoices();
+                if (stale && _fCountry != null && !_fCountry.DroppedDown) FillCountryChoices();
+                if (_fMod != null && !_fMod.DroppedDown) FillModChoices();
+            }
+            catch { }
+        }
+
+        private int _choicesServerCount = -1;
+
         /// <summary>
         /// Starts the mod index load immediately if the startup delay has not
         /// elapsed yet. Harmless to call repeatedly - the load itself only
@@ -6184,19 +6441,6 @@ namespace ABeautifulPotatoLauncher
 
             _modIndexStart.Stop();
             BeginBackgroundModIndex();
-        }
-
-        private void RefreshFilterChoices()
-        {
-            if (_filterPanel == null || !_filterPanel.Visible) return;
-
-            try
-            {
-                if (_fMap != null && !_fMap.DroppedDown) FillMapChoices();
-                if (_fCountry != null && !_fCountry.DroppedDown) FillCountryChoices();
-                if (_fMod != null && !_fMod.DroppedDown) FillModChoices();
-            }
-            catch { }
         }
 
         /// <summary>
@@ -6547,7 +6791,7 @@ namespace ABeautifulPotatoLauncher
                                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                                 .ToArray();
 
-                RefillCombo(_modFind.Box, names, _modFind.Box.Text);
+                RefillCombo(_modFind.Box, names);
             }
             catch { }
         }

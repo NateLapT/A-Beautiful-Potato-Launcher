@@ -70,10 +70,9 @@ namespace ABeautifulPotatoLauncher
                 BackColor = Panel2,
                 ForeColor = Color.Gainsboro,
                 FlatStyle = FlatStyle.Flat,
-                DropDownStyle = ComboBoxStyle.DropDown,
-                AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                AutoCompleteSource = AutoCompleteSource.ListItems
+                DropDownStyle = ComboBoxStyle.DropDown
             };
+            TypeAhead.Attach(_box);     // never Windows' autocomplete - see TypeAhead
 
             _box.KeyDown += (s, e) =>
             {

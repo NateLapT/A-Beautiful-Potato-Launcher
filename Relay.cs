@@ -107,6 +107,49 @@ namespace ABeautifulPotatoLauncher
             return list;
         }
 
+        // ------------------------------------------------------------ maps --
+
+        /// <summary>
+        /// Every map name in the current game's list - for the Map dropdown,
+        /// which would otherwise know only the maps of the servers on screen.
+        /// Uses the copy already downloaded while it is recent, downloads it
+        /// otherwise, and settles for an older copy if that fails: map names
+        /// do not go stale the way player counts do. Null if there is no copy
+        /// at all. Reads the whole list, so call it off the UI thread.
+        /// </summary>
+        public static List<string> TryMaps()
+        {
+            string cache = CacheFile("list");
+            byte[] gz = null;
+            try
+            {
+                if (File.Exists(cache) && DateTime.UtcNow - File.GetLastWriteTimeUtc(cache) < MaxAge)
+                    gz = File.ReadAllBytes(cache);
+            }
+            catch { }
+
+            string problem;
+            if (gz == null) gz = Download("list", out problem);
+
+            try { if (gz == null && File.Exists(cache)) gz = File.ReadAllBytes(cache); }
+            catch { }
+            if (gz == null) return null;
+
+            var maps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (string line in Lines(gz))
+                {
+                    string[] f = line.Split('\t');
+                    if (f.Length < 14) continue;
+                    string m = f[1].Trim();
+                    if (m.Length > 0) maps.Add(m);
+                }
+            }
+            catch { return null; }
+            return maps.ToList();
+        }
+
         // ----------------------------------------------------------- rules --
 
         /// <summary>
