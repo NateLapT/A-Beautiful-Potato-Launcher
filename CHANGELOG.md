@@ -16,6 +16,74 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [Unreleased]
+
+## [0.9.4] - 2026-10-22
+
+### Fixed
+
+- **The LAN tab never seemed to refresh.** Every refresh carried the saved
+  list over and only added to it, so every server ever run on the network -
+  every test copy on every port - stayed listed for good, and stopping or
+  starting one changed nothing. A LAN refresh (REFRESH or F5) now shows what
+  is actually up: Steam's LAN search, this PC, and the saved servers on other
+  PCs that still answer.
+- **Mod Manager: the status explanation covered the buttons** at the bottom
+  of the detail panel (Repair, Remove, Workshop, Explorer), with empty space
+  below them. The buttons now sit on the panel's bottom edge, the explanation
+  just above them however many lines it wraps to, and the facts list fills
+  the rest.
+
+### Added
+
+- **The LAN tab checks this PC on the common ports.** Every LAN refresh asks
+  127.0.0.1 on query ports 27015-27017 and 2303, 2403 ... 3003 (game ports
+  2302, 2402 ... 3002, query port = game port + 1), plus every port a DayZ
+  server process here holds - in well under a second. The log says which
+  ports were asked and what answered.
+- **REFRESH NETWORK** on the LAN tab, in BUILD INDEX's place (the index is
+  for the internet list): asks every address on your home network on the
+  same ports, from one socket, so a whole /24 takes about two seconds. Finds
+  servers Steam's LAN search misses. Only private networks (10.x,
+  172.16-31.x, 192.168.x) are scanned, and a network wider than /24 is
+  scanned as the /24 around this PC. A server found this way stays in the
+  LAN list for as long as it answers.
+- **The last 10 LAN servers you joined stay on the LAN tab**, listed as
+  offline while they are down, so the test server you just played on can be
+  picked again when it comes back instead of vanishing from the list. Any
+  server on this PC or a home network address counts. Kept in
+  lan-joined.tsv beside the favourites.
+- **A Feedback button** on the bottom bar, left of Settings. Write what's
+  wrong or what you'd like, optionally how to reach you, and SEND - it goes
+  to the same service the server list comes from, no account needed. Sent
+  with it: the launcher version, the game and the Windows version. The
+  launcher log (the last 200 KB) goes only if you tick the box, which says
+  what it contains. A failed send keeps your message so you can try again.
+  It also has a **Server name** box (the selected server is filled in) and
+  a **Send the server's mods list** box: ticked, it sends the mods that
+  server lists. Nothing about the mods on your PC is sent.
+- **Report a server.** A flag at the end of every server row opens a
+  Report window: pick what's wrong (fake player count, misleading name,
+  cheating or admin abuse, offensive, scam or pay-to-win, something else),
+  add details and, if you like, how to reach you. It sends the server's
+  address, name, map and the player count it was showing - nothing about
+  any player on it. Reports are read by a person before anything is done,
+  and reports of the same server are reviewed together.
+- **Reviewed servers are coloured.** The flag is grey for a server with no
+  review, orange for caution, red for danger, and green for **Trusted** -
+  curated servers, which say "Trusted" when you hover over the flag.
+- **Server owners can ask for a review.** Click the flag on your server
+  and tick **Review**: the window asks for a website that shows the
+  server's IP and name, what you'd like reviewed, and an email or Discord
+  name so we can reply.
+- **Ping and players keep themselves current.** A server was asked once,
+  when it first scrolled into view, and its ping and player count then never
+  changed. The servers on screen are now asked again every 10 seconds while
+  the launcher is the active window, and every 30 seconds while it is open
+  behind another window - only the rows in view, so a full screen costs under
+  1 KB a second. It stops completely while the game is running and while the
+  launcher is minimised, and waits while a list is still loading.
+
 ## [0.9.3] - 2026-10-19
 
 ### Fixed

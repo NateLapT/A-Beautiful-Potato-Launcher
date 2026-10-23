@@ -20,6 +20,8 @@
 //  WHAT IS SENT
 //    A plain GET for the current game's file, with the tag of the copy already
 //    held so an unchanged file costs a few bytes. Nothing about the player.
+//    The exceptions are feedback and server reports, sent only when the player
+//    presses SEND in those windows - see SendFeedback and SendReport.
 //
 //  ADDRESS
 //    DefaultBase below. A "relay.txt" in the launcher's data folder overrides
@@ -189,6 +191,159 @@ namespace ABeautifulPotatoLauncher
             }
             catch (Exception ex) { problem = "unreadable (" + ex.Message + ")"; return null; }
             return result;
+        }
+
+        // -------------------------------------------------------- feedback --
+
+        /// <summary>
+        /// Sends what the player wrote in the Feedback window, with the
+        /// launcher version, the game and the Windows version - plus the
+        /// server they name, and the mods list and launcher log only when they
+        /// tick those boxes (null otherwise). True when the service has it;
+        /// otherwise false with the reason in <paramref name="problem"/>.
+        /// </summary>
+        public static bool SendFeedback(string message, string contact, string server, string mods, string log,
+                                        out string problem)
+        {
+            return Post("feedback", new[]
+            {
+                Pair("version", Program.VersionLabel),
+                Pair("game", Games.Name),
+                Pair("os", Environment.OSVersion.VersionString + (Environment.Is64BitOperatingSystem ? " 64-bit" : "")),
+                Pair("contact", contact),
+                Pair("server", server),
+                Pair("message", message),
+                Pair("mods", mods),
+                Pair("log", log)
+            }, "messages", out problem);
+        }
+
+        // --------------------------------------------------------- reports --
+
+        /// <summary>
+        /// Reports a server from the flag at the end of its row: which
+        /// server (address, name, map, the player count it claimed), the
+        /// reason picked, and what the player wrote. Reviewed by hand at the
+        /// other end; several reports of one server are read together there.
+        /// A server owner's review request goes the same way, with reason
+        /// ReportServerDialog.ReviewReason, their website and a contact.
+        /// </summary>
+        public static bool SendReport(string host, int port, int queryPort, string name, string map,
+                                      int players, int maxPlayers, string reason, string details, string contact,
+                                      string website, out string problem)
+        {
+            return Post("report", new[]
+            {
+                Pair("version", Program.VersionLabel),
+                Pair("game", Games.Name),
+                Pair("endpoint", host + ":" + port),
+                Pair("queryport", queryPort > 0 ? queryPort.ToString() : ""),
+                Pair("name", name),
+                Pair("map", map),
+                Pair("players", players + "/" + maxPlayers),
+                Pair("reason", reason),
+                Pair("details", details),
+                Pair("contact", contact),
+                Pair("website", website)
+            }, "reports", out problem);
+        }
+
+        private static KeyValuePair<string, string> Pair(string k, string v) { return new KeyValuePair<string, string>(k, v); }
+
+        /// <summary>
+        /// A form post to /v1/{path}; empty fields are left out. The words for
+        /// a 429 name what was sent too often ("messages", "reports").
+        /// </summary>
+        private static bool Post(string path, IEnumerable<KeyValuePair<string, string>> fields, string what,
+                                 out string problem)
+        {
+            problem = null;
+            string root = Base;
+            if (root == null) { problem = "the server list service is turned off in relay.txt"; return false; }
+
+            try
+            {
+                var body = new StringBuilder();
+                foreach (var kv in fields)
+                {
+                    if (string.IsNullOrEmpty(kv.Value)) continue;
+                    if (body.Length > 0) body.Append('&');
+                    body.Append(kv.Key).Append('=').Append(EscapeLong(kv.Value));
+                }
+
+                byte[] data = Encoding.UTF8.GetBytes(body.ToString());
+                var req = (HttpWebRequest)WebRequest.Create(root + "/v1/" + path);
+                req.Method = "POST";
+                req.ContentType = "application/x-www-form-urlencoded; charset=utf-8";
+                req.ContentLength = data.Length;
+                req.Timeout = 15000;
+                req.ReadWriteTimeout = 30000;
+                req.UserAgent = "ABeautifulPotatoLauncher/" + Program.Version;
+                using (var s = req.GetRequestStream()) s.Write(data, 0, data.Length);
+                using (var resp = (HttpWebResponse)req.GetResponse()) { }
+                return true;
+            }
+            catch (WebException ex)
+            {
+                var r = ex.Response as HttpWebResponse;
+                problem = r == null ? ex.Message
+                        : (int)r.StatusCode == 429 ? "too many " + what + " from here in the last hour - please try again later"
+                        : (int)r.StatusCode == 413 ? "it is too long - try leaving the log or the mods list out"
+                        : "HTTP " + (int)r.StatusCode;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                problem = ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>Uri.EscapeDataString, which refuses strings over ~32 K, in pieces.</summary>
+        private static string EscapeLong(string v)
+        {
+            var sb = new StringBuilder(v.Length + v.Length / 4);
+            int i = 0;
+            while (i < v.Length)
+            {
+                int n = Math.Min(16000, v.Length - i);
+                // Never split a surrogate pair across two pieces.
+                if (i + n < v.Length && char.IsHighSurrogate(v[i + n - 1])) n--;
+                sb.Append(Uri.EscapeDataString(v.Substring(i, n)));
+                i += n;
+            }
+            return sb.ToString();
+        }
+
+        // ----------------------------------------------------------- flags --
+
+        /// <summary>
+        /// Servers a person has reviewed, by "host:port": 1 caution, 2 danger,
+        /// 3 trusted - the colour of the report flag, and nothing else. From the service, or the copy kept last time when it cannot
+        /// be reached. Null when there is neither.
+        /// </summary>
+        public static Dictionary<string, int> TryFlags()
+        {
+            string problem;
+            byte[] gz = Download("flags", out problem);
+            try { if (gz == null && File.Exists(CacheFile("flags"))) gz = File.ReadAllBytes(CacheFile("flags")); }
+            catch { }
+            if (gz == null) return null;
+
+            var flags = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (gz.Length == 0) return flags;       // nothing flagged: an empty file, not a gzip one
+            try
+            {
+                foreach (string line in Lines(gz))
+                {
+                    string[] f = line.Split('	');
+                    int level;
+                    if (f.Length >= 2 && f[0].IndexOf(':') > 0 && int.TryParse(f[1], out level) && level >= 1 && level <= 3)
+                        flags[f[0].Trim()] = level;
+                }
+            }
+            catch { return null; }
+            return flags;
         }
 
         // ------------------------------------------------------------ wire --

@@ -57,6 +57,13 @@ namespace ABeautifulPotatoLauncher
         public bool Password;
         public bool Secure;
 
+        /// <summary>
+        /// Remembered rather than found: a LAN server joined recently that did
+        /// not answer this refresh, listed anyway so it can be picked again.
+        /// See ServerStore.LoadLanJoined. Never saved.
+        /// </summary>
+        public bool Offline;
+
         public string Endpoint { get { return Host + ":" + Port; } }
 
         // DayZ packs its server flags into the Steam tags field, e.g.

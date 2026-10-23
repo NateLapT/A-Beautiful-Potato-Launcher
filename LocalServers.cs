@@ -27,6 +27,8 @@ namespace ABeautifulPotatoLauncher
 {
     internal sealed class LocalServer
     {
+        /// <summary>127.0.0.1 for this PC, the LAN address for one found on the network.</summary>
+        public string Host = "127.0.0.1";
         public int GamePort;
         public int QueryPort;
         public ServerInfo Info;
@@ -40,6 +42,21 @@ namespace ABeautifulPotatoLauncher
         /// restart apart - the second start found 27015 still held.
         /// </summary>
         public static readonly int[] DefaultQueryPorts = { 27015, 27016 };
+
+        /// <summary>
+        /// The query ports a DayZ server on a home network is all but certain
+        /// to use, asked on every LAN refresh and in a network scan:
+        ///   27015-27017   no steamQueryPort set (27016 and 27017 when the one
+        ///                 before was still held by another server or a restart)
+        ///   2303 ... 3003 steamQueryPort = game port + 1, for game ports
+        ///                 2302, 2402, 2502 ... 3002 - one server per 100 ports,
+        ///                 since each takes its game port, +1 and +2.
+        /// </summary>
+        public static readonly int[] CommonQueryPorts =
+            { 27015, 27016, 27017, 2303, 2403, 2503, 2603, 2703, 2803, 2903, 3003 };
+
+        /// <summary>CommonQueryPorts in words, for the player.</summary>
+        public const string CommonPortsText = "27015-27017, and 2303, 2403 ... 3003 (game ports 2302, 2402 ... 3002)";
 
         private static readonly string[] ServerExes = { "DayZServer_x64", "DayZServer" };
 
@@ -72,6 +89,212 @@ namespace ABeautifulPotatoLauncher
             });
 
             return found.GroupBy(s => s.GamePort).Select(g => g.First()).ToList();
+        }
+
+        /// <summary>
+        /// A QUICK look for servers on this PC: every port a DayZ server
+        /// process here holds (see Find), plus <paramref name="ports"/> - the
+        /// common ones - for a server Windows does not show as DayZServer (a
+        /// renamed exe, another game). All asked at once; a closed port on
+        /// loopback is refused straight away, so this takes well under a second.
+        /// </summary>
+        public static List<LocalServer> FindQuick(int[] ports, int timeoutMs = 500)
+        {
+            var pids = new HashSet<int>();
+            foreach (string exe in ServerExes)
+            {
+                try { foreach (var p in Process.GetProcessesByName(exe)) pids.Add(p.Id); }
+                catch { }
+            }
+
+            var ask = new List<int>(ports ?? new int[0]);
+            if (pids.Count > 0)
+                foreach (int p in UdpPortsOwnedBy(pids))
+                    if (!ask.Contains(p)) ask.Add(p);
+
+            var found = new System.Collections.Concurrent.ConcurrentBag<LocalServer>();
+            Parallel.ForEach(ask, new ParallelOptions { MaxDegreeOfParallelism = 16 }, port =>
+            {
+                var info = A2S.GetInfoAt("127.0.0.1", port, timeoutMs);
+                if (info == null || !info.Online) return;
+                found.Add(new LocalServer
+                {
+                    QueryPort = port,
+                    GamePort = info.GamePort > 0 ? info.GamePort : port - 1,
+                    Info = info
+                });
+            });
+
+            return found.GroupBy(s => s.GamePort).Select(g => g.OrderBy(x => x.QueryPort).First()).ToList();
+        }
+
+        // ------------------------------------------------- network scan --
+
+        /// <summary>Most addresses one scan asks: four /24 networks.</summary>
+        private const int MaxScanHosts = 1024;
+
+        /// <summary>
+        /// The home networks this PC is on, as (first host, count) ranges -
+        /// private addresses only (10.x, 172.16-31.x, 192.168.x), never the
+        /// internet, and never 169.254.x, which is what an adapter with no
+        /// network gives itself. A network wider than /24 is scanned as the
+        /// /24 around this PC: home servers sit beside the PC that runs them.
+        /// </summary>
+        public static List<KeyValuePair<uint, int>> HomeNetworks(out List<string> described)
+        {
+            var ranges = new List<KeyValuePair<uint, int>>();
+            described = new List<string>();
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up
+                        || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback
+                        || ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+
+                    foreach (var a in ni.GetIPProperties().UnicastAddresses)
+                    {
+                        if (a.Address.AddressFamily != AddressFamily.InterNetwork || a.IPv4Mask == null) continue;
+                        uint ip = ToUInt(a.Address);
+                        if (!IsPrivate(ip)) continue;
+
+                        uint mask = ToUInt(a.IPv4Mask);
+                        if (mask < 0xFFFFFF00u) mask = 0xFFFFFF00u;          // wider than /24
+                        if (mask >= 0xFFFFFFFEu) continue;                   // /31, /32: nothing beside it
+
+                        uint net = ip & mask;
+                        int count = (int)(~mask) - 1;                         // less network and broadcast
+                        if (ranges.Any(r => r.Key == net + 1)) continue;
+                        ranges.Add(new KeyValuePair<uint, int>(net + 1, count));
+
+                        int prefix = 32;
+                        for (uint m = ~mask; m != 0; m >>= 1) prefix--;
+                        described.Add(FromUInt(net) + "/" + prefix);
+                    }
+                }
+            }
+            catch { }
+            return ranges;
+        }
+
+        /// <summary>
+        /// Every server on the home network answering on one of
+        /// <paramref name="ports"/>. One A2S_INFO goes to each port of each
+        /// address, all from ONE socket - an address with nothing on it simply
+        /// never answers, so the whole network costs one short wait rather
+        /// than a timeout per address. Whatever answers like a Steam query
+        /// port is then asked properly. A few seconds for a /24.
+        /// This PC's own addresses are left out; FindQuick covers them.
+        /// </summary>
+        public static List<LocalServer> ScanNetwork(int[] ports, out List<string> networks)
+        {
+            var ranges = HomeNetworks(out networks);
+            var own = new HashSet<uint>();
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    foreach (var a in ni.GetIPProperties().UnicastAddresses)
+                        if (a.Address.AddressFamily == AddressFamily.InterNetwork) own.Add(ToUInt(a.Address));
+            }
+            catch { }
+
+            var targets = new List<uint>();
+            foreach (var r in ranges)
+                for (int i = 0; i < r.Value && targets.Count < MaxScanHosts; i++)
+                {
+                    uint h = r.Key + (uint)i;
+                    if (!own.Contains(h)) targets.Add(h);
+                }
+
+            var answered = new HashSet<KeyValuePair<uint, int>>();
+            if (targets.Count == 0 || ports == null || ports.Length == 0) return new List<LocalServer>();
+
+            using (var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+            {
+                // See ScanForQueryPort: a refused port must not end the scan.
+                try { sock.IOControl(unchecked((int)0x9800000C), new byte[] { 0, 0, 0, 0 }, null); }
+                catch { }
+                sock.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+                var buf = new byte[1400];
+                Action drain = () =>
+                {
+                    while (sock.Available > 0)
+                    {
+                        EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                        int n;
+                        try { n = sock.ReceiveFrom(buf, ref from); }
+                        catch { continue; }
+                        if (n >= 5 && buf[0] == 0xFF && buf[1] == 0xFF && buf[2] == 0xFF && buf[3] == 0xFF)
+                        {
+                            var ep = (IPEndPoint)from;
+                            answered.Add(new KeyValuePair<uint, int>(ToUInt(ep.Address), ep.Port));
+                        }
+                    }
+                };
+
+                int sent = 0;
+                foreach (uint h in targets)
+                {
+                    var addr = FromUInt(h);
+                    foreach (int port in ports)
+                    {
+                        try { sock.SendTo(InfoRequest, new IPEndPoint(addr, port)); }
+                        catch { }
+                    }
+                    // A little pacing, so a router is not handed a few
+                    // thousand packets in one instant.
+                    if (++sent % 32 == 0) { drain(); System.Threading.Thread.Sleep(15); }
+                }
+
+                var until = DateTime.UtcNow.AddMilliseconds(1500);
+                while (DateTime.UtcNow < until)
+                {
+                    drain();
+                    System.Threading.Thread.Sleep(50);
+                }
+            }
+
+            var found = new System.Collections.Concurrent.ConcurrentBag<LocalServer>();
+            Parallel.ForEach(answered, new ParallelOptions { MaxDegreeOfParallelism = 16 }, hp =>
+            {
+                string host = FromUInt(hp.Key).ToString();
+                var info = A2S.GetInfoAt(host, hp.Value, 1500);
+                if (info == null || !info.Online) return;
+                found.Add(new LocalServer
+                {
+                    Host = host,
+                    QueryPort = hp.Value,
+                    GamePort = info.GamePort > 0 ? info.GamePort : hp.Value - 1,
+                    Info = info
+                });
+            });
+
+            return found.GroupBy(s => s.Host + ":" + s.GamePort)
+                        .Select(g => g.OrderBy(x => x.QueryPort).First()).ToList();
+        }
+
+        private static readonly byte[] InfoRequest =
+            { 0xFF, 0xFF, 0xFF, 0xFF, 0x54, (byte)'S', (byte)'o', (byte)'u', (byte)'r', (byte)'c',
+              (byte)'e', (byte)' ', (byte)'E', (byte)'n', (byte)'g', (byte)'i', (byte)'n', (byte)'e',
+              (byte)' ', (byte)'Q', (byte)'u', (byte)'e', (byte)'r', (byte)'y', 0 };
+
+        private static uint ToUInt(IPAddress a)
+        {
+            byte[] b = a.GetAddressBytes();
+            return ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
+        }
+
+        private static IPAddress FromUInt(uint v)
+        {
+            return new IPAddress(new[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v });
+        }
+
+        private static bool IsPrivate(uint ip)
+        {
+            return (ip >> 24) == 10
+                || (ip >> 20) == 0xAC1                                    // 172.16.0.0/12
+                || (ip >> 16) == 0xC0A8;                                  // 192.168.0.0/16
         }
 
         /// <summary>The query port of the local server on this game port, or 0.</summary>
@@ -164,6 +387,18 @@ namespace ABeautifulPotatoLauncher
                     return p;
             }
             return 0;
+        }
+
+        /// <summary>
+        /// Is this a server on the player's own network - this PC, or a
+        /// private address (10.x, 172.16-31.x, 192.168.x)?
+        /// </summary>
+        public static bool IsHomeAddress(string host)
+        {
+            if (IsThisMachine(host)) return true;
+            IPAddress a;
+            return IPAddress.TryParse((host ?? "").Trim(), out a)
+                && a.AddressFamily == AddressFamily.InterNetwork && IsPrivate(ToUInt(a));
         }
 
         /// <summary>Is this address one of this machine's own?</summary>

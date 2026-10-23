@@ -226,6 +226,62 @@ namespace ABeautifulPotatoLauncher
             Names.Clear();
         }
 
+        // ---------------------------------------------- LAN servers joined --
+
+        /// <summary>How many recently joined LAN servers the LAN tab keeps listed.</summary>
+        public const int LanJoinedKept = 10;
+
+        private static string LanJoinedFile { get { return Path.Combine(Dir, "lan-joined.tsv"); } }
+
+        /// <summary>
+        /// The LAN servers joined most recently, newest first. The LAN tab
+        /// lists them even while they are down: a test server is stopped and
+        /// started all day, and the one just played on should still be there
+        /// to pick when it comes back, rather than vanishing from the list.
+        /// </summary>
+        public static List<BrowserServer> LoadLanJoined()
+        {
+            var list = new List<BrowserServer>();
+            try
+            {
+                if (!File.Exists(LanJoinedFile)) return list;
+                foreach (string line in File.ReadAllLines(LanJoinedFile))
+                {
+                    string[] f = line.Split('\t');
+                    if (f.Length < 6) continue;
+                    int port, query;
+                    uint app;
+                    if (!int.TryParse(f[1], out port) || port <= 0) continue;
+                    int.TryParse(f[2], out query);
+                    uint.TryParse(f[3], out app);
+                    list.Add(new BrowserServer
+                    {
+                        Host = f[0], Port = port, QueryPort = query, AppId = app, Name = f[4], Map = f[5]
+                    });
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        /// <summary>Puts a joined LAN server first, keeping LanJoinedKept of them.</summary>
+        public static void RememberLanJoin(BrowserServer s)
+        {
+            if (s == null || string.IsNullOrEmpty(s.Host) || s.Port <= 0) return;
+            try
+            {
+                var list = LoadLanJoined();
+                list.RemoveAll(x => string.Equals(x.Endpoint, s.Endpoint, StringComparison.OrdinalIgnoreCase));
+                list.Insert(0, s);
+                var lines = list.Take(LanJoinedKept)
+                                .Select(x => x.Host + "\t" + x.Port + "\t" + x.QueryPort + "\t" + x.AppId
+                                             + "\t" + Clean(x.Name) + "\t" + Clean(x.Map))
+                                .ToArray();
+                File.WriteAllLines(LanJoinedFile, lines);
+            }
+            catch { }
+        }
+
         public static HashSet<string> LoadFavourites()
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

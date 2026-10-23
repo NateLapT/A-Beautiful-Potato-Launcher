@@ -475,12 +475,13 @@ namespace ABeautifulPotatoLauncher
 
     internal sealed class MainForm : Form
     {
-        // Column indices. The first column is a clickable refresh glyph - a
-        // ListView cannot host real buttons, so the cell is hit-tested instead.
+        // Column indices. The first two are clickable glyphs - refresh and
+        // favourite - and so is the last, the report flag. A ListView cannot
+        // host real buttons, so the cells are hit-tested instead.
         private const int ColRefresh = 0, ColStar = 1, ColName = 2, ColGame = 3,
                           ColStatus = 4, ColMap = 5, ColCountry = 6, ColPlayers = 7,
                           ColTime = 8, ColPing = 9, ColMods = 10, ColView = 11,
-                          ColPassword = 12, ColAddress = 13;
+                          ColPassword = 12, ColAddress = 13, ColReport = 14;
 
         // Row colours, kept in one place so the list reads consistently:
         //   normal   - listed, and either answered or not yet asked
@@ -496,6 +497,7 @@ namespace ABeautifulPotatoLauncher
         private static readonly Color RowOffline = Color.FromArgb(150, 96, 96);
         private static readonly Color StatusOn   = Color.FromArgb(120, 200, 120);
         private static readonly Color StatusOff  = Color.FromArgb(205, 105, 105);
+        private const string ReportGlyph = "\u2691";   // a flag - report this server
         private const string RefreshGlyph = "\u21BB";
         private const string StarOn = "\u2605";     // filled - a favourite
         private const string StarOff = "\u2606";    // hollow - click to save
@@ -735,6 +737,10 @@ namespace ABeautifulPotatoLauncher
         }
 
         private readonly System.Windows.Forms.Timer _visTimer = new System.Windows.Forms.Timer();
+
+        /// <summary>Re-asks the servers on screen for ping and players - see OnLiveTick.</summary>
+        private readonly System.Windows.Forms.Timer _liveTimer = new System.Windows.Forms.Timer();
+        private int _liveTicks;
         private int _lastTopIndex = -1;
         private int _lastRawCount = -1;
         private int _stableTicks;
@@ -888,6 +894,13 @@ namespace ABeautifulPotatoLauncher
         private TextBox _name, _log, _search;
         private Label _status, _modsHeader, _searchHint, _searchClear;
         private Button _connect, _refresh, _filterToggle, _favBtn;
+
+        /// <summary>
+        /// BUILD INDEX and REFRESH NETWORK share a place on the rail: the index
+        /// is the internet list's, the network scan the LAN tab's, so each tab
+        /// shows the one that means something there. See HighlightTab.
+        /// </summary>
+        private Button _buildIndex, _scanNetwork;
         private Panel _filterPanel;
         private readonly Dictionary<Tab, Button> _tabs = new Dictionary<Tab, Button>();
         private ComboBox _cbBuild;
@@ -1016,6 +1029,10 @@ namespace ABeautifulPotatoLauncher
 
             _visTimer.Interval = 500;
             _visTimer.Tick += OnVisTick;
+
+            _liveTimer.Interval = LiveEveryMs;
+            _liveTimer.Tick += OnLiveTick;
+            _liveTimer.Start();
 
             _typeTimer.Interval = 220;
             _typeTimer.Tick += (s, e) => { _typeTimer.Stop(); ApplyFilters(); };
@@ -1227,6 +1244,23 @@ namespace ABeautifulPotatoLauncher
             _updateButton.FlatAppearance.BorderColor = UpdateGold;
             _updateButton.Click += (s, e) => UpdateDialog.Show(Host, _updates);
             bottomBar.Controls.Add(_updateButton);
+
+            // Left of Settings: added before it, for the reason given above.
+            var feedback = new Button
+            {
+                Text = "Feedback",
+                Dock = DockStyle.Right,
+                Width = 88,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(52, 52, 58),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            feedback.FlatAppearance.BorderColor = Color.FromArgb(78, 78, 86);
+            feedback.Click += (s, e) => OpenFeedback();
+            new ToolTip().SetToolTip(feedback, "Report a problem or suggest something");
+            bottomBar.Controls.Add(feedback);
 
             var settings = new Button
             {
@@ -1498,9 +1532,12 @@ namespace ABeautifulPotatoLauncher
             _list.Columns.Add(Games.IsZomboid ? "" : "View", Games.IsZomboid ? 0 : 52, HorizontalAlignment.Center);
             _list.Columns.Add("Password", 66, HorizontalAlignment.Center);
             _list.Columns.Add("Address", 132);
+            _list.Columns.Add("", 24, HorizontalAlignment.Center);
             _list.DoubleClick += OnConnect;
             _list.MouseClick += OnListClick;
             _list.MouseDown += OnListMouseDown;
+            _list.MouseMove += OnListMouseMove;
+            _list.MouseLeave += (s, e) => { _flagTipShown = null; _flagTip.Hide(_list); };
             _list.ContextMenuStrip = BuildServerMenu();
 
             var outerSplit = MakeSplit(Orientation.Horizontal, 300, "list");
@@ -1815,7 +1852,7 @@ namespace ABeautifulPotatoLauncher
             }
 
             _refresh = MakeBtn("REFRESH", new Rectangle(20, ry, 170, 30), Panel2);
-            _refresh.Click += (s, e) => RefreshCurrent(true);
+            _refresh.Click += (s, e) => { FetchFlags(true); RefreshCurrent(true); };
             new ToolTip().SetToolTip(_refresh, "Refresh the server list (F5)");
             rail.Controls.Add(_refresh);
             ry += 34;
@@ -1839,6 +1876,18 @@ namespace ABeautifulPotatoLauncher
                     ? "Asks Steam for the list one starting letter at a time, which reaches past "
                     : "Asks Steam for every map the launcher knows about, which reaches past ")
                 + "its 10,000-server limit. Takes a few minutes; the list fills as it goes.");
+            _buildIndex = buildIndex;
+
+            _scanNetwork = MakeBtn("REFRESH NETWORK", new Rectangle(20, ry, 170, 26), Panel2);
+            _scanNetwork.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+            _scanNetwork.Click += (s, e) => RefreshNetwork();
+            _scanNetwork.Visible = false;
+            rail.Controls.Add(_scanNetwork);
+            new ToolTip { AutoPopDelay = 20000 }.SetToolTip(_scanNetwork,
+                "Looks for servers on every PC on your home network, not just the ones Steam's "
+                + "LAN search hears from. Asks each address on the query ports "
+                + (Games.IsZomboid ? Zomboid.DefaultPort.ToString() : LocalServers.CommonPortsText)
+                + ". Takes a few seconds.");
             ry += 30;
 
             _favBtn = MakeBtn("ADD TO FAVORITES", new Rectangle(20, ry, 170, 26), Panel2);
@@ -2534,6 +2583,12 @@ namespace ABeautifulPotatoLauncher
             foreach (var kv in _tabs)
                 kv.Value.BackColor = kv.Key == _tab ? Accent : Panel2;
 
+            if (_scanNetwork != null)
+            {
+                _scanNetwork.Visible = _tab == Tab.Lan;
+                _buildIndex.Visible = _tab != Tab.Lan;
+            }
+
             // Zomboid's version box filters whatever is on screen, on any tab.
             if (Games.IsZomboid) return;
 
@@ -2651,7 +2706,7 @@ namespace ABeautifulPotatoLauncher
             // Asking for a sort turns off append mode: the player has said what
             // order they want, so arrivals stop being pinned to the end.
             _appendWhileLoading = false;
-            if (e.Column == ColRefresh || e.Column == ColStar) return;
+            if (e.Column == ColReport || e.Column == ColRefresh || e.Column == ColStar) return;
 
             if (_sortColumn == e.Column) _sortAscending = !_sortAscending;
             else { _sortColumn = e.Column; _sortAscending = true; }
@@ -2665,7 +2720,7 @@ namespace ABeautifulPotatoLauncher
         {
             string[] titles = { "", "", "Name", Games.IsZomboid ? "Version" : "Game", "Status", "Map",
                                 "Country", "Players", Games.IsZomboid ? "" : "Time", "Ping", "Mods",
-                                Games.IsZomboid ? "" : "View", "Password", "Address" };
+                                Games.IsZomboid ? "" : "View", "Password", "Address", "" };
             for (int i = 0; i < _list.Columns.Count && i < titles.Length; i++)
             {
                 string label = titles[i];
@@ -3047,11 +3102,12 @@ namespace ABeautifulPotatoLauncher
                 Modded(row.Tags) ? "yes" : "",
                 ViewModes.Label(ViewModes.Of(row.Tags, row.Name)),
                 row.Password ? "Yes" : "No",
-                row.Endpoint
+                row.Endpoint,
+                ReportGlyph
             })
             {
                 UseItemStyleForSubItems = false,
-                ToolTipText = "Arrow re-checks this server; star saves it to Favorites"
+                ToolTipText = "Arrow re-checks this server; star saves it to Favorites; flag reports it"
             };
 
             // Same rule as the heading: a virtual list needs every column
@@ -3061,6 +3117,7 @@ namespace ABeautifulPotatoLauncher
             Color body = row.Offline ? RowOffline : RowNormal;
             for (int i = ColName; i < it.SubItems.Count; i++) it.SubItems[i].ForeColor = body;
 
+            it.SubItems[ColReport].ForeColor = FlagColour(row.Endpoint);
             it.SubItems[ColRefresh].ForeColor = Color.FromArgb(120, 150, 190);
             it.SubItems[ColStar].ForeColor = fav
                 ? Color.FromArgb(235, 200, 90) : Color.FromArgb(95, 95, 102);
@@ -3284,8 +3341,15 @@ namespace ABeautifulPotatoLauncher
             _retryWaitTicks = 0;
             _pollRetries = 0;
 
-            foreach (var srv in _cache)
-                if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
+            // The saved list is carried into the new one, so a refresh never
+            // empties what is on screen. Not on LAN, where a server is a test
+            // copy that is started and stopped all day: carried over, every
+            // server ever run stayed listed for good, and a refresh looked
+            // like it did nothing. The LAN probe re-asks the saved ones itself
+            // and keeps whichever still answer.
+            if (kind != ListKind.Lan)
+                foreach (var srv in _cache)
+                    if (_mergedKeys.Add(srv.Endpoint)) _merged.Add(srv);
 
             var pass = _appQueue.Dequeue();
             uint app = pass.App;
@@ -3301,7 +3365,8 @@ namespace ABeautifulPotatoLauncher
             Log("Query: " + kind + ", app " + app + (steamFilters.Count == 0 ? ", no filters"
                 : ", " + string.Join(", ", steamFilters.Select(f => f.Key + "=" + f.Value).ToArray())));
 
-            if (kind == ListKind.Lan) StartLocalhostProbe();
+            if (kind == ListKind.Lan) StartLanProbe(_cache, _scanNetworkNext);
+            _scanNetworkNext = false;
 
             if (!SteamServerList.Start(kind, app, steamFilters))
             {
@@ -3353,6 +3418,7 @@ namespace ABeautifulPotatoLauncher
             _relayBusy = true;
 
             EnsureSteamSession();
+            FetchFlags();
 
             string key = CacheKey;
             var apps = new HashSet<uint>(AppsForQuery);
@@ -3536,50 +3602,124 @@ namespace ABeautifulPotatoLauncher
         // Steam's LAN list is a broadcast, and a server running on this same
         // machine often never answers it - so the player's own test server,
         // the one they most want to join, was missing from the LAN tab. Every
-        // LAN refresh therefore also asks the DayZ server processes running
-        // here for their real ports (see LocalServers) and adds what answers.
-        // With no server process found, 27015 and 27016 - where a server with
-        // no steamQueryPort set answers - are still asked.
+        // LAN refresh therefore also:
+        //   - asks THIS PC directly: every port a DayZ server process here
+        //     holds, and the common query ports (LocalServers.CommonQueryPorts)
+        //     - well under a second, since loopback refuses a closed port at once;
+        //   - re-asks each server the saved LAN list has on another PC, so one
+        //     found by REFRESH NETWORK stays listed for as long as it is up;
+        //   - with REFRESH NETWORK, asks every address on the home network on
+        //     the same common ports (LocalServers.ScanNetwork).
+        // The list waits for this before it calls itself finished.
 
         private volatile List<BrowserServer> _localhost = new List<BrowserServer>();
+        private volatile bool _lanProbeBusy;
+        private volatile bool _lanProbeNetwork;
+        private int _lanProbeGen;
 
-        private void StartLocalhostProbe()
+        /// <summary>Set by REFRESH NETWORK: the next LAN refresh scans the network too.</summary>
+        private bool _scanNetworkNext;
+
+        private void RefreshNetwork()
         {
+            if (_tab != Tab.Lan) return;
+            _scanNetworkNext = true;
+            RefreshCurrent(true);
+        }
+
+        private void StartLanProbe(List<BrowserServer> saved, bool network)
+        {
+            int gen = ++_lanProbeGen;
+            _localhost = new List<BrowserServer>();
+            _lanJoined = ServerStore.LoadLanJoined();
+            _lanJoinedShown.Clear();
+            _lanProbeBusy = true;
+            _lanProbeNetwork = network;
+
+            int[] ports = Games.IsZomboid ? new[] { Zomboid.DefaultPort } : LocalServers.CommonQueryPorts;
+            var elsewhere = (saved ?? new List<BrowserServer>())
+                .Where(x => x.QueryPort > 0 && !LocalServers.IsThisMachine(x.Host))
+                .GroupBy(x => x.Host + ":" + x.QueryPort).Select(g => g.First()).ToList();
+
             System.Threading.Tasks.Task.Run(() =>
             {
-                // LocalServers knows DayZ's server processes; a Zomboid server
-                // here is simply asked on its default port.
-                var found = Games.IsZomboid ? new List<LocalServer>() : LocalServers.Find();
-                if (found.Count == 0)
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var here = new List<LocalServer>();
+                var others = new List<LocalServer>();
+                List<string> networks = null;
+                try
                 {
-                    int[] ports = Games.IsZomboid ? new[] { Zomboid.DefaultPort } : LocalServers.DefaultQueryPorts;
-                    foreach (int qp in ports)
-                    {
-                        var info = A2S.GetInfoAt("127.0.0.1", qp, 600);
-                        if (info != null && info.Online)
-                            found.Add(new LocalServer
-                            {
-                                QueryPort = qp,
-                                GamePort = info.GamePort > 0 ? info.GamePort : Games.IsZomboid ? qp : 2302,
-                                Info = info
-                            });
-                    }
-                }
+                    here = LocalServers.FindQuick(ports);
 
-                _localhost = found.Select(s => new BrowserServer
+                    var still = new System.Collections.Concurrent.ConcurrentBag<LocalServer>();
+                    System.Threading.Tasks.Parallel.ForEach(elsewhere,
+                        new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 16 }, x =>
+                        {
+                            var info = A2S.GetInfoAt(x.Host, x.QueryPort, 800);
+                            if (info != null && info.Online)
+                                still.Add(new LocalServer { Host = x.Host, QueryPort = x.QueryPort,
+                                                            GamePort = info.GamePort > 0 ? info.GamePort : x.Port,
+                                                            Info = info });
+                        });
+                    others.AddRange(still);
+
+                    if (network) others.AddRange(LocalServers.ScanNetwork(ports, out networks));
+                }
+                catch { }
+
+                // A Zomboid server's query port is its game port.
+                if (Games.IsZomboid)
+                    foreach (var x in here.Concat(others))
+                        if (x.Info.GamePort <= 0) x.GamePort = x.QueryPort;
+
+                var all = here.Concat(others)
+                              .GroupBy(x => x.Host + ":" + x.GamePort).Select(g => g.First()).ToList();
+                if (gen != _lanProbeGen) return;
+
+                _localhost = all.Select(x => new BrowserServer
                 {
-                    Name = s.Info.Name,
-                    Map = s.Info.Map,
-                    Host = "127.0.0.1",
-                    Port = s.GamePort,
-                    QueryPort = s.QueryPort,
-                    Players = s.Info.Players,
-                    MaxPlayers = s.Info.MaxPlayers,
-                    Ping = Math.Max(0, s.Info.PingMs),
-                    AppId = (uint)s.Info.AppId,
-                    Password = s.Info.Password,
-                    Tags = s.Info.Keywords ?? ""
+                    Name = x.Info.Name,
+                    Map = x.Info.Map,
+                    Host = x.Host,
+                    Port = x.GamePort,
+                    QueryPort = x.QueryPort,
+                    Players = x.Info.Players,
+                    MaxPlayers = x.Info.MaxPlayers,
+                    Ping = Math.Max(0, x.Info.PingMs),
+                    AppId = (uint)x.Info.AppId,
+                    Password = x.Info.Password,
+                    Tags = x.Info.Keywords ?? ""
                 }).ToList();
+                _lanProbeBusy = false;
+
+                long ms = watch.ElapsedMilliseconds;
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (_closing) return;
+                        Func<IEnumerable<LocalServer>, string> names = list => string.Join(", ",
+                            list.OrderBy(x => x.Host).ThenBy(x => x.GamePort)
+                                .Select(x => (x.Host == "127.0.0.1" ? "" : x.Host + ":") + x.GamePort
+                                             + " \"" + x.Info.Name + "\"").ToArray());
+
+                        Log("This PC, query ports " + (Games.IsZomboid ? Zomboid.DefaultPort.ToString()
+                                                                       : LocalServers.CommonPortsText)
+                            + " and any held by a server process: "
+                            + (here.Count == 0 ? "no server answering." : names(here) + "."));
+                        if (network)
+                        {
+                            var scanned = others.Where(o => !elsewhere.Any(e => e.Host == o.Host
+                                                                              && e.QueryPort == o.QueryPort)).ToList();
+                            Log(networks == null || networks.Count == 0
+                                ? "Network scan: this PC is not on a home network (10.x, 172.16-31.x or 192.168.x)."
+                                : "Network scan of " + string.Join(", ", networks.ToArray()) + " on the same ports ("
+                                  + (ms / 1000.0).ToString("0.0") + " s): "
+                                  + (others.Count == 0 ? "no servers found." : names(others) + "."));
+                        }
+                    }));
+                }
+                catch (InvalidOperationException) { }
             });
         }
 
@@ -3607,6 +3747,64 @@ namespace ABeautifulPotatoLauncher
         private List<BrowserServer> AddLocalhost(List<BrowserServer> steam, uint app)
         {
             return AddLocalhost(steam, app, _localhost);
+        }
+
+        // ------------------------------------------- LAN servers joined --
+
+        /// <summary>The recently joined LAN servers, read when a LAN refresh starts.</summary>
+        private List<BrowserServer> _lanJoined = new List<BrowserServer>();
+
+        /// <summary>Joined servers already listed as offline this refresh - see AddLanJoined.</summary>
+        private readonly HashSet<string> _lanJoinedShown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A server on the player's own network goes on the LAN tab's joined list.</summary>
+        private static void RememberLanJoin(Row srv, ServerInfo live)
+        {
+            if (srv == null || !LocalServers.IsHomeAddress(srv.Host)) return;
+            bool told = live != null && live.Online;
+            ServerStore.RememberLanJoin(new BrowserServer
+            {
+                Host = srv.Host,
+                Port = srv.Port,
+                QueryPort = srv.QueryPort,
+                AppId = (uint)(told ? live.AppId : srv.AppId),
+                Name = told && !string.IsNullOrEmpty(live.Name) ? live.Name : srv.Name,
+                Map = told && !string.IsNullOrEmpty(live.Map) ? live.Map : srv.Map
+            });
+        }
+
+        /// <summary>
+        /// The LAN list plus every recently joined LAN server it does not have,
+        /// marked offline. Only once this PC and the network have been asked
+        /// (the probe is done), so a server merely slow to answer is not shown
+        /// offline first. One the list already has under another address - a
+        /// local server Steam reports by the PC's LAN address - counts as the
+        /// same server when the game port matches and the name or the machine does.
+        /// </summary>
+        private List<BrowserServer> AddLanJoined(List<BrowserServer> list, uint app)
+        {
+            if (_lanJoined.Count == 0) return list;
+            var all = new List<BrowserServer>(list);
+            foreach (var j in _lanJoined)
+            {
+                if (j.AppId != 0 && app != 0 && j.AppId != app) continue;   // other build's pass
+                bool here = LocalServers.IsThisMachine(j.Host);
+                if (all.Any(x => x.Endpoint == j.Endpoint
+                              || (x.Port == j.Port && (string.Equals(x.Name, j.Name, StringComparison.Ordinal)
+                                                       || (here && LocalServers.IsThisMachine(x.Host))))))
+                    continue;
+
+                all.Add(new BrowserServer
+                {
+                    Host = j.Host, Port = j.Port, QueryPort = j.QueryPort, AppId = j.AppId,
+                    Name = j.Name, Map = j.Map, Offline = true
+                });
+
+                // An earlier answer would otherwise show it as up. Dropped once
+                // per refresh, so a fresh check of the row is not undone.
+                if (_lanJoinedShown.Add(j.Endpoint)) _live.Remove(j.Endpoint);
+            }
+            return all;
         }
 
         // ----------------------------------------------- the 10,000 cap ----
@@ -4034,7 +4232,11 @@ namespace ABeautifulPotatoLauncher
 
             _pollTicks++;
             _browser = SteamServerList.Poll(out done, out raw);
-            if (_pollKind == ListKind.Lan) _browser = AddLocalhost(_browser, _pollApp);
+            if (_pollKind == ListKind.Lan)
+            {
+                _browser = AddLocalhost(_browser, _pollApp);
+                if (!_lanProbeBusy) _browser = AddLanJoined(_browser, _pollApp);
+            }
 
             int minTicks = PollingSmallList ? 2 : 5;
             if (_pollTicks < minTicks) done = false;
@@ -4058,6 +4260,10 @@ namespace ABeautifulPotatoLauncher
 
             if (_pollTicks > (PollingSmallList ? 240 : 150)) done = true;
 
+            // Not finished while this PC or the network is still being asked.
+            bool probing = _pollKind == ListKind.Lan && _lanProbeBusy && _pollTicks <= 240;
+            if (probing) done = false;
+
             var combined = _merged.Count == 0 ? _browser : Combine(_browser);
             _caches[CacheKey] = combined;
             _cacheTimes[CacheKey] = DateTime.Now;
@@ -4080,7 +4286,9 @@ namespace ABeautifulPotatoLauncher
                 _lastShownCount = RenderFromCache();
             }
 
-            UpdateStatus(done ? null : "(loading from Steam...)");
+            UpdateStatus(done ? null
+                         : probing && _lanProbeNetwork ? "(scanning your network...)"
+                         : "(loading from Steam...)");
 
             if (!done) return;
 
@@ -4245,6 +4453,7 @@ namespace ABeautifulPotatoLauncher
                     AppId = srv.AppId, Tags = srv.Tags, Password = srv.Password,
                     Favourite = _favourites.Contains(srv.Endpoint)
                 };
+                if (srv.Offline) row.Online = false;
 
                 ServerInfo live;
                 if (_live.TryGetValue(srv.Endpoint, out live)) Apply(row, live);
@@ -5117,6 +5326,52 @@ namespace ABeautifulPotatoLauncher
             FitNameColumn();
         }
 
+        // ------------------------------------------- keeping it current --
+
+        /// <summary>How often the rows on screen are re-asked while the launcher is in use.</summary>
+        private const int LiveEveryMs = 10000;
+
+        /// <summary>Every this many ticks (30 s) while another window has the focus.</summary>
+        private const int LiveTicksUnfocused = 3;
+
+        /// <summary>
+        /// A server was asked once, when it first came into view, and its ping
+        /// and player count then stood still however long the launcher was
+        /// open. This re-asks the rows ON SCREEN - only those, 20 to 40 of them
+        /// - every 10 seconds while the launcher is the active window, and
+        /// every 30 while it is open behind something else. Two small UDP
+        /// packets per server: under 1 KB a second for a full screen.
+        ///
+        /// NOT WHILE PLAYING. Most players leave the launcher open behind the
+        /// game, and nothing should be sent from this PC while they play - so
+        /// it stops while the game is running, and while the launcher is
+        /// minimised. It also waits while a list is still arriving or a sweep
+        /// is still working through servers, rather than queueing on top.
+        /// </summary>
+        private void OnLiveTick(object sender, EventArgs e)
+        {
+            // The launcher is hosted inside LauncherWindow - that is the
+            // window that is minimised or has the focus.
+            var window = TopLevelControl as Form ?? this;
+            if (_closing || _rows.Count == 0 || !window.Visible || window.WindowState == FormWindowState.Minimized) return;
+            if (_pollTimer.Enabled || PingsOutstanding) return;
+
+            bool focused = Form.ActiveForm == window;
+            if (!focused && ++_liveTicks % LiveTicksUnfocused != 0) return;
+
+            if (IsRunning(Games.IsZomboid ? Zomboid.GameExe : GameExe)) return;
+            FetchFlags();
+
+            int top = _list.TopItem != null ? _list.TopItem.Index : 0;
+            int rowHeight = Math.Max(1, _list.TopItem != null ? _list.TopItem.Bounds.Height : 18);
+            int end = Math.Min(_rows.Count, top + _list.ClientSize.Height / rowHeight + 1);
+
+            var want = new List<Row>(Math.Max(0, end - top));
+            for (int i = Math.Max(0, top); i < end; i++)
+                if (Pingable(_rows[i])) want.Add(_rows[i]);
+            if (want.Count > 0) Enqueue(want, true);
+        }
+
         private void ApplyLive(Row row, ServerInfo info)
         {
             _live[row.Endpoint] = info;
@@ -5288,6 +5543,148 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
+        // ------------------------------------------- feedback and reports --
+
+        /// <summary>The Feedback window, with the selected server filled in.</summary>
+        private void OpenFeedback()
+        {
+            var row = SelectedRow;
+            string server = row == null || row.IsHeading ? "" : row.Name + "  (" + row.Endpoint + ")";
+            FeedbackDialog.Ask(Host, server, named => ModsListFor(named == server ? row : null));
+        }
+
+        /// <summary>
+        /// What "Send the server's mods list" sends: the mods the server lists,
+        /// as the launcher read them - only when the feedback is about the
+        /// server that was selected, null otherwise. Nothing about the mods on
+        /// this PC is ever sent.
+        /// </summary>
+        private string ModsListFor(Row row)
+        {
+            if (row == null) return null;
+            var sb = new StringBuilder();
+            ServerRules rules;
+            lock (_modLock) _modCache.TryGetValue(row.Endpoint, out rules);
+            sb.Append("Mods ").Append(row.Name).Append(" (").Append(row.Endpoint).Append(") lists");
+            if (rules == null) sb.Append(": not read yet\r\n");
+            else
+            {
+                sb.Append(", ").Append(rules.Mods.Count).Append(rules.Complete ? "" : " - list may be cut short").Append(":\r\n");
+                foreach (var m in rules.Mods)
+                    sb.Append("  ").Append(m.Name).Append("  ").Append(m.WorkshopId == 0 ? "local" : m.WorkshopId.ToString()).Append("\r\n");
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The flag at the end of a row: report the server for review.</summary>
+        private void ReportServer(Row row)
+        {
+            if (row == null || row.IsHeading || string.IsNullOrEmpty(row.Host)) return;
+            bool review;
+            if (ReportServerDialog.Ask(Host, row, out review))
+                _status.Text = review ? "Review requested for " + row.Endpoint + " - we'll be in touch."
+                                      : "Report sent for " + row.Endpoint + " - thank you.";
+        }
+
+        /// <summary>
+        /// Reviewed servers, by "host:port": 1 caution, 2 danger, 3 trusted (a
+        /// curated server). Decided by a person reviewing reports, and published
+        /// by the server list service as a level only - why is never sent, and
+        /// never shown here. Only Trusted has words, on hovering over the flag.
+        /// </summary>
+        private volatile Dictionary<string, int> _flags = new Dictionary<string, int>();
+        private DateTime _flagsAsked = DateTime.MinValue;
+        private bool _flagsBusy;
+
+        /// <summary>
+        /// How often the reviewed list is fetched again while the launcher is
+        /// open - and at once on Refresh. Unchanged, it costs a few bytes.
+        /// </summary>
+        private static readonly TimeSpan FlagsEvery = TimeSpan.FromMinutes(5);
+
+        private static readonly Color FlagNone    = Color.FromArgb(105, 105, 112);
+        private static readonly Color FlagCaution = Color.FromArgb(240, 150, 50);
+        private static readonly Color FlagDanger  = Color.FromArgb(230, 65, 65);
+        private static readonly Color FlagTrusted = Color.FromArgb(90, 200, 110);
+
+        private const int FlagLevelTrusted = 3;
+
+        private int FlagLevel(string endpoint)
+        {
+            int level;
+            return _flags.TryGetValue(endpoint, out level) ? level : 0;
+        }
+
+        /// <summary>The report flag's colour: grey, or orange / red / green once reviewed.</summary>
+        private Color FlagColour(string endpoint)
+        {
+            switch (FlagLevel(endpoint))
+            {
+                case 1: return FlagCaution;
+                case 2: return FlagDanger;
+                case FlagLevelTrusted: return FlagTrusted;
+                default: return FlagNone;
+            }
+        }
+
+        private readonly ToolTip _flagTip = new ToolTip();
+        private bool _anyTrusted;
+        private string _flagTipShown;
+
+        /// <summary>"Trusted" while the pointer is over a trusted server's flag; nothing for any other cell.</summary>
+        private void OnListMouseMove(object sender, MouseEventArgs e)
+        {
+            // Hit-testing a virtual list builds items, so not on every move
+            // unless some server is Trusted at all.
+            string tip = null;
+            var hit = _anyTrusted ? _list.HitTest(e.Location) : null;
+            if (hit != null && hit.Item != null && hit.SubItem != null && hit.Item.SubItems.IndexOf(hit.SubItem) == ColReport)
+            {
+                int index = hit.Item.Index;
+                if (index >= 0 && index < _rows.Count && !_rows[index].IsHeading
+                    && FlagLevel(_rows[index].Endpoint) == FlagLevelTrusted)
+                    tip = "Trusted";
+            }
+            if (tip == _flagTipShown) return;
+            _flagTipShown = tip;
+            if (tip == null) _flagTip.Hide(_list);
+            else _flagTip.Show(tip, _list, e.X + 12, e.Y + 18, 3000);
+        }
+
+        /// <summary>
+        /// Fetches the reviewed list in the background, at most every
+        /// FlagsEvery. A few bytes when nothing changed (ETag). Without the
+        /// service, the copy from last time is used; without that, all grey.
+        /// </summary>
+        private void FetchFlags(bool now = false)
+        {
+            if (_flagsBusy || (!now && DateTime.UtcNow - _flagsAsked < FlagsEvery)) return;
+            _flagsBusy = true;
+            _flagsAsked = DateTime.UtcNow;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Dictionary<string, int> found = null;
+                try { found = Relay.TryFlags(); }
+                catch { }
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _flagsBusy = false;
+                        if (_closing || found == null) return;
+                        bool same = found.Count == _flags.Count
+                                    && found.All(kv => { int v; return _flags.TryGetValue(kv.Key, out v) && v == kv.Value; });
+                        if (same) return;
+                        _flags = found;
+                        _anyTrusted = found.ContainsValue(FlagLevelTrusted);
+                        _list.Invalidate();
+                    }));
+                }
+                catch { }     // the window closed meanwhile
+            });
+        }
+
         private void RefreshOneRow(Row row)
         {
             if (row == null) return;
@@ -5309,6 +5706,7 @@ namespace ABeautifulPotatoLauncher
             if (index < 0 || index >= _rows.Count) return;
             var row = _rows[index];
 
+            if (col == ColReport) { ReportServer(row); return; }
             if (col == ColRefresh) { RefreshOneRow(row); return; }
             if (col == ColStar) { ToggleFavourite(row); return; }
         }
@@ -8216,6 +8614,7 @@ private void Launch(Row srv)
 
             Process started = StartGame(bePath, gameDir, full, live.AppId, live.GameLabel);
             FollowGameApp(live.AppId, live.GameLabel, gameDir);
+            RememberLanJoin(srv, live);
 
             // Remember which mods this server actually used, so the Mod
             // Manager can show when each was last needed. Written now rather
@@ -8746,6 +9145,8 @@ private void Launch(Row srv)
                     + Environment.NewLine + exe + Environment.NewLine + Environment.NewLine
                     + (Elevation.Mismatch() ?? ("Windows said: " + ex.Message)));
             }
+
+            RememberLanJoin(srv, live);
 
             BeginLaunchCooldown();
             var waiting = new LaunchingForm(srv.Name, Zomboid.GameExe, started, Log, EndLaunchCooldown);
@@ -9426,6 +9827,7 @@ private static ServerRules QueryModsChecked(Row row)
 
             _pollTimer.Stop();
             _visTimer.Stop();
+            _liveTimer.Stop();
             _typeTimer.Stop();
             _modRecheck.Stop();
             _saveTimer.Stop();

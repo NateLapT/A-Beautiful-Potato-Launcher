@@ -54,6 +54,9 @@ namespace ABeautifulPotatoLauncher
         private Splitter _grip;
         private PictureBox _image;
         private ListView _facts;
+
+        /// <summary>Repair, Remove, Workshop, Explorer - see LayoutDetailBottom.</summary>
+        private Control[] _detailButtons;
         private System.Windows.Forms.Timer _typeTimer = new System.Windows.Forms.Timer();
 
         private List<ModEntry> _all = new List<ModEntry>();
@@ -259,8 +262,7 @@ namespace ABeautifulPotatoLauncher
                 BackColor = Panel,
                 ForeColor = Color.Gainsboro,
                 BorderStyle = BorderStyle.FixedSingle,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left
-                       | AnchorStyles.Right | AnchorStyles.Bottom
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             _facts.Columns.Add("", 96);
             _facts.Columns.Add("", 208);
@@ -280,16 +282,9 @@ namespace ABeautifulPotatoLauncher
                 Bounds = new Rectangle(10, 548, 310, 60),
                 MaximumSize = new Size(310, 0),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(150, 150, 158),
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+                ForeColor = Color.FromArgb(150, 150, 158)
             };
             _detail.Controls.Add(_statusDetail);
-
-            _detail.Resize += (s, e) =>
-            {
-                int room = Math.Max(120, _detail.ClientSize.Width - 20);
-                _statusDetail.MaximumSize = new Size(room, 0);
-            };
 
             int by = 556;
             var repair = MakeButton("Repair", new Rectangle(10, by, 74, 27), Panel2);
@@ -308,8 +303,10 @@ namespace ABeautifulPotatoLauncher
             explorer.Click += (s, e) => OpenFolder();
             _detail.Controls.Add(explorer);
 
-            foreach (Control c in new Control[] { repair, remove, workshop, explorer })
-                c.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _detailButtons = new Control[] { repair, remove, workshop, explorer };
+            _detail.Resize += (s, e) => LayoutDetailBottom();
+            _statusDetail.SizeChanged += (s, e) => LayoutDetailBottom();
+            _statusDetail.TextChanged += (s, e) => LayoutDetailBottom();
 
             // ---- the list ----
             _list = new ListView
@@ -393,6 +390,37 @@ namespace ABeautifulPotatoLauncher
             Controls.SetChildIndex(_grip, 1);
 
             FitFactColumns();
+            LayoutDetailBottom();
+        }
+
+        /// <summary>
+        /// The bottom of the detail panel, from the bottom up: the buttons on
+        /// the bottom edge, the status explanation above them, and the facts
+        /// list taking what is left.
+        ///
+        /// Placed here rather than by Anchor. Anchors record their distances
+        /// when a control is added, and the panel had not yet been given its
+        /// docked height then, so the buttons and the explanation ended up
+        /// on top of each other - the explanation hiding the buttons - with
+        /// empty space below them. The explanation also wraps to one, two or
+        /// three lines depending on the mod, which no fixed position allows for.
+        /// </summary>
+        private void LayoutDetailBottom()
+        {
+            if (_detailButtons == null) return;
+            var room = _detail.ClientSize;
+            int width = Math.Max(120, room.Width - 20);
+
+            int buttonsTop = room.Height - 10 - 27;
+            foreach (var b in _detailButtons) b.Top = buttonsTop;
+
+            if (_statusDetail.MaximumSize.Width != width) _statusDetail.MaximumSize = new Size(width, 0);
+            int textHeight = _statusDetail.Text.Length > 0 ? _statusDetail.Height : 0;
+            _statusDetail.Location = new Point(10, buttonsTop - 8 - textHeight);
+            _statusDetail.Visible = textHeight > 0;
+
+            int factsBottom = (textHeight > 0 ? _statusDetail.Top : buttonsTop) - 8;
+            _facts.Height = Math.Max(60, factsBottom - _facts.Top);
         }
 
         private Button MakeButton(string text, Rectangle bounds, Color back)
