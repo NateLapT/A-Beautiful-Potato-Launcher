@@ -18,6 +18,25 @@ arbitrary until you know what they were measured against.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-25
+
+### Changed
+
+- **Mod and game mode filters are answered by the server list service.**
+  Picking a mod, or a game mode button, asks the service which servers match
+  - it has read every server's mods and description - and only the matching
+  addresses come back. Before, every server's mods and descriptions were
+  downloaded on every refresh whether a filter was used or not. So a mod
+  filter now finds every server running the mod straight away, not only
+  those the launcher has read so far; servers read since still count too. If
+  the service cannot be reached, the filters work as before, from the servers
+  read here.
+- **Each tab keeps its own search.** Text typed in the search box stays with
+  the tab it was typed on: switching from COMMUNITY to OFFICIAL or LAN shows
+  that tab's own search (empty at first), and switching back puts the
+  COMMUNITY search back. Before, one search followed you to every tab and
+  usually left the others looking empty.
+
 ## [0.9.4] - 2026-10-22
 
 ### Fixed

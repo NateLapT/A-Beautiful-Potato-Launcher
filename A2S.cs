@@ -1022,8 +1022,10 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>
-        /// Parses a raw A2S_RULES reply exactly as a live query would be - for
-        /// the replies the server-list relay collected. Null when unreadable.
+        /// Parses a raw A2S_RULES reply exactly as a live query would be. Null
+        /// when unreadable. The server list service runs a COPY of this parser
+        /// (its RulesParser) to answer mod searches; this is what that copy is
+        /// checked against, reply by reply, when either changes.
         /// </summary>
         public static ServerRules ParseRulesReply(byte[] reply)
         {

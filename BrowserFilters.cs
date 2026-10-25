@@ -358,6 +358,13 @@ namespace ABeautifulPotatoLauncher
         public System.Func<BrowserServer, List<string>> KnownMods;
 
         /// <summary>
+        /// Whether the server list service says this server runs every mod in
+        /// RequiredMods / claims every one of GameModes. Set by the form; false
+        /// when the service has not answered for the current choice.
+        /// </summary>
+        public System.Func<BrowserServer, bool> RelayHasMods, RelayClaimsModes;
+
+        /// <summary>
         /// Whether a server runs everything the player asked for.
         ///
         /// A server we have never queried returns null rather than an empty
@@ -369,6 +376,12 @@ namespace ABeautifulPotatoLauncher
         private bool PassesMods(BrowserServer s)
         {
             if (RequiredMods.Count == 0) return true;
+
+            // The server list service answered for these mods over every
+            // server it knows - see Relay.Search. Its "no" is not final: a
+            // server read here since may still match below.
+            if (RelayHasMods != null && RelayHasMods(s)) return true;
+
             if (KnownMods == null) return false;
 
             var mods = KnownMods(s);
@@ -475,6 +488,11 @@ namespace ABeautifulPotatoLauncher
         private bool PassesGameModes(BrowserServer s)
         {
             if (GameModes.Count == 0) return true;
+
+            // Answered by the server list service from every server's
+            // description - see Relay.Search. A "no" there falls through to
+            // the name, and to a description read here since.
+            if (RelayClaimsModes != null && RelayClaimsModes(s)) return true;
 
             string text = (s.Name ?? "").ToLowerInvariant();
 

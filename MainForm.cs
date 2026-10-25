@@ -594,6 +594,9 @@ namespace ABeautifulPotatoLauncher
             // 255 slots; the engine cannot usefully host them.
             if (s.MaxPlayers == 255) return true;
 
+            // Checked by a person and approved - see SlotsApproved.
+            if (SlotsApproved(s)) return false;
+
             if (SlotsUnreported(s.MaxPlayers)) return SentinelIsFake(s);
 
             return s.MaxPlayers > MaxRealisticSlots;
@@ -1020,6 +1023,8 @@ namespace ABeautifulPotatoLauncher
             // Every clickable thing gets the hand cursor; see UiCursors.
             ListViewTweaks.Smooth(_list);
             _filters.KnownMods = KnownModsFor;
+            _filters.RelayHasMods = srv => { var m = _relayModMatches; return m != null && m.Contains(srv.Endpoint); };
+            _filters.RelayClaimsModes = srv => { var m = _relayModeMatches; return m != null && m.Contains(srv.Endpoint); };
             _filters.KnownDescription = KnownDescriptionFor;
             PaintFilterToggle();
             UiCursors.ApplyTo(this);
@@ -2351,11 +2356,32 @@ namespace ABeautifulPotatoLauncher
         // ---------------------------------------------------------- tabs ----
         private void OnTabClick(object sender, EventArgs e)
         {
-            _tab = (Tab)((Button)sender).Tag;
+            var next = (Tab)((Button)sender).Tag;
+
+            // Each tab keeps its own search. One shared box meant a name typed
+            // on COMMUNITY followed the player to OFFICIAL and LAN, where it
+            // usually matched nothing and the tab looked empty.
+            if (next != _tab)
+            {
+                _searchByTab[_tab] = _search.Text;
+                string text;
+                _searchByTab.TryGetValue(next, out text);
+                _search.Text = text ?? "";
+                _searchHint.Visible = _search.Text.Length == 0 && !_search.Focused;
+                _typeTimer.Stop();              // RefreshCurrent below draws it
+                _lastSteamSearch = "\u0000";    // each tab has its own server list
+            }
+
+            _tab = next;
             ServerStore.SaveTab((int)_tab);
             HighlightTab();
+            ReadFilterUi();
+            PaintFilterToggle();
             RefreshCurrent();
         }
+
+        /// <summary>What was in the search box on each tab when it was left.</summary>
+        private readonly Dictionary<Tab, string> _searchByTab = new Dictionary<Tab, string>();
 
         private static string TabName(Tab t)
         {
@@ -3393,9 +3419,6 @@ namespace ABeautifulPotatoLauncher
         private bool _relaySkipOnce;
         private bool _relayBusy;
 
-        /// <summary>The mods/descriptions file already applied, so it is not parsed twice.</summary>
-        private string _relayRulesTag;
-        private bool _relayRulesBusy;
 
         /// <summary>
         /// Opens the Steam session, so Steam shows the game being browsed.
@@ -3507,58 +3530,123 @@ namespace ABeautifulPotatoLauncher
                 UpdateStatus(null);
             }
 
-            StartRelayRules();
+            // A new list can change the answer; ask again for what is picked.
+            AskRelaySearch(true);
+        }
+
+        // ------------------------------------------------ mods, asked for --
+        //
+        // The mod filter and the game mode buttons are answered by the server
+        // list service, from every server's mods and description - so a mod
+        // filter finds every server running it at once, not only those read
+        // here so far. Only the question goes out and only the matches come
+        // back: a few KB, where every server's mods and descriptions were
+        // 3.9 MB for DayZ, downloaded on every refresh whether used or not.
+        //
+        // Servers read here (the sweep, a click) still count as well, so a
+        // service that cannot be reached leaves the filters working as before.
+
+        /// <summary>Servers the service says run every picked mod / claim every picked mode; null when not answered.</summary>
+        private volatile HashSet<string> _relayModMatches, _relayModeMatches;
+
+        /// <summary>The question each answer above is for, and the one being asked.</summary>
+        private string _relayModKey = "", _relayModeKey = "", _relayModAsking, _relayModeAsking;
+
+        private static string SearchKey(IEnumerable<string> terms)
+        {
+            return string.Join("\n", terms.Select(t => t.Trim().ToLowerInvariant()).Where(t => t.Length > 0)
+                                          .Distinct().OrderBy(t => t, StringComparer.Ordinal));
         }
 
         /// <summary>
-        /// Every server's mods and description, from the same service, parsed
-        /// in the background with the launcher's own parser. Fills the Has Mods
-        /// filter and the game-mode matching for the whole list at once.
+        /// Asks the service about the mods and game modes picked, if it has not
+        /// answered that already (or <paramref name="again"/>: the list changed).
+        /// An answer for an older choice is dropped at once, so it can never
+        /// show servers for something no longer picked.
         /// </summary>
-        private void StartRelayRules()
+        private void AskRelaySearch(bool again = false)
         {
-            if (_relayRulesBusy) return;
-            _relayRulesBusy = true;
-            string applied = _relayRulesTag;
+            string modKey = SearchKey(_filters.RequiredMods);
+            string modeKey = SearchKey(_filters.GameModes);
 
-            System.Threading.Tasks.Task.Run(() =>
+            if (modKey != _relayModKey) { _relayModMatches = null; _relayModKey = ""; }
+            if (modeKey != _relayModeKey) { _relayModeMatches = null; _relayModeKey = ""; }
+
+            if (modKey.Length > 0 && (again || _relayModMatches == null) && _relayModAsking != modKey)
+                AskRelay(modKey, _filters.RequiredMods.ToList(), true);
+            if (modeKey.Length > 0 && (again || _relayModeMatches == null) && _relayModeAsking != modeKey)
+                AskRelay(modeKey, _filters.GameModes.ToList(), false);
+        }
+
+        private void AskRelay(string key, List<string> terms, bool mods)
+        {
+            if (mods) _relayModAsking = key; else _relayModeAsking = key;
+
+            ThreadPool.QueueUserWorkItem(_ =>
             {
-                string tag = null, problem = null;
-                int read = 0;
-                try
-                {
-                    var replies = Relay.TryRules(applied, out tag, out problem);
-                    if (replies != null)
-                        foreach (var kv in replies)
-                        {
-                            if (_closing) return;
-                            var rules = A2S.ParseRulesReply(kv.Value);
-                            if (rules == null) continue;
-                            RememberServerMods(kv.Key, rules);
-                            read++;
-                        }
-                }
+                string problem = null;
+                HashSet<string> found = null;
+                try { found = mods ? Relay.Search(terms, null, out problem) : Relay.Search(null, terms, out problem); }
                 catch (Exception ex) { problem = ex.Message; }
 
                 try
                 {
                     BeginInvoke((Action)(() =>
                     {
-                        _relayRulesBusy = false;
+                        if (mods) { if (_relayModAsking == key) _relayModAsking = null; }
+                        else if (_relayModeAsking == key) _relayModeAsking = null;
                         if (_closing) return;
-                        if (read == 0)
+
+                        // Only if it is still what is picked.
+                        string now = mods ? SearchKey(_filters.RequiredMods) : SearchKey(_filters.GameModes);
+                        if (now != key) return;
+
+                        string what = string.Join(" + ", terms);
+                        if (found == null)
                         {
-                            if (problem != null && problem != "unchanged")
-                                Log("Couldn't load mod lists in bulk (" + problem + ") - they'll be read from "
-                                    + "each server as you browse.");
+                            Log("Couldn't ask the server list for " + (mods ? "mods " : "game modes ") + what
+                                + " (" + problem + ") - showing the servers read here so far.");
                             return;
                         }
-                        _relayRulesTag = tag;
-                        Log("Mod lists and descriptions loaded for " + read.ToString("N0") + " servers.");
-                        SaveServerMods();
-                        if (IsSteamTab(_tab) && (_filters.RequiredMods.Count > 0 || _filters.GameModes.Count > 0))
-                            RenderFromCache();
+                        if (mods) { _relayModMatches = found; _relayModKey = key; }
+                        else { _relayModeMatches = found; _relayModeKey = key; }
+                        Log(found.Count.ToString("N0") + " server(s) " + (mods ? "run " : "claim ") + what + ".");
+                        if (IsSteamTab(_tab)) RenderFromCache();
                         UpdateStatus(null);
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        /// <summary>The commonest mods across every listed server, for the picker; null until fetched.</summary>
+        private volatile List<KeyValuePair<string, int>> _relayModPicker;
+        private DateTime _relayModPickerAsked = DateTime.MinValue;
+        private bool _relayModPickerBusy;
+
+        /// <summary>
+        /// Fetches the picker's mod list when the filter panel is open, at
+        /// most every half hour - a few bytes when unchanged.
+        /// </summary>
+        private void FetchModPicker()
+        {
+            if (_relayModPickerBusy || DateTime.UtcNow - _relayModPickerAsked < TimeSpan.FromMinutes(30)) return;
+            _relayModPickerBusy = true;
+            _relayModPickerAsked = DateTime.UtcNow;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                List<KeyValuePair<string, int>> mods = null;
+                try { mods = Relay.TryModIndex(); }
+                catch { }
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _relayModPickerBusy = false;
+                        if (_closing || mods == null || mods.Count == 0) return;
+                        _relayModPicker = mods;
+                        FillModChoices();
                     }));
                 }
                 catch (InvalidOperationException) { }
@@ -4867,6 +4955,8 @@ namespace ABeautifulPotatoLauncher
             if (_allowed.Contains(s.Host) ||
                 _allowed.Contains(BrowserFilters.Subnet24(s.Host))) return null;
 
+            if (SlotsApproved(s)) return null;
+
             if (ImpossibleCapacity(s))
             {
                 if (s.MaxPlayers == 255) return "reports 255 slots";
@@ -5609,6 +5699,27 @@ namespace ABeautifulPotatoLauncher
 
         private const int FlagLevelTrusted = 3;
 
+        /// <summary>
+        /// Servers over 127 but under 180 slots approved by a person, by
+        /// "host:port" - real servers running more than 127 (Rearmed runs
+        /// 155). Fetched with the flags. See SlotsApproved.
+        /// </summary>
+        private volatile HashSet<string> _slotsApproved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The band a server can be approved in: over 127 slots and under 180.</summary>
+        private const int ApprovedSlotsMin = 128, ApprovedSlotsMax = 179;
+
+        /// <summary>
+        /// Approved, and still claiming a slot count inside the band. Such a
+        /// server is not judged by its capacity, nor by any other fake rule:
+        /// a person has looked at it.
+        /// </summary>
+        private bool SlotsApproved(BrowserServer s)
+        {
+            return s != null && s.MaxPlayers >= ApprovedSlotsMin && s.MaxPlayers <= ApprovedSlotsMax
+                && _slotsApproved.Contains(s.Endpoint);
+        }
+
         private int FlagLevel(string endpoint)
         {
             int level;
@@ -5665,14 +5776,23 @@ namespace ABeautifulPotatoLauncher
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 Dictionary<string, int> found = null;
+                HashSet<string> approved = null;
                 try { found = Relay.TryFlags(); }
+                catch { }
+                try { approved = Relay.TryApproved(); }
                 catch { }
                 try
                 {
                     BeginInvoke((Action)(() =>
                     {
                         _flagsBusy = false;
-                        if (_closing || found == null) return;
+                        if (_closing) return;
+                        if (approved != null && !approved.SetEquals(_slotsApproved))
+                        {
+                            _slotsApproved = approved;
+                            if (IsSteamTab(_tab) && _cache.Count > 0) RenderFromCache();
+                        }
+                        if (found == null) return;
                         bool same = found.Count == _flags.Count
                                     && found.All(kv => { int v; return _flags.TryGetValue(kv.Key, out v) && v == kv.Value; });
                         if (same) return;
@@ -5832,6 +5952,7 @@ namespace ABeautifulPotatoLauncher
             _filters.MaxPlayersWanted = BrowserFilters.PlayerCeiling;
             _filters.GameModes.Clear();
             PaintGameModeButtons();
+            AskRelaySearch();       // drops the answers for what was picked
             if (_timeRange != null) _timeRange.SetRange(0, 24);
             _filters.MinHour = 0;
             _filters.MaxHour = 24;
@@ -6289,6 +6410,7 @@ namespace ABeautifulPotatoLauncher
             _filters.RequiredMods.Clear();
             foreach (string m in _modFilter.Entries) _filters.RequiredMods.Add(m);
             PublishRequiredMods();
+            AskRelaySearch();
 
             if (_filters.RequiredMods.Count > 0)
             {
@@ -6403,7 +6525,18 @@ namespace ABeautifulPotatoLauncher
                 // outside. The list is capped, because nobody scrolls three
                 // thousand entries - and the box is editable, so anything not
                 // shown can still be typed.
+                // The service's list counts every listed server, not only those
+                // read here - so it is the one to show once it has arrived.
                 KeyValuePair<string, int>[] tally;
+                var picker = _relayModPicker;
+                if (picker != null)
+                {
+                    if (ReferenceEquals(picker, _modChoiceSource) && TypeAhead.ChoiceCount(_fMod) > 0) return;
+                    _modChoiceSource = picker;
+                    _modChoiceCount = -1;           // a different list: always refill
+                    tally = picker.ToArray();
+                }
+                else
                 lock (_modListLock)
                 {
                     // Unchanged since the last fill - nothing to sort.
@@ -6457,6 +6590,9 @@ namespace ABeautifulPotatoLauncher
         private const int ModChoicesShown = 400;
 
         private int _modChoiceCount = -1;
+
+        /// <summary>The service's mod list the picker was last filled from, if it was.</summary>
+        private object _modChoiceSource;
 
         /// <summary>
         /// How many servers run each mod, kept current as lists arrive rather
@@ -6730,6 +6866,7 @@ namespace ABeautifulPotatoLauncher
                         else _filters.GameModes.Add(captured);
 
                         PaintGameModeButtons();
+                        AskRelaySearch();
                         QueueFilter();
                     };
 
@@ -6822,6 +6959,7 @@ namespace ABeautifulPotatoLauncher
                 if (stale && _fMap != null && !_fMap.DroppedDown) FillMapChoices();
                 if (stale && _fCountry != null && !_fCountry.DroppedDown) FillCountryChoices();
                 if (_fMod != null && !_fMod.DroppedDown) FillModChoices();
+                if (_filterPanel.Visible) FetchModPicker();
             }
             catch { }
         }

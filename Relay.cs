@@ -8,8 +8,10 @@
 //    index takes half an hour. A server run for the launcher builds the whole
 //    list continuously, from Steam's Web API, and the launcher downloads it -
 //    a few hundred KB, in seconds, with nothing asked of Steam at all. The
-//    same service gathers every server's mod list and description, so the
-//    "Has Mods" filter and descriptions work for every server straight away.
+//    same service reads every server's mod list and description, and ANSWERS
+//    the mod filter and the game mode buttons when asked (Search) - a few KB
+//    for the servers that match, instead of every server's mods and
+//    descriptions (3.9 MB for DayZ) downloaded on every refresh.
 //
 //  FALLING BACK
 //    Anything at all going wrong - no answer, an error, a list that has not
@@ -20,6 +22,7 @@
 //  WHAT IS SENT
 //    A plain GET for the current game's file, with the tag of the copy already
 //    held so an unchanged file costs a few bytes. Nothing about the player.
+//    A mod or game mode search sends the mods or modes picked - nothing else.
 //    The exceptions are feedback and server reports, sent only when the player
 //    presses SEND in those windows - see SendFeedback and SendReport.
 //
@@ -152,45 +155,93 @@ namespace ABeautifulPotatoLauncher
             return maps.ToList();
         }
 
-        // ----------------------------------------------------------- rules --
+        // ------------------------------------------------------------ mods --
 
         /// <summary>
-        /// Every server's raw A2S_RULES reply, by "host:port", for A2S to parse.
-        /// Null when unavailable, or when it is the copy already applied
-        /// (<paramref name="appliedTag"/>), so nothing is parsed twice.
+        /// The commonest mods across every listed server, with how many run
+        /// each, commonest first - for the mod picker. From the service (a few
+        /// bytes when unchanged), or the copy kept last time. Null when there
+        /// is neither.
         /// </summary>
-        public static Dictionary<string, byte[]> TryRules(string appliedTag, out string tag, out string problem)
+        public static List<KeyValuePair<string, int>> TryModIndex()
         {
-            tag = null;
-            byte[] gz = Download("rules", out problem);
+            string problem;
+            byte[] gz = Download("mods", out problem);
+            try { if (gz == null && File.Exists(CacheFile("mods"))) gz = File.ReadAllBytes(CacheFile("mods")); }
+            catch { }
             if (gz == null) return null;
 
-            tag = ReadTag("rules");
-            if (tag != null && tag == appliedTag) { problem = "unchanged"; return null; }
-
-            var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            var mods = new List<KeyValuePair<string, int>>();
             try
             {
-                using (var ms = new MemoryStream(gz))
-                using (var z = new GZipStream(ms, CompressionMode.Decompress))
-                using (var r = new BinaryReader(z))
+                foreach (string line in Lines(gz))
                 {
-                    if (Encoding.ASCII.GetString(r.ReadBytes(6)) != "ABPLR1") { problem = "unknown format"; return null; }
-                    while (true)
-                    {
-                        ushort len;
-                        try { len = r.ReadUInt16(); }
-                        catch (EndOfStreamException) { break; }
-                        string ep = Encoding.UTF8.GetString(r.ReadBytes(len));
-                        r.ReadInt64();                                  // when it answered
-                        int n = r.ReadInt32();
-                        if (n < 0 || n > 1 << 20) { problem = "corrupt"; return null; }
-                        result[ep] = r.ReadBytes(n);
-                    }
+                    int tab = line.LastIndexOf('\t');
+                    int n;
+                    if (tab > 0 && int.TryParse(line.Substring(tab + 1), out n))
+                        mods.Add(new KeyValuePair<string, int>(line.Substring(0, tab), n));
                 }
             }
-            catch (Exception ex) { problem = "unreadable (" + ex.Message + ")"; return null; }
-            return result;
+            catch { return null; }
+            return mods;
+        }
+
+        /// <summary>
+        /// Asks the service which listed servers run EVERY one of
+        /// <paramref name="mods"/> (part of the name, any case) and claim EVERY
+        /// one of <paramref name="modes"/> in their name or description - the
+        /// launcher's own mod and game mode rules, answered over every server's
+        /// mods and description. "host:port" of each; null with the reason in
+        /// <paramref name="problem"/> when it could not be asked.
+        /// </summary>
+        public static HashSet<string> Search(IEnumerable<string> mods, IEnumerable<string> modes, out string problem)
+        {
+            problem = null;
+            string root = Base;
+            if (root == null) { problem = "turned off in relay.txt"; return null; }
+
+            var query = new StringBuilder();
+            foreach (string m in mods ?? Enumerable.Empty<string>())
+                query.Append(query.Length == 0 ? "?" : "&").Append("mod=").Append(Uri.EscapeDataString(m));
+            foreach (string m in modes ?? Enumerable.Empty<string>())
+                query.Append(query.Length == 0 ? "?" : "&").Append("mode=").Append(Uri.EscapeDataString(m));
+            if (query.Length == 0) { problem = "nothing to search for"; return null; }
+
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(root + "/v1/" + GameId + "/search" + query);
+                req.Method = "GET";
+                req.Timeout = 8000;
+                req.ReadWriteTimeout = 15000;
+                req.UserAgent = "ABeautifulPotatoLauncher/" + Program.Version;
+                byte[] gz;
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var body = resp.GetResponseStream())
+                using (var ms = new MemoryStream())
+                {
+                    body.CopyTo(ms);
+                    gz = ms.ToArray();
+                }
+
+                var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string line in Lines(gz))
+                {
+                    string ep = line.Trim();
+                    if (ep.IndexOf(':') > 0) found.Add(ep);
+                }
+                return found;
+            }
+            catch (WebException ex)
+            {
+                var r = ex.Response as HttpWebResponse;
+                problem = r == null ? ex.Message : "HTTP " + (int)r.StatusCode;
+                return null;
+            }
+            catch (Exception ex)
+            {
+                problem = ex.Message;
+                return null;
+            }
         }
 
         // -------------------------------------------------------- feedback --
@@ -344,6 +395,36 @@ namespace ABeautifulPotatoLauncher
             }
             catch { return null; }
             return flags;
+        }
+
+        // -------------------------------------------------------- approved --
+
+        /// <summary>
+        /// Servers over 127 but under 180 slots that a person has checked and
+        /// approved, by "host:port" - real servers running more than DayZ's
+        /// usual 127, which the slot rule would otherwise hide. From the
+        /// service, or the copy kept last time. Null when there is neither.
+        /// </summary>
+        public static HashSet<string> TryApproved()
+        {
+            string problem;
+            byte[] gz = Download("approved", out problem);
+            try { if (gz == null && File.Exists(CacheFile("approved"))) gz = File.ReadAllBytes(CacheFile("approved")); }
+            catch { }
+            if (gz == null) return null;
+
+            var approved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (gz.Length == 0) return approved;
+            try
+            {
+                foreach (string line in Lines(gz))
+                {
+                    string ep = line.Trim();
+                    if (ep.IndexOf(':') > 0) approved.Add(ep);
+                }
+            }
+            catch { return null; }
+            return approved;
         }
 
         // ------------------------------------------------------------ wire --
