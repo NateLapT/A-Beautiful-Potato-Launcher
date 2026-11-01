@@ -16,7 +16,63 @@ arbitrary until you know what they were measured against.
 
 ---
 
-## [Unreleased]
+## [0.9.6] - 2026-11-01
+
+### Added
+
+- **Players online in the bottom bar** ("… playing DayZ"), at the far left
+  before the status, in light grey bold: the players every listed server reports, both builds and every
+  tab, added up from the server list already downloaded on each refresh -
+  nothing more is downloaded for it. Servers the server list service caught
+  claiming players who are not there are not in that list, so they are not
+  counted. Hover it for the number of servers and the time. At start-up, on
+  any tab, it shows the copy of the list kept last time if that is under 2
+  hours old - the list is only downloaded on COMMUNITY and OFFICIAL, so on
+  LAN or FAVOURITES it would otherwise never appear. When the list
+  comes from Steam instead (the service unreachable), the last figure stays,
+  because Steam's list still holds those fakes.
+- **"Mod is locked"** when Steam can't change a mod because a program on
+  this PC has its files open - DayZ itself, or a DayZ server here that loads
+  the mod (directly or through a junction). Steam can't replace or delete an
+  open PBO and gives up without saying why, which used to show as "Steam
+  stopped without installing it". The download window now names who holds
+  it ("in use by a DayZ server (PID 5678)") and carries on by itself once
+  that program closes. Repair and Remove, in the mods panel and the Mod
+  Manager, say so instead of asking Steam for something it can't do, and
+  Repair corrupted, Validate all and Unsubscribe from everything ask first
+  when some of the mods are in use.
+
+### Changed
+
+- **More than one additional mods folder** (Settings, Mods). The box is now
+  where a folder is typed or browsed to before ADD puts it in a list below;
+  each listed folder has EDIT (back into the box, ADD reading SAVE) and
+  REMOVE. Five show at once, with a scroll bar past that. A folder that has
+  gone missing is shown in red, a long path is shortened in the middle so its
+  last folder stays readable, and double-clicking one opens it in Explorer. A
+  listed folder can also be a single mod (@SomeMod) rather than a folder of
+  them, and each has a tick box: untick a folder to leave it out of the mod
+  search without losing it from the list. The rows sit under Enable / Path
+  headings, in alternating shades like the server list. The folder set before this version
+  carries over as the first entry.
+- **Settings' Close button** is a normal-sized button at the bottom right
+  instead of a bar across the whole window.
+- **Local mods are found as soon as they appear.** The mod library used to
+  be read once per run, so a mod folder made while the launcher was open -
+  a new test build - stayed invisible, and a server's mod could be matched
+  to an older copy and joined with it. Every mods folder is now watched: a
+  mod folder appearing, going or being renamed, or its mod.cpp / meta.cpp
+  changing, redraws the mod panel a second later. The library is also read
+  again just before every join.
+- **Refresh re-checks the selected server at once.** REFRESH (and F5,
+  REFRESH NETWORK and a row's refresh icon) now asks the selected server
+  again straight away, trying its other query ports when the known one is
+  silent, and re-reads its mod list along with your local mods. Before, the
+  list was re-downloaded but the server's mods stayed as first read until a
+  background check happened to reach it.
+- **Updates are checked for every 30 minutes** while the launcher is open,
+  not every 6 hours, so a launcher left open shows UPDATE soon after a
+  release. It still checks once when it starts.
 
 ## [0.9.5] - 2026-10-25
 

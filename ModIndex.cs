@@ -251,6 +251,85 @@ namespace ABeautifulPotatoLauncher
             lock (Lock) _scanned = false;
         }
 
+        // ------------------------------------------------------ watching --
+        //
+        // The index used to be read once per run, so a test build made while
+        // the launcher was open stayed invisible: the mod panel and the join
+        // matched an older build. Now every root is watched, and a mod folder
+        // appearing, going or being renamed - or a mod.cpp / meta.cpp changing,
+        // which changes the name a mod is matched by - marks the index stale.
+        // The next question rescans (a fifth of a second), and Changed lets the
+        // mod panel redraw itself. PBO writes during a build are not changes:
+        // they alter no name and no folder.
+
+        /// <summary>Raised (on a worker thread) when a watched root changed what the index would find.</summary>
+        public static event Action Changed;
+
+        private static readonly List<FileSystemWatcher> Watchers = new List<FileSystemWatcher>();
+        private static List<string> _watched = new List<string>();
+
+        /// <summary>Watches exactly these roots, replacing whatever was watched before.</summary>
+        private static void Watch(List<string> roots, string workshop)
+        {
+            lock (Watchers)
+            {
+                if (roots.SequenceEqual(_watched, StringComparer.OrdinalIgnoreCase)) return;
+                foreach (var w in Watchers) { try { w.Dispose(); } catch { } }
+                Watchers.Clear();
+                _watched = roots.ToList();
+
+                foreach (string root in roots)
+                {
+                    try
+                    {
+                        var w = new FileSystemWatcher(root)
+                        {
+                            // Steam's folder is one flat level of numbered items;
+                            // anywhere else a mod can sit a few folders down.
+                            IncludeSubdirectories = !string.Equals(root, workshop, StringComparison.OrdinalIgnoreCase),
+                            NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName | NotifyFilters.LastWrite,
+                            InternalBufferSize = 64 * 1024
+                        };
+                        w.Created += OnRootEvent;
+                        w.Deleted += OnRootEvent;
+                        w.Changed += OnRootEvent;
+                        w.Renamed += OnRootEvent;
+                        w.Error += (s, e) => Stale();      // missed events: rescan to be sure
+                        w.EnableRaisingEvents = true;
+                        Watchers.Add(w);
+                    }
+                    catch { }                              // unwatchable root: the pre-join rescan still covers it
+                }
+            }
+        }
+
+        private static void OnRootEvent(object sender, FileSystemEventArgs e)
+        {
+            string leaf = Path.GetFileName(e.FullPath) ?? "";
+            string ext = Path.GetExtension(leaf);
+            bool manifest = leaf.Equals("mod.cpp", StringComparison.OrdinalIgnoreCase)
+                         || leaf.Equals("meta.cpp", StringComparison.OrdinalIgnoreCase);
+
+            // A folder (no extension) coming or going, or a manifest. A Changed
+            // event on a folder is only its contents being written - skipped.
+            bool folder = ext.Length == 0 && e.ChangeType != WatcherChangeTypes.Changed;
+            var r = e as RenamedEventArgs;
+            if (r != null)
+            {
+                string old = Path.GetFileName(r.OldFullPath) ?? "";
+                manifest |= old.Equals("mod.cpp", StringComparison.OrdinalIgnoreCase)
+                         || old.Equals("meta.cpp", StringComparison.OrdinalIgnoreCase);
+            }
+            if (folder || manifest) Stale();
+        }
+
+        private static void Stale()
+        {
+            Invalidate();
+            var h = Changed;
+            if (h != null) try { h(); } catch { }
+        }
+
         /// <summary>Every mod currently known, newest activity first is the caller's business.</summary>
         public static List<ModEntry> All()
         {
@@ -393,8 +472,8 @@ namespace ABeautifulPotatoLauncher
         // ------------------------------------------------------- the roots --
 
         /// <summary>
-        /// Where mods live: Steam's workshop folder for DayZ, plus any extra
-        /// folder the player has pointed at in Settings.
+        /// Where mods live: Steam's workshop folder for DayZ, plus every extra
+        /// folder the player has listed in Settings.
         /// </summary>
         public static List<string> Roots(string steamPath)
         {
@@ -405,10 +484,10 @@ namespace ABeautifulPotatoLauncher
                 if (Directory.Exists(w)) roots.Add(w);
             }
 
-            string extra = ServerStore.LoadExtraModPath();
-            if (!string.IsNullOrEmpty(extra) && Directory.Exists(extra)
-                && !roots.Any(r => string.Equals(r, extra, StringComparison.OrdinalIgnoreCase)))
-                roots.Add(extra);
+            foreach (string extra in ServerStore.LoadExtraModPaths())
+                if (Directory.Exists(extra)
+                    && !roots.Any(r => string.Equals(r, extra, StringComparison.OrdinalIgnoreCase)))
+                    roots.Add(extra);
 
             return roots;
         }
@@ -479,7 +558,10 @@ namespace ABeautifulPotatoLauncher
             string workshop = string.IsNullOrEmpty(steamPath)
                 ? null : SteamWorkshop.WorkshopRoot(steamPath);
 
-            foreach (string root in Roots(steamPath))
+            var roots = Roots(steamPath);
+            Watch(roots, workshop);
+
+            foreach (string root in roots)
             {
                 // Steam's own folder is one flat level of numbered folders, and
                 // walking into those would be pointless work. Anywhere the
@@ -487,7 +569,14 @@ namespace ABeautifulPotatoLauncher
                 bool deep = !string.Equals(root, workshop, StringComparison.OrdinalIgnoreCase);
 
                 string[] dirs;
-                try { dirs = deep ? ModFolders(root, MaxDepth).ToArray() : Directory.GetDirectories(root); }
+                // A listed folder can be one mod itself (P:\Published\@ThrowDirt)
+                // rather than a folder of them.
+                try
+                {
+                    dirs = !deep ? Directory.GetDirectories(root)
+                         : IsModFolder(root) ? new[] { root }
+                         : ModFolders(root, MaxDepth).ToArray();
+                }
                 catch { continue; }
 
                 foreach (string dir in dirs)

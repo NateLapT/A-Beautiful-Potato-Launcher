@@ -83,7 +83,32 @@ namespace ABeautifulPotatoLauncher
             /// <summary>Set once the download is judged to have failed.</summary>
             public bool Failed;
             public string FailReason;
+
+            /// <summary>
+            /// Who holds this mod's files open ("a DayZ server (PID 5678)"), or
+            /// null. Steam cannot replace an open PBO, so while this is set the
+            /// update cannot finish - see Locked.
+            /// </summary>
+            public string LockedBy;
+            public DateTime NextLockCheck = DateTime.MinValue;
+
+            /// <summary>When the last lock check came back; a mod is only called failed once one made after it went quiet says no.</summary>
+            public DateTime LockCheckedAt = DateTime.MinValue;
+            public bool LockCheckRunning;
         }
+
+        /// <summary>How often a mod that is not arriving is checked for a program holding its files.</summary>
+        private static readonly TimeSpan LockCheckEvery = TimeSpan.FromSeconds(3);
+
+        /// <summary>
+        /// Lock checks under way. They run off the UI thread: one costs ~25 ms
+        /// for a mod nobody holds but over a second for one that is held.
+        /// </summary>
+        private int _lockChecksRunning;
+        private const int MaxLockChecks = 2;
+
+        /// <summary>The hint line is showing the locked text, to be put back once nothing is locked.</summary>
+        private bool _lockHint;
 
         // ---- how long silence has to last before it counts as failure ----
         //
@@ -322,7 +347,7 @@ namespace ABeautifulPotatoLauncher
 
             long grandDone = 0, grandTotal = 0;
             double grandSpeed = 0;
-            int ready = 0, active = 0, failed = 0;
+            int ready = 0, active = 0, failed = 0, locked = 0;
 
             // Overall progress is the AVERAGE of each mod's own fraction, not
             // bytes-done over bytes-known. A mod Steam has not sized yet counts
@@ -416,6 +441,15 @@ namespace ABeautifulPotatoLauncher
                     fractionSum += 1.0;
                     Set(it, "ready", Bytes(it.Total), "100%", "", Good);
                 }
+                else if (Locked(it))
+                {
+                    // Not a failure to retry: nothing Steam does will get past an
+                    // open file. It carries on by itself once the program closes.
+                    locked++;
+                    it.Speed = 0;
+                    Set(it, "LOCKED - in use by " + it.LockedBy, "", "", "", Bad);
+                    continue;
+                }
                 else if (busy)
                 {
                     it.Speed = 0;
@@ -442,9 +476,15 @@ namespace ABeautifulPotatoLauncher
                     // else coming.
                     if (it.EverBusy && DateTime.Now - it.LastMovement > AbandonGrace)
                     {
-                        Fail(it, "Steam stopped without installing it");
-                        failed++;
-                        continue;
+                        // Most often because a program here holds its files, so
+                        // not before a lock check made since says nothing does.
+                        if (it.LockCheckedAt <= it.LastMovement) Locked(it, true);
+                        else
+                        {
+                            Fail(it, "Steam stopped without installing it");
+                            failed++;
+                            continue;
+                        }
                     }
 
                     // Or it never started at all - a request Steam accepted and
@@ -452,9 +492,13 @@ namespace ABeautifulPotatoLauncher
                     if (!it.EverBusy && _usedApi
                         && DateTime.Now - _started > NeverStartedAfter)
                     {
-                        Fail(it, "Steam never started the download");
-                        failed++;
-                        continue;
+                        if (it.LockCheckedAt <= _started) Locked(it, true);
+                        else
+                        {
+                            Fail(it, "Steam never started the download");
+                            failed++;
+                            continue;
+                        }
                     }
 
                     Set(it, _usedApi ? "waiting for Steam" : "waiting for subscription", "", "", "", Dim);
@@ -488,8 +532,28 @@ namespace ABeautifulPotatoLauncher
                 parts.Add("about " + Eta((grandTotal - grandDone) / grandSpeed) + " left");
             parts.Add("elapsed " + Eta(_clock.Elapsed.TotalSeconds));
             if (active > 0) parts.Add(active + " downloading");
+            if (locked > 0) parts.Add(locked + " locked");
 
             _detail.Text = string.Join("    ", parts.ToArray());
+
+            if (locked > 0)
+            {
+                var by = _items.Where(i => i.LockedBy != null && !i.Failed).Select(i => i.LockedBy).Distinct().ToList();
+                _hint.Text = (locked == 1 ? "Mod is locked" : locked + " mods are locked") + " - in use by "
+                           + string.Join("; ", by) + ". Steam can't replace a mod's files while a program has "
+                           + "them open (a server here loading it through a junction counts). Close it and "
+                           + "the update carries on by itself.";
+                _hint.ForeColor = Bad;
+                _hint.Height = 40;
+                _lockHint = true;
+            }
+            else if (_lockHint)
+            {
+                _hint.Text = "Nothing is locked any more - Steam is fetching them now.";
+                _hint.ForeColor = Dim;
+                _hint.Height = 22;
+                _lockHint = false;
+            }
 
             if (ready == _items.Count)
             {
@@ -501,6 +565,15 @@ namespace ABeautifulPotatoLauncher
                              + Eta(_clock.Elapsed.TotalSeconds);
                 DialogResult = DialogResult.OK;
                 Close();
+                return;
+            }
+
+            // Everything left is locked: keep watching, since closing the program
+            // that holds the files is all it takes.
+            if (locked > 0 && ready + failed + locked == _items.Count)
+            {
+                _bar.Style = ProgressBarStyle.Continuous;
+                _headline.Text = locked == 1 ? "Mod is locked" : locked + " mods are locked";
                 return;
             }
 
@@ -525,6 +598,62 @@ namespace ABeautifulPotatoLauncher
             // rather than spinning in silence.
             if (!_usedApi && _ticks == 60 && ready == 0 && active == 0)
                 _hint.Text = "Nothing has started yet - the Workshop pages need a Subscribe click.";
+        }
+
+        /// <summary>
+        /// Whether a program on this PC holds the mod's files open: DayZ, or a
+        /// DayZ server here loading it (through a junction or not). The answer
+        /// is the last one that came back; a new check starts in the background
+        /// every few seconds (see LockAnswer).
+        /// </summary>
+        /// <param name="now">True to start a check now whatever the timing - before a mod is called failed.</param>
+        private bool Locked(Item it, bool now = false)
+        {
+            if (_steam != null && !it.LockCheckRunning && _lockChecksRunning < MaxLockChecks
+                && (now || DateTime.Now >= it.NextLockCheck))
+            {
+                string folder = SteamWorkshop.ItemPath(_steam, it.Mod.WorkshopId);
+                it.LockCheckRunning = true;
+                _lockChecksRunning++;
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    List<ModLock> holders = null;
+                    try { holders = ModLocks.Holders(folder); } catch { }
+                    try { BeginInvoke((Action)(() => LockAnswer(it, holders))); }
+                    catch (InvalidOperationException) { }        // the window has closed
+                });
+            }
+            return it.LockedBy != null;
+        }
+
+        /// <summary>
+        /// A lock check came back. When a mod that was locked is free again,
+        /// Steam - which gave up on it - is asked again.
+        /// </summary>
+        private void LockAnswer(Item it, List<ModLock> holders)
+        {
+            it.LockCheckRunning = false;
+            _lockChecksRunning--;
+            it.LockCheckedAt = DateTime.Now;
+            it.NextLockCheck = DateTime.Now + LockCheckEvery;
+            if (holders == null) return;
+            if (holders.Count > 0)
+            {
+                it.LockedBy = ModLocks.Describe(holders);
+                return;
+            }
+            if (it.LockedBy == null) return;
+
+            it.LockedBy = null;
+            it.EverBusy = false;
+            it.LastState = 0xffffffff;
+            it.LastMovement = DateTime.Now;
+            if (_usedApi)
+            {
+                SteamWorkshop.Subscribe(it.Mod.WorkshopId);
+                SteamWorkshop.ForceDownload(it.Mod.WorkshopId);
+            }
+            Set(it, "retrying...", "", "", "", Busy);
         }
 
         /// <summary>Marks one mod as failed and says so on its row.</summary>

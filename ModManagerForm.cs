@@ -1195,6 +1195,8 @@ namespace ABeautifulPotatoLauncher
                 return;
             }
 
+            if (!NotLocked(m.Name, m.Folder, "repair")) return;
+
             // Subscribe first: forcing a download of something unsubscribed
             // asks Steam for an item it does not believe it owns.
             SteamWorkshop.Subscribe(m.WorkshopId);
@@ -1202,10 +1204,50 @@ namespace ABeautifulPotatoLauncher
             _status.Text = "Repairing " + m.Name + " - Steam is re-downloading it.";
         }
 
+        /// <summary>
+        /// False, after saying "Mod is locked", when a program here holds the
+        /// mod's files open - DayZ, or a server here loading it (through a
+        /// junction or not). Steam could neither replace nor delete them and
+        /// would give up without a word. See ModLocks.
+        /// </summary>
+        private bool NotLocked(string name, string folder, string doing)
+        {
+            Cursor = Cursors.WaitCursor;           // a second or so when something holds it
+            List<ModLock> holders;
+            try { holders = ModLocks.Holders(folder); }
+            finally { Cursor = Cursors.Default; }
+            if (holders.Count == 0) return true;
+            _status.Text = "Mod is locked: " + name + " is in use by " + ModLocks.Describe(holders) + ".";
+            MessageBox.Show(this, ModLocks.Message(name, holders, doing), "Mod is locked",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        /// <summary>
+        /// For a bulk action: true to carry on. When programs here hold some of
+        /// the mods open, asks first - Steam will skip those ones.
+        /// </summary>
+        private bool GoAheadDespiteLocks(IEnumerable<ModEntry> mods, string doing)
+        {
+            Cursor = Cursors.WaitCursor;
+            List<ModLock> holders;
+            try { holders = ModLocks.Holders(mods.Select(m => m.Folder), int.MaxValue); }
+            finally { Cursor = Cursors.Default; }
+            if (holders.Count == 0) return true;
+            return MessageBox.Show(this,
+                       "Some of these mods are locked - in use by " + ModLocks.Describe(holders) + "."
+                       + "\r\n\r\nSteam can't " + doing + " a mod while a program has its files open, so it "
+                       + "will skip those. Close " + (holders.Count == 1 ? "it" : "them") + " first to have every mod done."
+                       + "\r\n\r\nCarry on anyway?",
+                       "Mod is locked", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                       MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        }
+
         private void RemoveSelected()
         {
             var m = _selected;
             if (m == null) return;
+            if (!NotLocked(m.Name, m.Folder, "remove")) return;
             if (MessageBox.Show(
                     "Unsubscribe from " + m.Name + "?\r\n\r\nSteam will delete it from disk. "
                     + "Any server that requires it will have to download it again.",
@@ -1279,6 +1321,8 @@ namespace ABeautifulPotatoLauncher
                     Select(id);
                     return;
                 }
+                if (!NotLocked(existing != null ? existing.Name : "Workshop item " + id,
+                               SteamWorkshop.ItemPath(_steam, id), "download it again")) return;
             }
 
             if (!SteamWorkshop.Subscribe(id))
@@ -1348,6 +1392,7 @@ namespace ABeautifulPotatoLauncher
                 return;
             }
             if (!EnsureSteam()) return;
+            if (!GoAheadDespiteLocks(bad, "repair")) return;
 
             foreach (var m in bad)
             {
@@ -1389,6 +1434,7 @@ namespace ABeautifulPotatoLauncher
                 return;
 
             if (!EnsureSteam()) return;
+            if (!GoAheadDespiteLocks(all, "re-check")) return;
             RunBulk("Validating", all, m =>
             {
                 SteamWorkshop.Subscribe(m.WorkshopId);
@@ -1429,6 +1475,7 @@ namespace ABeautifulPotatoLauncher
                 return;
 
             if (!EnsureSteam()) return;
+            if (!GoAheadDespiteLocks(all, "delete")) return;
             RunBulk("Unsubscribing", all, m => SteamWorkshop.Unsubscribe(m.WorkshopId));
         }
 

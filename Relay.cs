@@ -155,6 +155,39 @@ namespace ABeautifulPotatoLauncher
             return maps.ToList();
         }
 
+        // --------------------------------------------------------- players --
+
+        /// <summary>
+        /// The players every server in the copy of the list kept last time
+        /// reports, and on how many servers, and when that copy was
+        /// downloaded - for the bottom bar before (or without) a download this
+        /// session. False when there is no copy, or it is older than MaxAge.
+        /// Reads the whole list, so call it off the UI thread.
+        /// </summary>
+        public static bool TrySavedPlayers(out long players, out int servers, out DateTime savedUtc)
+        {
+            players = 0;
+            servers = 0;
+            savedUtc = DateTime.MinValue;
+            try
+            {
+                string cache = CacheFile("list");
+                if (!File.Exists(cache)) return false;
+                savedUtc = File.GetLastWriteTimeUtc(cache);
+                if (DateTime.UtcNow - savedUtc > MaxAge) return false;
+                foreach (string line in Lines(File.ReadAllBytes(cache)))
+                {
+                    string[] f = line.Split('\t');
+                    int n;
+                    if (f.Length < 14 || !int.TryParse(f[7], out n) || n <= 0) continue;
+                    players += n;
+                    servers++;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
         // ------------------------------------------------------------ mods --
 
         /// <summary>

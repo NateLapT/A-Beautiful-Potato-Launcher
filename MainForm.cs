@@ -492,8 +492,8 @@ namespace ABeautifulPotatoLauncher
 
         // Alternating row backgrounds, a couple of shades apart so the banding
         // guides the eye across a wide row without lifting off the dark theme.
-        private static readonly Color RowBandA = Color.FromArgb(28, 28, 30);
-        private static readonly Color RowBandB = Color.FromArgb(34, 34, 38);
+        internal static readonly Color RowBandA = Color.FromArgb(28, 28, 30);
+        internal static readonly Color RowBandB = Color.FromArgb(34, 34, 38);
         private static readonly Color RowOffline = Color.FromArgb(150, 96, 96);
         private static readonly Color StatusOn   = Color.FromArgb(120, 200, 120);
         private static readonly Color StatusOff  = Color.FromArgb(205, 105, 105);
@@ -826,6 +826,14 @@ namespace ABeautifulPotatoLauncher
         private const int PingWorkers = 16;
         private readonly object _pingLock = new object();
         private readonly List<Row> _pingWanted = new List<Row>();
+
+        /// <summary>
+        /// Rows the player asked to re-check (Refresh). Asked before anything
+        /// else, and kept apart from _pingWanted, which every scroll and redraw
+        /// replaces - a refresh request put there was often wiped before a
+        /// worker reached it, so the server was only re-asked a while later.
+        /// </summary>
+        private readonly List<Row> _pingFirst = new List<Row>();
         private List<Row> _pingAll = new List<Row>();
         private int _sweep;
         private int _checked;
@@ -961,6 +969,15 @@ namespace ABeautifulPotatoLauncher
         private Button _updateButton;
         private List<ReleaseInfo> _updates = new List<ReleaseInfo>();
         private readonly System.Windows.Forms.Timer _updateTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer _modsChangedDelay = new System.Windows.Forms.Timer { Interval = 1000 };
+
+        /// <summary>From a watcher thread: restart the one-second wait before the mod panel redraws.</summary>
+        private void OnModIndexChanged()
+        {
+            if (_closing || IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke((Action)(() => { _modsChangedDelay.Stop(); _modsChangedDelay.Start(); })); }
+            catch (InvalidOperationException) { }
+        }
 
         /// <summary>
         /// Asks GitHub for newer releases. When there is one, the footer's
@@ -1012,13 +1029,20 @@ namespace ABeautifulPotatoLauncher
             BuildUi();
 
             // Once the window is up, never before: a slow or absent network
-            // must not hold up the launcher opening. Then every six hours, for
-            // a launcher left open all day.
+            // must not hold up the launcher opening. Then every 30 minutes, so
+            // a launcher left open all day hears of a release the same hour.
             Load += (s, e) => CheckForUpdates();     // hosted forms get Load, not Shown
             Load += (s, e) => EnsureSteamSession();
-            _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
+            Load += (s, e) => ShowSavedPlayersOnline();
+            _updateTimer.Interval = (int)TimeSpan.FromMinutes(30).TotalMilliseconds;
             _updateTimer.Tick += (s, e) => CheckForUpdates();
             _updateTimer.Start();
+
+            // A mod folder appearing or changing (a new test build, say) redraws
+            // the mod panel by itself - a second after the last change, since a
+            // build makes several. See ModIndex's watching.
+            _modsChangedDelay.Tick += (s, e) => { _modsChangedDelay.Stop(); RepopulateModsFromCache(); };
+            ModIndex.Changed += OnModIndexChanged;
 
             // Every clickable thing gets the hand cursor; see UiCursors.
             ListViewTweaks.Smooth(_list);
@@ -1202,6 +1226,22 @@ namespace ABeautifulPotatoLauncher
 
             var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 28, BackColor = Panel };
             Controls.Add(bottomBar);
+
+            // Players on every listed server, at the far left before the status,
+            // in light grey bold. Hidden until there is a figure; see ShowPlayersOnline.
+            _playersChip = new Panel { Dock = DockStyle.Left, Width = 160, Visible = false, BackColor = Panel,
+                                       Padding = new Padding(8, 0, 0, 0) };
+            _playersLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                BackColor = Panel,
+                ForeColor = Color.FromArgb(200, 200, 206),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold)
+            };
+            _playersChip.Controls.Add(_playersLabel);
+            bottomBar.Controls.Add(_playersChip);
 
             // The version, just left of Settings: [status][version][Settings]
             // [Donate]. Right-docked controls are placed in reverse order of
@@ -1857,7 +1897,15 @@ namespace ABeautifulPotatoLauncher
             }
 
             _refresh = MakeBtn("REFRESH", new Rectangle(20, ry, 170, 30), Panel2);
-            _refresh.Click += (s, e) => { FetchFlags(true); RefreshCurrent(true); };
+            _refresh.Click += (s, e) =>
+            {
+                FetchFlags(true);
+                var picked = SelectedRow;
+                RefreshCurrent(true);
+                // The list download never re-asked the selected server, so its
+                // mods stayed as first read until a background ping came by.
+                RefreshOneRow(SelectedRow ?? picked, true);
+            };
             new ToolTip().SetToolTip(_refresh, "Refresh the server list (F5)");
             rail.Controls.Add(_refresh);
             ry += 34;
@@ -3461,6 +3509,71 @@ namespace ABeautifulPotatoLauncher
             });
         }
 
+        private Label _playersLabel;
+        private Panel _playersChip;
+        private readonly ToolTip _playersTip = new ToolTip();
+
+        /// <summary>
+        /// "12,345 playing DayZ" in the bottom bar: the players every server in
+        /// the service's list reports, both builds, every tab. Added up from
+        /// the list just downloaded - nothing more is asked for. Servers the
+        /// service caught claiming players who are not there are already left
+        /// out of that list. Steam's own list (the fallback) is not counted:
+        /// it still holds those fakes, so the last figure stays instead.
+        /// </summary>
+        private void ShowPlayersOnline(List<BrowserServer> list, DateTime builtUtc)
+        {
+            long players = 0;
+            int servers = 0;
+            foreach (var s in list)
+            {
+                if (s.Players <= 0) continue;
+                players += s.Players;
+                servers++;
+            }
+            _playersShownUtc = DateTime.UtcNow;
+            ShowPlayersOnline(players, servers, builtUtc);
+        }
+
+        /// <summary>When a downloaded list last set the figure - the saved copy read at start-up must not overwrite it.</summary>
+        private DateTime _playersShownUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// At start-up, whatever the tab: the figure from the copy of the list
+        /// kept last time, if it is recent - the list itself is only
+        /// downloaded on the COMMUNITY and OFFICIAL tabs.
+        /// </summary>
+        private void ShowSavedPlayersOnline()
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                long players;
+                int servers;
+                DateTime saved;
+                if (!Relay.TrySavedPlayers(out players, out servers, out saved)) return;
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (!_closing && _playersShownUtc == DateTime.MinValue) ShowPlayersOnline(players, servers, saved);
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        private void ShowPlayersOnline(long players, int servers, DateTime builtUtc)
+        {
+            _playersLabel.Text = players.ToString("N0") + " playing " + Games.Name;
+            _playersChip.Width = TextRenderer.MeasureText(_playersLabel.Text, _playersLabel.Font).Width + 20 + _playersChip.Padding.Left;
+            _playersTip.SetToolTip(_playersLabel,
+                players.ToString("N0") + " players on " + servers.ToString("N0") + " servers, as the servers report it ("
+                + builtUtc.ToLocalTime().ToString("HH:mm") + ").\r\n"
+                + "Every build and tab. Servers caught claiming players who aren't there are left out.\r\n"
+                + "Updated with the server list on every refresh.");
+            _playersChip.Visible = true;
+        }
+
         private void OnRelayList(List<BrowserServer> list, Dictionary<string, long> seen, DateTime built,
                                  string problem, string key, HashSet<uint> apps)
         {
@@ -3475,6 +3588,8 @@ namespace ABeautifulPotatoLauncher
                 if (key == CacheKey) StartCommunityQuery();
                 return;
             }
+
+            ShowPlayersOnline(list, built);
 
             // DayZ's list holds both builds; this tab may want only one.
             var mine = list.Where(s => apps.Contains(s.AppId)).ToList();
@@ -3712,7 +3827,9 @@ namespace ABeautifulPotatoLauncher
         {
             if (_tab != Tab.Lan) return;
             _scanNetworkNext = true;
+            var picked = SelectedRow;
             RefreshCurrent(true);
+            RefreshOneRow(SelectedRow ?? picked, true);
         }
 
         private void StartLanProbe(List<BrowserServer> saved, bool network)
@@ -5118,8 +5235,18 @@ namespace ABeautifulPotatoLauncher
 
                 lock (_pingLock)
                 {
+                    for (int i = 0; i < _pingFirst.Count && row == null; i++)
+                    {
+                        var candidate = _pingFirst[i];
+                        if (_pingBusy.Contains(candidate.Endpoint)) continue;
+                        _pingFirst.RemoveAt(i);
+                        row = candidate;
+                        urgent = true;
+                    }
+
                     foreach (var candidate in _pingWanted)
                     {
+                        if (row != null) break;
                         if (_pingBusy.Contains(candidate.Endpoint)) continue;
                         if (_asked.Contains(candidate.Endpoint)) continue;
                         row = candidate;
@@ -5805,15 +5932,26 @@ namespace ABeautifulPotatoLauncher
             });
         }
 
-        private void RefreshOneRow(Row row)
+        /// <summary>
+        /// Asks this server again, now: its status (trying the other query
+        /// ports when the known one is silent) and, when it is the selected
+        /// server, its mod list - with the local mod folders re-read, so the
+        /// installed / missing marks are current too.
+        /// </summary>
+        private void RefreshOneRow(Row row, bool quiet = false)
         {
             if (row == null) return;
             ClearModCache(row);
-            lock (_pingLock) { _asked.Remove(row.Endpoint); }
-            Enqueue(new[] { row }, true);
+            lock (_pingLock)
+            {
+                _asked.Remove(row.Endpoint);
+                _pingFirst.RemoveAll(r => r.Endpoint == row.Endpoint);
+                _pingFirst.Add(row);
+            }
+            StartPingPool();
             if (SelectedRow != null && SelectedRow.Endpoint == row.Endpoint)
                 ShowMods(true);
-            _status.Text = "Re-checking " + row.Endpoint + "...";
+            if (!quiet) _status.Text = "Re-checking " + row.Endpoint + "...";
         }
 
         private void OnListClick(object sender, MouseEventArgs e)
@@ -7170,13 +7308,22 @@ namespace ABeautifulPotatoLauncher
                 _mods.Items.Clear();
                 _desc.Clear();
 
-                ThreadPool.QueueUserWorkItem(_ => FetchRules(row));
+                string steam = force ? FindSteam() : null;
+                ThreadPool.QueueUserWorkItem(_ => FetchRules(row, steam));
             }
         }
 
-        private void FetchRules(Row row)
+        /// <param name="rescanFrom">Set on a refresh: the Steam path to re-read
+        /// the local mod folders from, here off the UI thread, so the panel's
+        /// installed / missing marks are as current as the server's list.</param>
+        private void FetchRules(Row row, string rescanFrom = null)
         {
             ServerRules rules = null;
+            if (rescanFrom != null)
+            {
+                try { ModIndex.Invalidate(); ModIndex.EnsureScanned(rescanFrom); }
+                catch { }
+            }
             try
             {
                 // The same port the status check found, not the game-port-plus-
@@ -8003,7 +8150,7 @@ namespace ABeautifulPotatoLauncher
             var existing = ModOverrides.For(mod);
             string start = existing != null && !string.IsNullOrEmpty(existing.Folder)
                 ? existing.Folder
-                : ServerStore.LoadExtraModPath();
+                : ServerStore.LoadExtraModPaths().FirstOrDefault() ?? "";
 
             string folder = FindModDialog.Ask(Host, "@" + mod.BareName, start);
             if (folder == null) return null;
@@ -8217,6 +8364,26 @@ namespace ABeautifulPotatoLauncher
                                 why != null ? "Steam cannot be reached" : "Steam not available",
                                 MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
+            }
+
+            // Steam can't replace or delete files a program holds open - DayZ,
+            // or a server here that loads this mod, through a junction or not -
+            // and gives up without a word, so say so instead.
+            if (col == MColRepair || col == MColRemove)
+            {
+                var cursor = Cursor;
+                Cursor = Cursors.WaitCursor;       // a second or so when something holds it
+                List<ModLock> holders;
+                try { holders = ModLocks.Holders(steam == null ? null : SteamWorkshop.ItemPath(steam, mod.WorkshopId)); }
+                finally { Cursor = cursor; }
+                if (holders.Count > 0)
+                {
+                    Log("Mod is locked: " + mod.Name + " (" + mod.WorkshopId + ") is in use by " + ModLocks.Describe(holders) + ".");
+                    MessageBox.Show(ModLocks.Message(mod.Name, holders,
+                                                     col == MColRemove ? "remove" : Games.IsZomboid ? "verify" : "repair"),
+                                    "Mod is locked", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
             }
 
             if (col == MColRepair)
@@ -8507,6 +8674,11 @@ private void Launch(Row srv)
             // outdated mods and got them kicked.
             Log("Checking published versions with Steam...");
             SteamWorkshop.PrefetchWorkshopTimes(mods.Select(m => m.WorkshopId), Log);
+
+            // The library as it is NOW, not as it was when the panel was drawn:
+            // a test build made a minute ago must not lose to an older one.
+            // A fifth of a second, once per join.
+            ModIndex.Invalidate();
 
             // Anything missing OR out of date gets fetched before launching -
             // joining with a stale mod is a kick waiting to happen.
@@ -9958,6 +10130,8 @@ private static ServerRules QueryModsChecked(Row row)
 
             _closing = true;
             _updateTimer.Stop();
+            ModIndex.Changed -= OnModIndexChanged;
+            _modsChangedDelay.Stop();
             if (_cooldownTimer != null) _cooldownTimer.Stop();
 
             // The mod library window is DayZ's, and belongs to this launcher.

@@ -17,6 +17,13 @@ using System.Text.RegularExpressions;
 
 namespace ABeautifulPotatoLauncher
 {
+    /// <summary>One additional mods folder from Settings; switched off, it stays listed but is not searched.</summary>
+    internal sealed class ExtraModFolder
+    {
+        public string Path = "";
+        public bool Enabled = true;
+    }
+
     internal sealed class ServerEntry
     {
         public string Name;
@@ -761,27 +768,48 @@ namespace ABeautifulPotatoLauncher
             catch { return DateTime.MinValue; }
         }
 
-        // ---- an extra folder the player keeps mods in ----
+        // ---- extra folders the player keeps mods in ----
 
         private static string ExtraModFile { get { return Path.Combine(Dir, "extramods.txt"); } }
 
         /// <summary>
-        /// A second place to look for mods, chosen by the player. Empty when
-        /// they have not set one, which is the normal case.
+        /// More places to look for mods, chosen by the player, in their order,
+        /// each switched on or off. Empty when they have not set any, which is
+        /// the normal case. One per line, "# " in front of one switched off -
+        /// the file once held a single folder, which reads as a list of one.
         /// </summary>
-        public static string LoadExtraModPath()
+        public static List<ExtraModFolder> LoadExtraModFolders()
+        {
+            var folders = new List<ExtraModFolder>();
+            try
+            {
+                if (!File.Exists(ExtraModFile)) return folders;
+                foreach (string line in File.ReadAllLines(ExtraModFile))
+                {
+                    string p = line.Trim();
+                    bool on = !p.StartsWith("#");
+                    p = p.TrimStart('#').Trim();
+                    if (p.Length > 0 && !folders.Any(f => string.Equals(f.Path, p, StringComparison.OrdinalIgnoreCase)))
+                        folders.Add(new ExtraModFolder { Path = p, Enabled = on });
+                }
+            }
+            catch { }
+            return folders;
+        }
+
+        /// <summary>The extra folders that are switched on - the ones searched for mods.</summary>
+        public static List<string> LoadExtraModPaths()
+        {
+            return LoadExtraModFolders().Where(f => f.Enabled).Select(f => f.Path).ToList();
+        }
+
+        public static void SaveExtraModFolders(IEnumerable<ExtraModFolder> folders)
         {
             try
             {
-                if (!File.Exists(ExtraModFile)) return "";
-                return File.ReadAllText(ExtraModFile).Trim();
+                File.WriteAllLines(ExtraModFile, (folders ?? new ExtraModFolder[0])
+                                                     .Select(f => (f.Enabled ? "" : "# ") + f.Path).ToArray());
             }
-            catch { return ""; }
-        }
-
-        public static void SaveExtraModPath(string path)
-        {
-            try { File.WriteAllText(ExtraModFile, path ?? ""); }
             catch { }
         }
 

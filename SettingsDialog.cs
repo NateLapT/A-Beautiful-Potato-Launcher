@@ -43,7 +43,7 @@ namespace ABeautifulPotatoLauncher
             {
                 f.Text = "Settings";
                 f.StartPosition = FormStartPosition.CenterParent;
-                f.ClientSize = new Size(900, 560);
+                f.ClientSize = new Size(900, 620);
                 f.MinimumSize = new Size(700, 420);
                 f.BackColor = Ink;
                 f.ForeColor = Color.Gainsboro;
@@ -54,7 +54,7 @@ namespace ABeautifulPotatoLauncher
 
                 // Built further down, but added FIRST: this is the page people
                 // open Settings for.
-                var modsPage = new TabPage("Mods") { BackColor = Panel };
+                var modsPage = new TabPage("Mods") { BackColor = Panel, AutoScroll = true };
                 tabs.TabPages.Add(modsPage);
 
                 // ------------------------------------------ flagged servers --
@@ -234,15 +234,28 @@ namespace ABeautifulPotatoLauncher
 
                 modsPage.Controls.Add(new Label
                 {
-                    Text = "Additional mods folder",
+                    Text = "Additional mods folders",
                     Bounds = new Rectangle(14, 106, 300, 18),
                     ForeColor = Color.Gainsboro,
                     Font = new Font("Segoe UI", 9f, FontStyle.Bold)
                 });
 
+                // THE BOX ADDS; THE LIST HOLDS.
+                //
+                // There used to be one extra folder, and the box WAS the
+                // setting. Now the box is where a folder is typed or browsed to
+                // before Add puts it in the list below - and where Edit brings a
+                // listed one back to be changed, Add reading Save meanwhile.
+                // The list is saved when the dialog is closed, like the rest.
+                // Each row's tick box switches a folder off without losing it -
+                // test builds left out while trying the release ones, say.
+                var savedFolders = ServerStore.LoadExtraModFolders();
+                var extraPaths = savedFolders.Select(x => x.Path).ToList();
+                var enabled = savedFolders.Select(x => x.Enabled).ToList();
+                int editing = -1;                   // the row Edit brought up, or -1 when adding
+
                 var extraBox = new TextBox
                 {
-                    Text = ServerStore.LoadExtraModPath(),
                     Bounds = new Rectangle(14, 128, 440, 23),
                     BackColor = Panel2,
                     ForeColor = Color.Gainsboro,
@@ -267,27 +280,207 @@ namespace ABeautifulPotatoLauncher
                         ShowNewFolderButton = false
                     })
                     {
-                        if (Directory.Exists(extraBox.Text)) fb.SelectedPath = extraBox.Text;
+                        if (Directory.Exists(extraBox.Text.Trim())) fb.SelectedPath = extraBox.Text.Trim();
                         if (fb.ShowDialog(f) == DialogResult.OK) extraBox.Text = fb.SelectedPath;
                     }
                 };
                 modsPage.Controls.Add(browse);
-                modsPage.Controls.Add(MakeExplorerButton(f, 544, 127, () => extraBox.Text));
+
+                var add = MakeBtn("Add", new Rectangle(544, 127, 74, 25));
+                modsPage.Controls.Add(add);
+                var cancelEdit = MakeBtn("Cancel", new Rectangle(626, 127, 74, 25));
+                cancelEdit.Visible = false;
+                modsPage.Controls.Add(cancelEdit);
+
+                // Five rows show; a sixth brings the scroll bar.
+                const int rowHeight = 30, rowsShown = 5;
+                var rows = new FlowLayoutPanel
+                {
+                    Bounds = new Rectangle(14, 178, 686, rowHeight * rowsShown + 2),
+                    FlowDirection = FlowDirection.TopDown,
+                    WrapContents = false,
+                    AutoScroll = true,
+                    BackColor = Ink,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                modsPage.Controls.Add(rows);
+
+                // Column headings, lined up with each row's tick box and path.
+                modsPage.Controls.Add(new Label { Text = "Enable", Bounds = new Rectangle(17, 160, 50, 16), ForeColor = Dim });
+                modsPage.Controls.Add(new Label { Text = "Path", Bounds = new Rectangle(69, 160, 200, 16), ForeColor = Dim });
+
+                var tips = new ToolTip();
+                f.Disposed += (s2, e2) => tips.Dispose();
+
+                Action fillRows = null;
+                Action stopEditing = () =>
+                {
+                    editing = -1;
+                    extraBox.Text = "";
+                    add.Text = "Add";
+                    cancelEdit.Visible = false;
+                };
+
+                // A row's own Edit or Remove rebuilds the rows, itself included,
+                // so it waits until that button's click is over.
+                Action refillLater = () => f.BeginInvoke(fillRows);
+
+                fillRows = () =>
+                {
+                    // Room is kept for the scroll bar whether it shows or not,
+                    // so the buttons don't shift when a sixth folder is added.
+                    int w = rows.ClientSize.Width - SystemInformation.VerticalScrollBarWidth;
+                    rows.SuspendLayout();
+                    var old = rows.Controls.Cast<Control>().ToList();
+                    rows.Controls.Clear();
+                    foreach (var c in old) c.Dispose();
+
+                    for (int i = 0; i < extraPaths.Count; i++)
+                    {
+                        int at = i;
+                        string path = extraPaths[i];
+                        bool exists = Directory.Exists(path);
+                        bool on = enabled[i];
+
+                        var row = new Panel
+                        {
+                            Size = new Size(w, rowHeight),
+                            Margin = Padding.Empty,
+                            // Banded like the server list, so each row reads as one.
+                            BackColor = at == editing ? Color.FromArgb(45, 60, 85)
+                                      : (at & 1) == 0 ? MainForm.RowBandA : MainForm.RowBandB
+                        };
+                        // Shortened in the MIDDLE when it doesn't fit, so the
+                        // last folder - the part that tells them apart - shows.
+                        var tick = new CheckBox
+                        {
+                            Checked = on,
+                            Bounds = new Rectangle(18, 6, 18, 18),
+                            FlatStyle = FlatStyle.Flat
+                        };
+                        tips.SetToolTip(tick, on ? "Searched for mods. Untick to leave this folder out but keep it listed."
+                                                 : "Left out. Tick to search it for mods again.");
+                        tick.CheckedChanged += (s2, e2) => { enabled[at] = tick.Checked; refillLater(); };
+                        row.Controls.Add(tick);
+
+                        var label = new Control
+                        {
+                            Text = (exists ? path : path + "   (not found)") + (on ? "" : "   (off)"),
+                            Bounds = new Rectangle(56, 6, w - 202, 18),
+                            ForeColor = !on ? Dim : exists ? Color.Gainsboro : Color.FromArgb(205, 150, 150),
+                            Cursor = Cursors.Hand
+                        };
+                        label.Paint += (s2, e2) => TextRenderer.DrawText(e2.Graphics, label.Text, label.Font,
+                            label.ClientRectangle, label.ForeColor,
+                            TextFormatFlags.PathEllipsis | TextFormatFlags.SingleLine
+                            | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                        tips.SetToolTip(label, path + "\r\nDouble-click to open it in Explorer.");
+                        label.DoubleClick += (s2, e2) => OpenInExplorer(f, path);
+                        row.Controls.Add(label);
+
+                        var edit = MakeBtn("Edit", new Rectangle(w - 142, 3, 60, 24));
+                        edit.Click += (s2, e2) =>
+                        {
+                            editing = at;
+                            extraBox.Text = extraPaths[at];
+                            add.Text = "Save";
+                            cancelEdit.Visible = true;
+                            extraBox.Focus();
+                            extraBox.SelectAll();
+                            refillLater();
+                        };
+                        row.Controls.Add(edit);
+
+                        var remove = MakeBtn("Remove", new Rectangle(w - 78, 3, 72, 24));
+                        remove.Click += (s2, e2) =>
+                        {
+                            extraPaths.RemoveAt(at);
+                            enabled.RemoveAt(at);
+                            if (editing == at) stopEditing();
+                            else if (editing > at) editing--;
+                            refillLater();
+                        };
+                        row.Controls.Add(remove);
+
+                        rows.Controls.Add(row);
+                    }
+
+                    if (extraPaths.Count == 0)
+                        rows.Controls.Add(new Label
+                        {
+                            Text = "No additional folders. Type or browse to one above, then Add.",
+                            Size = new Size(w, rowHeight),
+                            Margin = Padding.Empty,
+                            Padding = new Padding(6, 7, 0, 0),
+                            ForeColor = Dim
+                        });
+                    rows.ResumeLayout();
+                };
+                fillRows();
+
+                // Puts the box's folder in the list - or back over the row Edit
+                // brought up. False, after saying why unless quiet, when it can't.
+                Func<bool, bool> takeBox = quiet =>
+                {
+                    string path = extraBox.Text.Trim().Trim('"');
+                    if (path.Length == 0) return false;
+                    try { path = Path.GetFullPath(path); } catch { }
+                    if (path.Length > 3) path = path.TrimEnd('\\');
+
+                    if (!Directory.Exists(path))
+                    {
+                        if (!quiet)
+                            MessageBox.Show(f, "That folder does not exist:\r\n\r\n" + path,
+                                            "Not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return false;
+                    }
+                    int same = extraPaths.FindIndex(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+                    if (same >= 0 && same != editing)
+                    {
+                        if (!quiet)
+                            MessageBox.Show(f, "That folder is already in the list.", "Already there",
+                                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return false;
+                    }
+
+                    if (editing >= 0) extraPaths[editing] = path;
+                    else { extraPaths.Add(path); enabled.Add(true); }
+                    return true;
+                };
+
+                add.Click += (s2, e2) =>
+                {
+                    bool adding = editing < 0;
+                    if (!takeBox(false)) return;
+                    stopEditing();
+                    fillRows();
+                    if (adding && rows.Controls.Count > 0)
+                        rows.ScrollControlIntoView(rows.Controls[rows.Controls.Count - 1]);
+                };
+                cancelEdit.Click += (s2, e2) => { stopEditing(); fillRows(); };
 
                 modsPage.Controls.Add(new Label
                 {
-                    Text = "A second place to look for mods - useful for hand-installed ones that "
-                         + "Steam does not manage.\r\nLeave it empty if you keep everything in the "
-                         + "workshop folder.",
-                    Bounds = new Rectangle(14, 158, 600, 40),
+                    Text = "More places to look for mods - hand-installed ones that Steam does not manage, "
+                         + "or your own test builds.\r\nEach is searched four folders deep; untick one to leave "
+                         + "it out but keep it listed.",
+                    Bounds = new Rectangle(14, 336, 680, 34),
                     ForeColor = Dim
                 });
 
                 // Saved when the dialog is accepted, alongside everything else.
+                // A folder still sitting in the box counts, as it did when the
+                // box was the setting.
                 f.FormClosing += (s2, e2) =>
                 {
-                    if (f.DialogResult == DialogResult.OK)
-                        ServerStore.SaveExtraModPath(extraBox.Text.Trim());
+                    if (f.DialogResult != DialogResult.OK) return;
+                    takeBox(true);
+                    var now = extraPaths.Select((x, i) => new ExtraModFolder { Path = x, Enabled = enabled[i] }).ToList();
+                    if (now.Count == savedFolders.Count
+                        && now.Zip(savedFolders, (a, b) => a.Enabled == b.Enabled
+                                   && string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase)).All(x => x)) return;
+                    ServerStore.SaveExtraModFolders(now);
+                    ModIndex.Invalidate();          // the next look at mods scans the new list
                 };
 
                 // THE RULES ARE NOT WRITTEN DOWN IN THE INTERFACE ANY MORE.
@@ -301,7 +494,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     Text = "Hide fake and redirect servers",
                     Checked = hideFakes,
-                    Bounds = new Rectangle(14, 210, 400, 24),
+                    Bounds = new Rectangle(14, 380, 400, 24),
                     ForeColor = Color.Gainsboro,
                     FlatStyle = FlatStyle.Flat
                 };
@@ -311,7 +504,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     Text = "Screens out redirect farms and fabricated listings. Use the Flagged "
                          + "servers tab\r\nto see what was caught, and to allow an address back in.",
-                    Bounds = new Rectangle(32, 236, 600, 34),
+                    Bounds = new Rectangle(32, 406, 600, 34),
                     ForeColor = Dim
                 });
 
@@ -320,7 +513,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     Text = "Show \"Playing DayZ\" in my Discord status",
                     Checked = ServerStore.LoadDiscordStatus(),
-                    Bounds = new Rectangle(14, 282, 400, 24),
+                    Bounds = new Rectangle(14, 452, 400, 24),
                     ForeColor = Color.Gainsboro,
                     FlatStyle = FlatStyle.Flat,
                     Visible = !Games.IsZomboid && DiscordPresence.Ready
@@ -330,7 +523,7 @@ namespace ABeautifulPotatoLauncher
                 {
                     Text = "While DayZ is running: \"Playing DayZ - Via A Beautiful Potato Launcher\". "
                          + "It never says\r\nwhich server you are on. Needs the Discord app running on this PC.",
-                    Bounds = new Rectangle(32, 308, 600, 34),
+                    Bounds = new Rectangle(32, 478, 600, 34),
                     ForeColor = Dim,
                     Visible = !Games.IsZomboid && DiscordPresence.Ready
                 });
@@ -343,18 +536,26 @@ namespace ABeautifulPotatoLauncher
 
 
                 // ------------------------------------------------------ close --
+                var closeBar = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Ink };
                 var close = new Button
                 {
                     Text = "Close",
-                    Dock = DockStyle.Bottom,
-                    Height = 34,
+                    Size = new Size(110, 30),
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Color.FromArgb(60, 60, 64),
                     ForeColor = Color.White,
                     DialogResult = DialogResult.OK
                 };
-                f.Controls.Add(close);
+                close.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
+                closeBar.Controls.Add(close);
+                closeBar.Resize += (s2, e2) => close.Location = new Point(closeBar.ClientSize.Width - close.Width - 12, 7);
+                f.Controls.Add(closeBar);
                 f.AcceptButton = close;
+
+                // Enter in the folder box adds (or saves) the folder rather
+                // than closing the dialog.
+                extraBox.Enter += (s2, e2) => f.AcceptButton = add;
+                extraBox.Leave += (s2, e2) => f.AcceptButton = close;
 
                 f.ShowDialog(owner);
                 newHideFakes = chk.Checked;
@@ -398,41 +599,44 @@ namespace ABeautifulPotatoLauncher
             };
             b.FlatAppearance.BorderColor = Color.FromArgb(75, 75, 82);
 
-            b.Click += (s, e) =>
-            {
-                string target = (path() ?? "").Trim();
+            b.Click += (s, e) => OpenInExplorer(owner, path());
 
-                if (target.Length == 0 || target.StartsWith("("))
+            return b;
+        }
+
+        /// <summary>Opens a folder in Explorer, or says why it can't.</summary>
+        private static void OpenInExplorer(Form owner, string path)
+        {
+            string target = (path ?? "").Trim();
+
+            if (target.Length == 0 || target.StartsWith("("))
+            {
+                MessageBox.Show(owner, "There is no folder set here yet.",
+                                "Nothing to open", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                // GetFullPath because the registry hands paths back with
+                // forward slashes, and Explorer opens Documents when given
+                // one of those.
+                target = Path.GetFullPath(target);
+
+                if (!Directory.Exists(target))
                 {
-                    MessageBox.Show(owner, "There is no folder set here yet.",
-                                    "Nothing to open", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(owner, "That folder does not exist:\r\n\r\n" + target,
+                                    "Not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                try
-                {
-                    // GetFullPath because the registry hands paths back with
-                    // forward slashes, and Explorer opens Documents when given
-                    // one of those.
-                    target = Path.GetFullPath(target);
-
-                    if (!Directory.Exists(target))
-                    {
-                        MessageBox.Show(owner, "That folder does not exist:\r\n\r\n" + target,
-                                        "Not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    System.Diagnostics.Process.Start("explorer.exe", "\"" + target + "\"");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(owner, "Could not open that folder:\r\n\r\n" + ex.Message,
-                                    "Explorer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            };
-
-            return b;
+                System.Diagnostics.Process.Start("explorer.exe", "\"" + target + "\"");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "Could not open that folder:\r\n\r\n" + ex.Message,
+                                "Explorer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
     }
 }
