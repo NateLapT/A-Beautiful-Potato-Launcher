@@ -46,17 +46,21 @@ namespace ABeautifulPotatoLauncher
         /// <summary>
         /// The query ports a DayZ server on a home network is all but certain
         /// to use, asked on every LAN refresh and in a network scan:
-        ///   27015-27017   no steamQueryPort set (27016 and 27017 when the one
-        ///                 before was still held by another server or a restart)
+        ///   27015-27030   no steamQueryPort set, or a manually assigned
+        ///                 query port in the common DayZ range
         ///   2303 ... 3003 steamQueryPort = game port + 1, for game ports
         ///                 2302, 2402, 2502 ... 3002 - one server per 100 ports,
         ///                 since each takes its game port, +1 and +2.
         /// </summary>
         public static readonly int[] CommonQueryPorts =
-            { 27015, 27016, 27017, 2303, 2403, 2503, 2603, 2703, 2803, 2903, 3003 };
+            {
+                27015, 27016, 27017, 27018, 27019, 27020, 27021, 27022,
+                27023, 27024, 27025, 27026, 27027, 27028, 27029, 27030,
+                2303, 2403, 2503, 2603, 2703, 2803, 2903, 3003
+            };
 
         /// <summary>CommonQueryPorts in words, for the player.</summary>
-        public const string CommonPortsText = "27015-27017, and 2303, 2403 ... 3003 (game ports 2302, 2402 ... 3002)";
+        public const string CommonPortsText = "27015-27030, and 2303, 2403 ... 3003 (game ports 2302, 2402 ... 3002)";
 
         private static readonly string[] ServerExes = { "DayZServer_x64", "DayZServer" };
 

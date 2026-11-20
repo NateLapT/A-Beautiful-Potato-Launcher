@@ -16,6 +16,20 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.7] - 2026-11-20
+
+### Added
+
+- **LAN discovery checks custom Steam query ports.** REFRESH NETWORK now probes
+  27015-27030 as query ports (including manually assigned 27018), then uses
+  each A2S reply's game port and server name to identify the server. It does not
+  scan game ports first or infer query ports from them.
+- **Search and verify a server's query port.** Use a server row's context menu
+  to check a bounded port range on that server's IP. A reply is accepted only
+  when A2S reports the selected server's game port, so servers sharing an IP
+  are not confused. The verified port and live server name are saved for the
+  next refresh or connection.
+
 ## [0.9.6] - 2026-11-01
 
 ### Added

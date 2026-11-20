@@ -1,8 +1,8 @@
 <#
     build-beta.ps1 - build the next beta of the launcher.
 
-    Every beta that gets installed has its own number: after the v0.9.6 release
-    they are 0.9.6.1, 0.9.6.2, ... This bumps <BetaBuild> in the project file,
+    Every beta that gets installed has its own number: after the v0.9.7 release
+    they are 0.9.7.1, 0.9.7.2, ... This bumps <BetaBuild> in the project file,
     then builds to bin\Release\net48. A plain compile check (dotnet build -o
     somewhere else) does not bump anything.
 

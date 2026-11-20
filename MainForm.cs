@@ -5600,7 +5600,7 @@ namespace ABeautifulPotatoLauncher
             // name can be hours stale; the server's own reply cannot. Without
             // this a rename showed up for a moment and was then overwritten by
             // the next render, and was never saved.
-            UpdateIndexFrom(row.Endpoint, info);
+            UpdateIndexFrom(row.Endpoint, info, row.QueryPort);
 
             // Only this one row is repainted. NOT a re-render and NOT a re-sort:
             // a server renaming itself, filling up or going quiet must change
@@ -5629,7 +5629,7 @@ namespace ABeautifulPotatoLauncher
         /// is what the server currently says, so every live reply is written
         /// back here and saved with the rest.
         /// </summary>
-        private void UpdateIndexFrom(string endpoint, ServerInfo info)
+        private void UpdateIndexFrom(string endpoint, ServerInfo info, int queryPort)
         {
             if (info == null || !info.Online || string.IsNullOrEmpty(endpoint)) return;
 
@@ -5659,6 +5659,11 @@ namespace ABeautifulPotatoLauncher
             }
 
             if (!string.IsNullOrEmpty(info.Map) && entry.Map != info.Map) { entry.Map = info.Map; changed = true; }
+            if (queryPort > 0 && queryPort < 65535 && entry.QueryPort != queryPort)
+            {
+                entry.QueryPort = queryPort;
+                changed = true;
+            }
             if (entry.Players != info.Players) { entry.Players = info.Players; changed = true; }
             if (entry.MaxPlayers != info.MaxPlayers) { entry.MaxPlayers = info.MaxPlayers; changed = true; }
             if (info.Keywords != null && entry.Tags != info.Keywords) { entry.Tags = info.Keywords; changed = true; }
@@ -9883,6 +9888,7 @@ private static ServerRules QueryModsChecked(Row row)
 
             add("Copy server info", (s, e) => CopyServerInfo(false));
             add("Copy address only", (s, e) => CopyServerInfo(true));
+            add("Search / validate query port", (s, e) => SearchQueryPort(SelectedRow));
             menu.Items.Add(new ToolStripSeparator());
             add("Add to / remove from Favorites", (s, e) => ToggleFavourite(SelectedRow));
             add("Refresh this server", (s, e) => RefreshOneRow(SelectedRow));
@@ -9892,6 +9898,82 @@ private static ServerRules QueryModsChecked(Row row)
             // Nothing sensible to act on with no row selected.
             menu.Opening += (s, e) => { if (SelectedRow == null) e.Cancel = true; };
             return menu;
+        }
+
+        private bool _queryPortSearchBusy;
+
+        private void SearchQueryPort(Row row)
+        {
+            if (row == null || _queryPortSearchBusy) return;
+
+            int firstPort, lastPort;
+            if (!QueryPortSearchDialog.Show(this, row.QueryPort, out firstPort, out lastPort)) return;
+
+            _queryPortSearchBusy = true;
+            _status.Text = "Searching query ports for " + row.Endpoint + "...";
+            Log("Searching query ports " + firstPort + "-" + lastPort + " for " + row.Endpoint + ".");
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var answers = new System.Collections.Concurrent.ConcurrentBag<Tuple<int, ServerInfo>>();
+                Tuple<int, ServerInfo> match = null;
+                string problem = null;
+                try
+                {
+                    System.Threading.Tasks.Parallel.ForEach(
+                        Enumerable.Range(firstPort, lastPort - firstPort + 1),
+                        new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 4 },
+                        port =>
+                        {
+                            var info = A2S.GetInfoAt(row.Host, port, 1000);
+                            if (info != null && info.Online && info.GamePort == row.Port)
+                                answers.Add(Tuple.Create(port, info));
+                        });
+
+                    match = answers.OrderBy(x => x.Item1 == row.QueryPort ? 0 : 1)
+                                   .ThenBy(x => x.Item1).FirstOrDefault();
+                }
+                catch (Exception ex) { problem = ex.Message; }
+
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _queryPortSearchBusy = false;
+                        if (_closing) return;
+                        if (problem != null)
+                        {
+                            Log("Query port search failed for " + row.Endpoint + ": " + problem);
+                            _status.Text = "Query port search failed for " + row.Endpoint + ".";
+                            MessageBox.Show(this, problem, "Query port search failed",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+                        if (match == null)
+                        {
+                            Log("No query port in " + firstPort + "-" + lastPort + " reported game port " + row.Port + ".");
+                            _status.Text = "No matching query port found for " + row.Endpoint + ".";
+                            MessageBox.Show(this,
+                                "No server answering on those ports reported game port " + row.Port + ".\r\n"
+                                + "Try a different, narrower port range.",
+                                "Query port not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            return;
+                        }
+
+                        row.QueryPort = match.Item1;
+                        LearnQueryPort(row.Endpoint, match.Item1);
+                        _live[row.Endpoint] = match.Item2;
+                        Apply(row, match.Item2);
+                        UpdateIndexFrom(row.Endpoint, match.Item2, match.Item1);
+                        Redraw(row.Endpoint);
+                        SaveIndex();
+                        Log("Query port verified: " + row.Endpoint + " uses " + match.Item1
+                            + " (" + match.Item2.Name + ").");
+                        _status.Text = "Verified query port " + match.Item1 + " for " + row.Endpoint + ".";
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
         }
 
         /// <summary>Puts the selected server on the clipboard.</summary>
