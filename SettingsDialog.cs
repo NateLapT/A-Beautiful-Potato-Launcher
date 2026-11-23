@@ -533,6 +533,67 @@ namespace ABeautifulPotatoLauncher
                         ServerStore.SaveDiscordStatus(discord.Checked);
                 };
 
+                // -------------------------------------------- streamer mode --
+                var streamPage = new TabPage("Streamer mode") { BackColor = Panel };
+                tabs.TabPages.Add(streamPage);
+
+                var streamer = new CheckBox
+                {
+                    Text = "Streamer mode      (" + MainForm.StreamerKeyText + " switches it anywhere in the launcher)",
+                    Checked = StreamerMode.On,
+                    Bounds = new Rectangle(14, 16, 600, 24),
+                    ForeColor = Color.Gainsboro,
+                    FlatStyle = FlatStyle.Flat
+                };
+                streamPage.Controls.Add(streamer);
+
+                // Switching it OFF asks first, defaulting to No - the same as
+                // the shortcut. An accidental click would put every name and
+                // address on stream.
+                streamer.CheckedChanged += (s2, e2) =>
+                {
+                    if (streamer.Checked || !StreamerMode.On) return;
+                    var answer = MessageBox.Show(f,
+                        "Turn streamer mode off?\r\n\r\nServer names, addresses, your searches and the log "
+                        + "will show in full again - on stream too, if the launcher is being captured.",
+                        "Streamer mode", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                    if (answer != DialogResult.Yes) streamer.Checked = true;
+                };
+                streamPage.Controls.Add(new Label
+                {
+                    Text = "So viewers can't follow you onto your server: server addresses and ports are hidden, and the\r\n"
+                         + "search box and the log show " + StreamerMode.Mask + ". A server's name is replaced by its "
+                         + "playstyle and a tag\r\n(\"PvE · x3 Loot  #KQ7\"), or by a nickname you give it: "
+                         + "right-click a server, Nickname this server.",
+                    Bounds = new Rectangle(32, 42, 660, 50),
+                    ForeColor = Dim
+                });
+
+                var capture = new CheckBox
+                {
+                    Text = "Hide the launcher from screen capture",
+                    Checked = StreamerMode.HideFromCapture,
+                    Bounds = new Rectangle(14, 104, 400, 24),
+                    ForeColor = Color.Gainsboro,
+                    FlatStyle = FlatStyle.Flat
+                };
+                streamPage.Controls.Add(capture);
+                streamPage.Controls.Add(new Label
+                {
+                    Text = "OBS, Discord screen share, screenshots and recordings leave the launcher's windows out; "
+                         + "you\r\nstill see them on your screen. Doesn't apply to capture cards, which record "
+                         + "the screen itself.",
+                    Bounds = new Rectangle(32, 130, 640, 34),
+                    ForeColor = Dim
+                });
+
+                f.FormClosing += (s2, e2) =>
+                {
+                    if (f.DialogResult == DialogResult.OK
+                        && (streamer.Checked != StreamerMode.On || capture.Checked != StreamerMode.HideFromCapture))
+                        StreamerMode.Save(streamer.Checked, capture.Checked);
+                };
+
 
 
                 // ------------------------------------------------------ close --

@@ -67,7 +67,7 @@ namespace ABeautifulPotatoLauncher
 
             Controls.Add(new Label
             {
-                Text = row.Name,
+                Text = StreamerMode.Name(row.Name, row.Endpoint),
                 Bounds = new Rectangle(14, 12, 472, 20),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
@@ -76,7 +76,7 @@ namespace ABeautifulPotatoLauncher
             });
             Controls.Add(new Label
             {
-                Text = row.Endpoint + (string.IsNullOrEmpty(row.Map) ? "" : "   -   " + row.Map)
+                Text = StreamerMode.Address(row.Endpoint) + (string.IsNullOrEmpty(row.Map) ? "" : "   -   " + row.Map)
                      + "   -   " + row.Players + " / " + row.MaxPlayers + " players",
                 Bounds = new Rectangle(14, 34, 472, 18),
                 ForeColor = Dim,

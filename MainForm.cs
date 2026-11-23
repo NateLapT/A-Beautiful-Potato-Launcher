@@ -199,6 +199,10 @@ namespace ABeautifulPotatoLauncher
             }
             catch (Exception ex) { LogCrash("installer", ex); }
 
+            // Streamer mode and capture hiding are in force from the first window.
+            StreamerMode.Load();
+            StreamerMode.Hook();
+
             // One window for the whole run. Choosing the other game swaps the
             // launcher inside it - see LauncherWindow.
             Application.Run(new LauncherWindow());
@@ -1250,6 +1254,26 @@ namespace ABeautifulPotatoLauncher
             // Build time included, because a test build and the one before it
             // carry the same version number and a bug report needs to say
             // which one it came from.
+            // Incognito: shown while the launcher is hidden from screen capture,
+            // so the player knows OBS isn't seeing it. Added before the version
+            // so it sits just left of it (see the note below).
+            _incognito = new Label
+            {
+                Text = "\U0001F576",                // dark sunglasses
+                Dock = DockStyle.Right,
+                AutoSize = false,
+                Width = 30,
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Panel,
+                ForeColor = Color.FromArgb(225, 175, 90),
+                Font = new Font("Segoe UI Emoji", 11f),
+                Visible = StreamerMode.HideFromCapture
+            };
+            new ToolTip().SetToolTip(_incognito,
+                "Hidden from screen capture: OBS, Discord and screenshots don't see the launcher.\r\n"
+                + "Turn it off in Settings, Streamer mode.");
+            bottomBar.Controls.Add(_incognito);
+
             var version = new Label
             {
                 Text = Program.VersionLabel,
@@ -1352,6 +1376,20 @@ namespace ABeautifulPotatoLauncher
             bottomBar.Controls.Add(_status);
             bottomBar.Controls.SetChildIndex(_status, 0);
 
+            // Streamer mode: whatever the status says, addresses and searched-for
+            // text never reach the screen. Done here, once, rather than at each
+            // of the many places that set it.
+            bool scrubbing = false;
+            _status.TextChanged += (s, e) =>
+            {
+                if (scrubbing || !StreamerMode.On) return;
+                string clean = StreamerMode.Scrub(_status.Text);
+                if (clean == _status.Text) return;
+                scrubbing = true;
+                try { _status.Text = clean; }
+                finally { scrubbing = false; }
+            };
+
             var main = new Panel { Dock = DockStyle.Fill, BackColor = Ink, Padding = new Padding(12) };
             Controls.Add(main);
             main.BringToFront();
@@ -1425,6 +1463,7 @@ namespace ABeautifulPotatoLauncher
                 BorderStyle = BorderStyle.FixedSingle
             };
             _search.KeyDown += OnSearchKey;
+            _search.PasswordChar = StreamerMode.On ? '*' : '\0';
             searchArea.Controls.Add(_search);
 
             _searchClear = new Label
@@ -1479,6 +1518,9 @@ namespace ABeautifulPotatoLauncher
             var apply = MakeBtn("SEARCH", new Rectangle(102, 4, 92, 25), Color.FromArgb(60, 95, 60));
             apply.Click += (s, e) => RunSteamSearch(true);
             searchArea.Controls.Add(apply);
+            _searchButton = apply;
+            _searchClock.Interval = 400;
+            _searchClock.Tick += (s, e) => TickSearchClock();
 
             // The disclaimer, to the right of SEARCH. Small and dim - it has to
             // be present, not loud. On a narrow window it ends in "..." and the
@@ -1559,7 +1601,13 @@ namespace ABeautifulPotatoLauncher
                 // That is what made the search box lag behind the keyboard. Hold
                 // the mod panel until typing has stopped.
                 if (_typing) { _modsDelay.Stop(); _modsDelay.Start(); return; }
-                ShowMods();
+
+                // The player picked this server: ask it what it runs NOW and
+                // re-read the local mod folders before the list is drawn. A
+                // list kept from an earlier click went stale the moment a
+                // (LAN test) server restarted with other builds, and the
+                // installed / missing marks with it.
+                ShowMods(true);
             };
             _list.Columns.Add("", 26, HorizontalAlignment.Center);
             _list.Columns.Add("", 26, HorizontalAlignment.Center);
@@ -1739,7 +1787,37 @@ namespace ABeautifulPotatoLauncher
                     if (_refresh != null && _refresh.Enabled && _refresh.Visible) _refresh.PerformClick();
                     e.Handled = true;
                 }
+
+                // Ctrl+Shift+S switches streamer mode - see ToggleStreamerMode.
+                if (e.Control && e.Shift && !e.Alt && e.KeyCode == StreamerKey)
+                {
+                    e.Handled = e.SuppressKeyPress = true;
+                    ToggleStreamerMode();
+                }
             };
+        }
+
+        internal const Keys StreamerKey = Keys.S;
+        internal const string StreamerKeyText = "Ctrl+Shift+S";
+
+        /// <summary>
+        /// The streamer mode shortcut. Switching it ON is immediate. Switching
+        /// it OFF asks first, defaulting to No: one stray key combination
+        /// would otherwise put every server name and address on stream.
+        /// </summary>
+        private void ToggleStreamerMode()
+        {
+            if (StreamerMode.On)
+            {
+                var answer = MessageBox.Show(Host,
+                    "Turn streamer mode off?\r\n\r\nServer names, addresses, your searches and the log "
+                    + "will show in full again - on stream too, if the launcher is being captured.",
+                    "Streamer mode", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.Yes) return;
+            }
+            StreamerMode.Save(!StreamerMode.On, StreamerMode.HideFromCapture);
+            ApplyStreamerMode();
+            Log(StreamerMode.On ? "Streamer mode on (" + StreamerKeyText + ")." : "Streamer mode off.");
         }
 
         /// <summary>
@@ -2681,6 +2759,7 @@ namespace ABeautifulPotatoLauncher
         {
             _pollTimer.Stop();
             SteamServerList.Stop();
+            if (_searchPending != null || _slowSearchFor != null) StopSearch();
 
             if (!IsSteamTab(_tab)) { _visTimer.Stop(); RefreshMine(); return; }
 
@@ -3165,7 +3244,7 @@ namespace ABeautifulPotatoLauncher
             {
                 RefreshGlyph,
                 fav ? StarOn : StarOff,
-                row.Name,
+                StreamerMode.Name(row.Name, row.Endpoint),
                 row.GameLabel,
                 row.StatusText,
                 row.Map,
@@ -3176,7 +3255,7 @@ namespace ABeautifulPotatoLauncher
                 Modded(row.Tags) ? "yes" : "",
                 ViewModes.Label(ViewModes.Of(row.Tags, row.Name)),
                 row.Password ? "Yes" : "No",
-                row.Endpoint,
+                StreamerMode.Address(row.Endpoint),
                 ReportGlyph
             })
             {
@@ -3509,6 +3588,7 @@ namespace ABeautifulPotatoLauncher
             });
         }
 
+        private Label _incognito;
         private Label _playersLabel;
         private Panel _playersChip;
         private readonly ToolTip _playersTip = new ToolTip();
@@ -3647,6 +3727,8 @@ namespace ABeautifulPotatoLauncher
 
             // A new list can change the answer; ask again for what is picked.
             AskRelaySearch(true);
+
+            if (key == CacheKey && IsSteamTab(_tab)) FinishSearch(true);
         }
 
         // ------------------------------------------------ mods, asked for --
@@ -4593,6 +4675,8 @@ namespace ABeautifulPotatoLauncher
             _indexDirty = true;
             ServerStore.SaveList(CacheKey, combined, _lastSeen);
             _indexDirty = false;
+
+            FinishSearch(false);
         }
 
         private List<BrowserServer> Combine(List<BrowserServer> current)
@@ -5745,7 +5829,10 @@ namespace ABeautifulPotatoLauncher
         private void OnSettings(object sender, EventArgs e)
         {
             bool hide;
+            bool streamerWas = StreamerMode.On;
             bool changed = SettingsDialog.Show(Host, Flagged, _allowed, _filters.HideFakes, out hide, FindSteam());
+            if (StreamerMode.On != streamerWas) ApplyStreamerMode();
+            _incognito.Visible = StreamerMode.HideFromCapture;
             if (!changed) return;
 
             _filters.HideFakes = hide;
@@ -5753,6 +5840,30 @@ namespace ABeautifulPotatoLauncher
 
             if (IsSteamTab(_tab)) RenderFromCache();
             else RefreshMine();
+        }
+
+        /// <summary>Streamer mode: give a server the name shown for it instead of its real one.</summary>
+        private void NicknameServer(Row row)
+        {
+            if (row == null || row.IsHeading) return;
+            string nick = StreamerMode.AskNickname(Host, StreamerMode.Name(row.Name, row.Endpoint),
+                                                   StreamerMode.Nickname(row.Endpoint));
+            if (nick == null) return;
+            StreamerMode.SetNickname(row.Endpoint, nick);
+            _paintItems.Clear();
+            _list.Invalidate();
+            RepopulateModsFromCache();
+        }
+
+        /// <summary>Streamer mode was switched: redraw everything that shows a name, an address or typed text.</summary>
+        private void ApplyStreamerMode()
+        {
+            if (_search != null) _search.PasswordChar = StreamerMode.On ? '*' : '\0';
+            RedrawLog();
+            _status.Text = StreamerMode.On ? "Streamer mode on." : "Streamer mode off.";
+            _paintItems.Clear();
+            _list.Invalidate();
+            RepopulateModsFromCache();
         }
 
         private void ClearModCache(Row row)
@@ -7205,13 +7316,13 @@ namespace ABeautifulPotatoLauncher
             string text = _search.Text.Trim();
             if (text.Length == 0) return;
 
-            if (string.Equals(text, _lastSteamSearch, StringComparison.OrdinalIgnoreCase))
-            {
-                if (fromButton) Log("Already searched Steam for \"" + text + "\".");
+            // The typing timer asks once per text. SEARCH always goes: the
+            // player presses it BECAUSE the server isn't showing (or shows as
+            // offline), and "already searched" told them nothing.
+            if (!fromButton && string.Equals(text, _lastSteamSearch, StringComparison.OrdinalIgnoreCase))
                 return;
-            }
 
-            if (_pollTimer.Enabled)
+            if (_pollTimer.Enabled && _slowSearchFor == null && _searchPending == null)
             {
                 Log("A server query is already running - not starting another.");
                 return;
@@ -7219,10 +7330,131 @@ namespace ABeautifulPotatoLauncher
 
             _lastSteamSearch = text;
             Log(fromButton
-                ? "SEARCH pressed - asking Steam for servers matching \"" + text + "\"."
+                ? "SEARCH pressed - refreshing the list for \"" + text + "\"."
                 : "No SEARCH pressed within " + (AutoSearchAfterMs / 1000)
-                  + "s - asking Steam once for \"" + text + "\".");
-            RefreshCurrent(true);
+                  + "s - refreshing the list once for \"" + text + "\".");
+            RefreshCurrent(true);           // cancels any search still running
+
+            // Answered when the fresh list arrives - see FinishSearch.
+            _searchPending = text;
+            StartSearchClock();
+        }
+
+        // ------------------------------------------------ search clock --
+        //
+        // SEARCH refreshes the list; when the fresh list still has nothing by
+        // that name (the server list service doesn't know it), Steam is asked
+        // for it by name - which can take a minute, so the button shows a
+        // ticking clock and the status bar says what is happening until the
+        // answer is in.
+
+        private Button _searchButton;
+        private readonly System.Windows.Forms.Timer _searchClock = new System.Windows.Forms.Timer();
+        private DateTime _searchStartedUtc;
+
+        /// <summary>The text SEARCH asked for, until the refreshed list arrives.</summary>
+        private string _searchPending;
+
+        /// <summary>The text being searched for on Steam by name (the slow search), until it finishes.</summary>
+        private string _slowSearchFor;
+
+        private void StartSearchClock()
+        {
+            _searchStartedUtc = DateTime.UtcNow;
+            _searchClock.Stop();
+            _searchClock.Start();
+            TickSearchClock();
+        }
+
+        private void TickSearchClock()
+        {
+            if (_searchButton == null) return;
+            var gone = DateTime.UtcNow - _searchStartedUtc;
+
+            // Never left ticking: nothing is being fetched any more (a query
+            // that ended some other way), or Steam is taking far too long.
+            if (gone.TotalSeconds > 3 && !_pollTimer.Enabled && !_relayBusy)
+            {
+                StopSearch(ServersShown > 0 ? null : "Nothing found for \"" + (_slowSearchFor ?? _searchPending) + "\".");
+                return;
+            }
+            if (gone.TotalMinutes >= 3)
+            {
+                Log("Search stopped after 3 minutes without an answer.");
+                _pollTimer.Stop();
+                SteamServerList.Stop();
+                _appendWhileLoading = false;
+                StopSearch("Steam didn't answer the search in time - try again later.");
+                return;
+            }
+
+            int n = (int)gone.TotalSeconds;
+            // SEARCH stays SEARCH; dots after it come and go while it works:
+            // "SEARCH." "SEARCH.." "SEARCH..." - the trailing spaces keep the
+            // word from shifting as they change.
+            int dots = 1 + (int)(gone.TotalMilliseconds / _searchClock.Interval) % 3;
+            _searchButton.Text = "SEARCH" + new string('.', dots) + new string(' ', 3 - dots);
+            _status.Text = _slowSearchFor != null
+                ? "Slow search: asking Steam for servers named \"" + _slowSearchFor + "\" - this can take a minute...  "
+                  + (n / 60) + ":" + (n % 60).ToString("00")
+                : "Refreshing the server list for \"" + _searchPending + "\"...";
+        }
+
+        private void StopSearch(string message = null)
+        {
+            _searchClock.Stop();
+            _searchPending = null;
+            _slowSearchFor = null;
+            if (_searchButton != null) _searchButton.Text = "SEARCH";
+            if (message != null) _status.Text = message;
+        }
+
+        /// <summary>Rows on screen that are servers, not notices.</summary>
+        private int ServersShown { get { return _rows.Count(r => !r.IsHeading); } }
+
+        /// <summary>
+        /// The refreshed list is in (the service's, or Steam's). Something by
+        /// that name: re-check those servers now, so one that was offline shows
+        /// as it is. Nothing: when that was the service's list, ask Steam by
+        /// name - the slow search.
+        /// </summary>
+        private void FinishSearch(bool fromService)
+        {
+            if (_slowSearchFor != null)
+            {
+                string asked = _slowSearchFor;
+                int found = ServersShown;
+                Log("Slow search for \"" + asked + "\" done: " + found + " server" + (found == 1 ? "" : "s") + " shown.");
+                StopSearch(found > 0
+                    ? found + " server" + (found == 1 ? "" : "s") + " found for \"" + asked + "\"."
+                    : "Steam has no server named \"" + asked + "\" right now - it may be offline, or check the filters.");
+                return;
+            }
+
+            string text = _searchPending;
+            if (text == null) return;
+
+            if (ServersShown > 0 || !fromService)
+            {
+                Enqueue(_rows.Where(Pingable).Take(40).ToList(), true);
+                StopSearch(ServersShown > 0 ? null : "No server named \"" + text + "\" found.");
+                return;
+            }
+
+            // The service's list has nothing by this name: ask Steam itself.
+            EnsureSteamSession();
+            if (!_steamReady)
+            {
+                StopSearch("No server named \"" + text + "\" in the list, and Steam isn't running to ask it.");
+                return;
+            }
+            Log("\"" + text + "\" isn't in the server list - asking Steam for it by name (slow search).");
+            _searchPending = null;
+            _slowSearchFor = text;
+            _relaySkipOnce = true;
+            StartCommunityQuery();
+            if (!_pollTimer.Enabled) StopSearch("Steam refused the search.");
+            else TickSearchClock();
         }
 
         private static string SteamFilterKey(List<KeyValuePair<string, string>> filters)
@@ -7276,12 +7508,19 @@ namespace ABeautifulPotatoLauncher
             if (!force && row.Endpoint == _modsShownFor && _mods.Items.Count > 0)
                 return;
 
-            ServerRules rules;
+            ServerRules rules, previous = null;
             bool loading;
             DateTime failedAt;
             lock (_modLock)
             {
-                if (force) { _modCache.Remove(row.Endpoint); _modFailedAt.Remove(row.Endpoint); }
+                if (force)
+                {
+                    _modCache.TryGetValue(row.Endpoint, out previous);
+                    _modCache.Remove(row.Endpoint);
+                    _modFailedAt.Remove(row.Endpoint);
+                    // A fresh ask replaces one still out: its answer may predate a restart.
+                    _modLoading.Remove(row.Endpoint);
+                }
                 _modCache.TryGetValue(row.Endpoint, out rules);
                 loading = _modLoading.Contains(row.Endpoint);
                 if (!_modFailedAt.TryGetValue(row.Endpoint, out failedAt)) failedAt = DateTime.MinValue;
@@ -7298,7 +7537,7 @@ namespace ABeautifulPotatoLauncher
             if (!loading && DateTime.UtcNow - failedAt < ModRetryAfter)
             {
                 _modsShownFor = null;
-                _modsHeader.Text = "No answer to the mod query from " + row.Endpoint
+                _modsHeader.Text = "No answer to the mod query from " + StreamerMode.Address(row.Endpoint)
                                  + "  -  refresh the server to try again";
                 _mods.Items.Clear();
                 _desc.Clear();
@@ -7309,26 +7548,37 @@ namespace ABeautifulPotatoLauncher
             {
                 lock (_modLock) { _modLoading.Add(row.Endpoint); }
                 _modsShownFor = null;
-                _modsHeader.Text = "Querying server rules (" + row.Endpoint + ")...";
+                _modsHeader.Text = "Querying server rules (" + StreamerMode.Address(row.Endpoint) + ")...";
                 _mods.Items.Clear();
                 _desc.Clear();
 
                 string steam = force ? FindSteam() : null;
-                ThreadPool.QueueUserWorkItem(_ => FetchRules(row, steam));
+                int ask;
+                lock (_modLock) { ask = ++_modAskGen; _modAskFor[row.Endpoint] = ask; }
+                ThreadPool.QueueUserWorkItem(_ => FetchRules(row, steam, previous, ask));
             }
         }
 
-        /// <param name="rescanFrom">Set on a refresh: the Steam path to re-read
-        /// the local mod folders from, here off the UI thread, so the panel's
-        /// installed / missing marks are as current as the server's list.</param>
-        private void FetchRules(Row row, string rescanFrom = null)
+        /// <summary>Numbers each mod query; _modAskFor holds the newest per server, so only its answer is used.</summary>
+        private int _modAskGen;
+        private readonly Dictionary<string, int> _modAskFor = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        /// <param name="rescanFrom">Set on a click or refresh: the Steam path to
+        /// re-read the local mod folders from - off the UI thread, alongside the
+        /// query - so the installed / missing marks are as current as the
+        /// server's list.</param>
+        /// <param name="previous">The list shown before this re-ask, put back if
+        /// the server does not answer, rather than showing nothing.</param>
+        private void FetchRules(Row row, string rescanFrom = null, ServerRules previous = null, int ask = 0)
         {
             ServerRules rules = null;
+            System.Threading.Tasks.Task scan = null;
             if (rescanFrom != null)
-            {
-                try { ModIndex.Invalidate(); ModIndex.EnsureScanned(rescanFrom); }
-                catch { }
-            }
+                scan = System.Threading.Tasks.Task.Run(() =>
+                {
+                    try { ModIndex.Invalidate(); ModIndex.EnsureScanned(rescanFrom); }
+                    catch { }
+                });
             try
             {
                 // The same port the status check found, not the game-port-plus-
@@ -7343,10 +7593,23 @@ namespace ABeautifulPotatoLauncher
             }
             catch { }
 
+            if (scan != null) { try { scan.Wait(5000); } catch { } }
+
             lock (_modLock)
             {
+                // A newer ask for this server is out (clicked again): its answer wins.
+                int newest;
+                if (ask != 0 && _modAskFor.TryGetValue(row.Endpoint, out newest) && newest != ask) return;
+                _modAskFor.Remove(row.Endpoint);
+
                 _modLoading.Remove(row.Endpoint);
-                if (rules != null)
+                if (rules == null && previous != null)
+                {
+                    // No answer this time: keep showing the list from before.
+                    rules = previous;
+                    _modCache[row.Endpoint] = rules;
+                }
+                else if (rules != null)
                 {
                     _modCache[row.Endpoint] = rules;
                     _modFailedAt.Remove(row.Endpoint);
@@ -7385,7 +7648,7 @@ namespace ABeautifulPotatoLauncher
                 // without a time the player cannot tell whether they are looking
                 // at something current or something from ten minutes ago.
                 _modsHeader.Text = string.Format("Content required by {0} ({1} mods)  -  checked {2:HH:mm:ss}",
-                                                 row.Name, modCount, _modsShownAt);
+                                                 StreamerMode.Name(row.Name, row.Endpoint), modCount, _modsShownAt);
 
                 // Project Zomboid lists mod ids; the workshop item behind each
                 // is filled in from what is on disk and from earlier Workshop
@@ -7403,7 +7666,7 @@ namespace ABeautifulPotatoLauncher
                     if (int.TryParse(rules.Get("modCount"), out stated) && stated > modCount)
                         _modsHeader.Text = string.Format(
                             "Content required by {0} ({1} of {2} mods listed - the server publishes no more)  -  checked {3:HH:mm:ss}",
-                            row.Name, modCount, stated, _modsShownAt);
+                            StreamerMode.Name(row.Name, row.Endpoint), modCount, stated, _modsShownAt);
 
                     _modsHeader.Text += "   -  the game downloads anything missing when you join";
                 }
@@ -7425,7 +7688,7 @@ namespace ABeautifulPotatoLauncher
                     if (_modFind != null && _modFind.Count > 0)
                         _modsHeader.Text = string.Format(
                             "Content required by {0}  -  showing {1} of {2} mods matching your search",
-                            row.Name, shown, modCount);
+                            StreamerMode.Name(row.Name, row.Endpoint), shown, modCount);
                 }
 
                 FillModFindChoices(rules);
@@ -7448,7 +7711,7 @@ namespace ABeautifulPotatoLauncher
                 _desc.Clear();
                 if (!string.IsNullOrEmpty(rules.Description))
                 {
-                    _desc.Text = rules.Description;
+                    _desc.Text = StreamerMode.Scrub(rules.Description, row.Name, row.Endpoint);
                 }
             }
             finally
@@ -9656,7 +9919,7 @@ private static bool IsRunning(string exeName)
                 : "The server has not updated to your version yet. Wait for it to update, or join another server.";
 
             return MessageBox.Show(this,
-                       srv.Name + "\r\n\r\n"
+                       StreamerMode.Name(srv.Name, srv.Endpoint) + "\r\n\r\n"
                        + "This server runs DayZ " + theirs + ", and you have " + ours + ".\r\n"
                        + "DayZ will refuse to connect with a version mismatch.\r\n\r\n"
                        + advice + "\r\n\r\nStart the game anyway?",
@@ -9892,11 +10155,23 @@ private static ServerRules QueryModsChecked(Row row)
             menu.Items.Add(new ToolStripSeparator());
             add("Add to / remove from Favorites", (s, e) => ToggleFavourite(SelectedRow));
             add("Refresh this server", (s, e) => RefreshOneRow(SelectedRow));
+
+            // Streamer mode only: what the server is called on screen instead
+            // of its real name. See StreamerMode.
+            var nickSep = new ToolStripSeparator();
+            menu.Items.Add(nickSep);
+            add("Nickname this server...", (s, e) => NicknameServer(SelectedRow));
+            var nickItem = menu.Items[menu.Items.Count - 1];
+
             menu.Items.Add(new ToolStripSeparator());
             add("Connect", OnConnect);
 
             // Nothing sensible to act on with no row selected.
-            menu.Opening += (s, e) => { if (SelectedRow == null) e.Cancel = true; };
+            menu.Opening += (s, e) =>
+            {
+                if (SelectedRow == null) { e.Cancel = true; return; }
+                nickSep.Visible = nickItem.Visible = StreamerMode.On;
+            };
             return menu;
         }
 
@@ -10132,11 +10407,35 @@ private static ServerRules QueryModsChecked(Row row)
             catch { }
         }
 
+        /// <summary>The log as written, so streamer mode can be switched off and the lines come back.</summary>
+        private readonly List<string> _logLines = new List<string>();
+        private const int LogLinesKept = 3000;
+
+        private static string LogLineShown(string line)
+        {
+            // "[12:34:56] *****" - the times still show the launcher is busy.
+            return StreamerMode.On && line.Length > 11 ? line.Substring(0, 11) + StreamerMode.Mask : line;
+        }
+
+        /// <summary>Redraws the log box from the lines kept - after streamer mode changes.</summary>
+        private void RedrawLog()
+        {
+            if (_log == null) return;
+            var sb = new StringBuilder();
+            foreach (string l in _logLines) sb.Append(LogLineShown(l)).Append(Environment.NewLine);
+            _log.Text = sb.ToString();
+            _log.SelectionStart = _log.TextLength;
+            _log.ScrollToCaret();
+        }
+
         private void Log(string msg)
         {
             if (_log == null) return;
             string time = DateTime.Now.ToString("HH:mm:ss");
-            _log.AppendText("[" + time + "] " + msg + Environment.NewLine);
+            string line = "[" + time + "] " + msg;
+            _logLines.Add(line);
+            if (_logLines.Count > LogLinesKept) _logLines.RemoveRange(0, _logLines.Count - LogLinesKept);
+            _log.AppendText(LogLineShown(line) + Environment.NewLine);
 
             try
             {

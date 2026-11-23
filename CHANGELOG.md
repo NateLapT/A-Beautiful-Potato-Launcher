@@ -16,6 +16,45 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.8] - 2026-11-22
+
+### Added
+
+- **Streamer mode** (Settings, Streamer mode), so viewers can't follow you
+  onto your server. Server addresses and ports are hidden, and the search box
+  and the log show ***** instead of their text. A server's name is replaced
+  by its playstyle and a tag that stays the same for that server ("PvE ·
+  x3 Loot · Traders  #WG3"), never the words that identify it, in the list,
+  the mods panel, its description and the report window. Right-click a
+  server and pick Nickname this server to give it a name only you will
+  recognize. The bottom bar masks addresses and searched-for names too.
+  Switching it off brings everything back, the log included. Ctrl+Shift+S
+  switches it on or off anywhere in the launcher. Switching it off, by
+  shortcut or in Settings, asks first (No is the default), so a stray key or
+  click can't put everything on stream.
+- **Hide the launcher from screen capture** (Settings, Streamer mode). OBS,
+  Discord screen share, screenshots and recordings leave the launcher's
+  windows out, while you still see them on your screen. Sunglasses in the
+  bottom bar show while it's on. Capture cards record the screen itself, so
+  they aren't affected; use nicknames for those.
+
+### Changed
+
+- **Clicking a server asks it for its mods every time.** The mod list from
+  the first click used to be shown again on later clicks, so a server
+  (often a LAN test server) that had restarted with other mods showed its
+  old list, and the installed / missing marks were from the last time your
+  mod folders were read. Now each click asks the server and re-reads your
+  mod folders before the list is drawn. If the server doesn't answer, the
+  list from before stays up.
+- **SEARCH always searches.** Pressing it again for the same name used to
+  only say "Already searched", but people press it because the server they
+  want isn't showing, or shows as offline. Now it refreshes the server list
+  every time and re-checks the servers it finds. When the server list
+  doesn't have that name at all, Steam is asked for it by name. That can
+  take a minute, so while it runs, dots after SEARCH come and go
+  ("SEARCH.", "SEARCH..", "SEARCH...") and the bottom bar says what it's doing.
+
 ## [0.9.7] - 2026-11-20
 
 ### Added
