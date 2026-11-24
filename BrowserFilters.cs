@@ -197,9 +197,16 @@ namespace ABeautifulPotatoLauncher
 
             if (!string.IsNullOrEmpty(Name.Trim()))
             {
-                // Valve's name_match takes shell-style wildcards.
+                // Valve's name_match takes shell-style wildcards, but it keeps
+                // the words in order - so ask for the longest word alone and
+                // let Matches check the rest here, in any order.
                 string pattern = Name.Trim();
-                if (!pattern.Contains("*")) pattern = "*" + pattern + "*";
+                if (!pattern.Contains("*"))
+                {
+                    string longest = "";
+                    foreach (string w in SearchWords(pattern)) if (w.Length > longest.Length) longest = w;
+                    pattern = "*" + longest + "*";
+                }
                 f.Add(new KeyValuePair<string, string>("name_match", pattern));
             }
 
@@ -527,6 +534,46 @@ namespace ABeautifulPotatoLauncher
             return true;
         }
 
+        // -------------------------------------------------- name search --
+        //
+        // Each word is looked for on its own, in any order: "Nightmare
+        // Namalsk" finds "Namalsk Nightmare", and so does "namalsk night".
+        // A name holding the whole search as typed - the words together, in
+        // order - is an EXACT match: it sorts to the top and is highlighted.
+
+        private static readonly char[] Spaces = { ' ', '\t' };
+
+        public static string[] SearchWords(string search)
+        {
+            return (search ?? "").Split(Spaces, System.StringSplitOptions.RemoveEmptyEntries);
+        }
+
+        /// <summary>True when every word of the search is somewhere in the name (or the search is empty).</summary>
+        public static bool NameHasEveryWord(string name, string search)
+        {
+            string[] words = SearchWords(search);
+            if (words.Length == 0) return true;
+            name = name ?? "";
+            foreach (string w in words)
+                if (name.IndexOf(w, System.StringComparison.OrdinalIgnoreCase) < 0) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// The name holds the search exactly as typed (spacing aside). A
+        /// single word only counts when it is the whole name - otherwise every
+        /// server holding it would light up.
+        /// </summary>
+        public static bool NameIsExact(string name, string search)
+        {
+            string[] words = SearchWords(search);
+            if (words.Length == 0 || string.IsNullOrEmpty(name)) return false;
+            string phrase = string.Join(" ", words);
+            string squeezed = string.Join(" ", SearchWords(name));
+            if (words.Length == 1) return squeezed.Equals(phrase, System.StringComparison.OrdinalIgnoreCase);
+            return squeezed.IndexOf(phrase, System.StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         public bool Matches(BrowserServer s)
         {
             if (s == null) return false;
@@ -536,9 +583,7 @@ namespace ABeautifulPotatoLauncher
             if (!PassesPlayerRange(s)) return false;
             if (!PassesGameModes(s)) return false;
 
-            if (!string.IsNullOrEmpty(Name.Trim()) &&
-                s.Name.IndexOf(Name.Trim(), System.StringComparison.OrdinalIgnoreCase) < 0)
-                return false;
+            if (!NameHasEveryWord(s.Name, Name)) return false;
 
             if (!string.IsNullOrEmpty(Address.Trim()) &&
                 s.Endpoint.IndexOf(Address.Trim(), System.StringComparison.OrdinalIgnoreCase) < 0)

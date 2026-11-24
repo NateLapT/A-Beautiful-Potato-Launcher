@@ -16,6 +16,18 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.9.9] - 2026-11-24
+
+### Changed
+
+- **The search box looks for each word on its own,** in any order: "Nightmare
+  Namalsk" finds "Namalsk Nightmare", and a search with the words mixed up
+  still finds the server as long as each word is in its name. A server whose
+  name holds the search exactly as typed sorts to the top of the list with a
+  gold-tinted row and its name in bold. Asking Steam by name (the slow
+  search) uses the longest word and checks the rest in the launcher, since
+  Steam keeps words in order.
+
 ## [0.9.8] - 2026-11-22
 
 ### Added

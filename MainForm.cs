@@ -308,6 +308,9 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public bool Favourite;
 
+        /// <summary>The name holds the search exactly as typed - sorted first and highlighted. See BrowserFilters.NameIsExact.</summary>
+        public bool Exact;
+
         /// <summary>
         /// Tri-state on purpose: a server in the master list has not been asked
         /// anything yet, which is not the same as being offline.
@@ -3096,6 +3099,10 @@ namespace ABeautifulPotatoLauncher
                 int unconfigured = (Unconfigured(x) ? 1 : 0) - (Unconfigured(y) ? 1 : 0);
                 if (unconfigured != 0) return unconfigured;
 
+                // The server named exactly as searched for comes first.
+                int exact = (y.Exact ? 1 : 0) - (x.Exact ? 1 : 0);
+                if (exact != 0) return exact;
+
                 // FAVOURITES ARE ALWAYS AT THE TOP - offline or not.
                 //
                 // A favourite is a server the player has chosen to watch, and
@@ -3231,6 +3238,11 @@ namespace ABeautifulPotatoLauncher
             new Dictionary<int, KeyValuePair<Row, ListViewItem>>();
         private bool _paintItemsDropQueued;
 
+        private static readonly Color ExactBand = Color.FromArgb(58, 50, 26);
+        private static readonly Color ExactGold = Color.FromArgb(255, 210, 110);
+        private Font _exactFont;
+        private Font ExactFont { get { return _exactFont ?? (_exactFont = new Font(_list.Font, FontStyle.Bold)); } }
+
         private ListViewItem BuildItem(Row row)
         {
             return BuildItem(row, RowBandA);
@@ -3284,6 +3296,15 @@ namespace ABeautifulPotatoLauncher
             it.SubItems[ColStatus].ForeColor =
                 !row.Online.HasValue ? Color.FromArgb(120, 120, 128)
                 : row.Online.Value ? StatusOn : StatusOff;
+
+            // The server named exactly as searched for: a gold-tinted row with
+            // its name in bold gold, so it stands out from the looser matches.
+            if (row.Exact)
+            {
+                band = ExactBand;
+                it.SubItems[ColName].ForeColor = ExactGold;
+                it.SubItems[ColName].Font = ExactFont;
+            }
 
             it.BackColor = band;
             for (int i = 0; i < it.SubItems.Count; i++) it.SubItems[i].BackColor = band;
@@ -4740,7 +4761,8 @@ namespace ABeautifulPotatoLauncher
                     QueryPort = srv.QueryPort,
                     Players = srv.Players, MaxPlayers = srv.MaxPlayers, Ping = srv.Ping,
                     AppId = srv.AppId, Tags = srv.Tags, Password = srv.Password,
-                    Favourite = _favourites.Contains(srv.Endpoint)
+                    Favourite = _favourites.Contains(srv.Endpoint),
+                    Exact = BrowserFilters.NameIsExact(srv.Name, _filters.Name)
                 };
                 if (srv.Offline) row.Online = false;
 
