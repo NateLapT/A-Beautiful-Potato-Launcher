@@ -16,6 +16,43 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.91] - 2026-11-24
+
+### Added
+
+- **Copy Mod Info** when you right-click a mod in the mods panel: the mod's
+  name, Workshop ID and Workshop link (or that it's a local mod), and the
+  status shown, ready to paste. Select several mods to copy them all at
+  once. A right-click no longer counts as a click on Repair, Remove or the
+  mod's name.
+- **The query port is shown** above the mods panel, after "checked …": the
+  port the server's mod list was just read from. Hidden in streamer mode.
+
+### Fixed
+
+- **Favorites on a non-standard query port showed as offline.** The
+  Favorites tab only knew each server's game address, so it guessed the
+  query port as game port + 1. It now uses the query port the server list
+  reports, the same as the Community tab. A server whose remembered query
+  port stops answering is also asked on the one the list reports.
+
+### Changed
+
+- **Search / validate query port starts from the port the server is
+  expected on:** one that answered before, else the one the server list
+  reports, else game port + 1. Before, a server with no reported port
+  always started at 27015.
+- **Home-network servers show on the LAN tab only.** Servers at an address
+  that can't be reached over the internet no longer appear under Community,
+  Official, Recent, Friends or Favorites, where they were unreachable entries
+  advertised by other people's servers or duplicates of your LAN rows. That
+  covers private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), this
+  PC (all of 127.0.0.0/8, ::1 and localhost), link-local (169.254.0.0/16,
+  fe80::/10), carrier-grade NAT and Tailscale (100.64.0.0/10), 0.0.0.0/8,
+  IPv6 unique local (fc00::/7), and IPv4 addresses written in IPv6 form
+  (::ffff:192.168.1.5). A favorite at such an address keeps
+  its star and shows on the LAN tab while it's running.
+
 ## [0.9.9] - 2026-11-24
 
 ### Changed

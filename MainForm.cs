@@ -107,6 +107,28 @@ namespace ABeautifulPotatoLauncher
             }
         }
 
+        /// <summary>
+        /// The version the update check compares against: the release a beta
+        /// follows (VersionBase - 0.9.9 for Beta 0.9.91), else Version. See
+        /// BetaBuild in the project file.
+        /// </summary>
+        internal static string UpdateBaseVersion
+        {
+            get
+            {
+                if (!IsBeta) return Version;
+                try
+                {
+                    foreach (System.Reflection.AssemblyMetadataAttribute a in
+                             System.Reflection.Assembly.GetExecutingAssembly()
+                                   .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                        if (a.Key == "VersionBase" && !string.IsNullOrEmpty(a.Value)) return a.Value;
+                }
+                catch { }
+                return Version;
+            }
+        }
+
         /// <summary>"v1.0.0 · 2026-09-21 05:10", local time - the footer text. "Beta v1.0.0 · ..." on a test build.</summary>
         internal static string VersionLabel
         {
@@ -1712,6 +1734,7 @@ namespace ABeautifulPotatoLauncher
             _mods.Columns.Add("", 60, HorizontalAlignment.Center);
             _mods.Columns.Add("", 44, HorizontalAlignment.Center);
             _mods.MouseClick += OnModClick;
+            _mods.ContextMenuStrip = BuildModMenu();
             ListViewTweaks.Smooth(_mods);
 
             // Info, Repair, Sub and Remove are all cells that do something when
@@ -2800,9 +2823,20 @@ namespace ABeautifulPotatoLauncher
         private void RefreshMine()
         {
             var rows = _favourites.Select(MakeEntryFromEndpoint)
-                                  .Where(x => x != null)
+                                  .Where(x => x != null && !IsPrivateAddress(x.Host))     // LAN tab only
                                   .Select(x => new Row { Name = x.Name, Host = x.Host, Port = x.Port })
                                   .ToList();
+
+            // The query port the server lists report, as the Community tab
+            // uses. Without it a favourite was asked on game port + 1, and a
+            // server whose query port is anything else (27016, 27018, ...)
+            // sat here as OFFLINE while it was up.
+            var listed = ListedQueryPorts(rows.Select(r => r.Endpoint));
+            foreach (var r in rows)
+            {
+                int q;
+                if (listed.TryGetValue(r.Endpoint, out q)) r.QueryPort = q;
+            }
 
             foreach (var r in rows)
             {
@@ -4722,11 +4756,15 @@ namespace ABeautifulPotatoLauncher
             bool addressSearch = !string.IsNullOrEmpty((_filters.Address ?? "").Trim());
             Flagged.Clear();
 
+            bool lanTab = _tab == Tab.Lan;
             var rows = new List<Row>(cache.Count);
             foreach (var srv in cache)
             {
                 // Other games' servers in Zomboid's list - see IsZomboidServer.
                 if (Games.IsZomboid && !Zomboid.IsZomboidServer(srv)) continue;
+
+                // Home-network and this-PC addresses show on the LAN tab only.
+                if (!lanTab && IsPrivateAddress(srv.Host)) continue;
 
                 // Never renamed from "My PZ Server" - half the list, and the name
                 // says nothing. Kept when it is a favourite or being searched for
@@ -5239,10 +5277,56 @@ namespace ABeautifulPotatoLauncher
         {
             // A port found by trying earlier beats the game-port-plus-one guess,
             // and a stale one from a list: it was only kept because it answered.
+            int listed = row.QueryPort;
             int learnt = LearntQueryPort(row.Endpoint);
             if (learnt > 0) row.QueryPort = learnt;
-            try { return A2S.GetInfoAt(row.Host, row.EffectiveQueryPort, 1200); }
-            catch { return new ServerInfo { Error = "query failed" }; }
+            ServerInfo info;
+            try { info = A2S.GetInfoAt(row.Host, row.EffectiveQueryPort, 1200); }
+            catch { info = new ServerInfo { Error = "query failed" }; }
+
+            // The remembered port went quiet but the list reports another (the
+            // server moved its query port): ask there, and remember it if it
+            // answers for this game port.
+            if ((info == null || !info.Online) && learnt > 0 && listed > 0 && listed != learnt && !_closing)
+            {
+                try
+                {
+                    var other = A2S.GetInfoAt(row.Host, listed, 1200);
+                    if (other != null && other.Online && (other.GamePort <= 0 || other.GamePort == row.Port))
+                    {
+                        row.QueryPort = listed;
+                        LearnQueryPort(row.Endpoint, listed);
+                        return other;
+                    }
+                }
+                catch { }
+            }
+            return info ?? new ServerInfo { Error = "query failed" };
+        }
+
+        /// <summary>
+        /// The query ports the saved server lists (Community, Official, Recent,
+        /// LAN) report for these addresses - what the Community tab asks on.
+        /// </summary>
+        private Dictionary<string, int> ListedQueryPorts(IEnumerable<string> endpoints)
+        {
+            var want = new HashSet<string>(endpoints, StringComparer.OrdinalIgnoreCase);
+            var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (want.Count == 0) return found;
+            foreach (var tab in new[] { Tab.Community, Tab.Official, Tab.Recent, Tab.Lan })
+            {
+                List<BrowserServer> list;
+                try { list = SavedList(tab); }
+                catch { continue; }
+                foreach (var s in list)
+                {
+                    if (s.QueryPort <= 0 || s.QueryPort >= 65535) continue;
+                    string ep = s.Endpoint;
+                    if (want.Contains(ep) && !found.ContainsKey(ep)) found[ep] = s.QueryPort;
+                }
+                if (found.Count == want.Count) break;
+            }
+            return found;
         }
 
         // ------------------------------------------- query ports, learnt --
@@ -5263,13 +5347,53 @@ namespace ABeautifulPotatoLauncher
         private static bool IsLocalNetwork(string host)
         {
             if (LocalServers.IsThisMachine(host)) return true;
+            return IsPrivateAddress(host);
+        }
+
+        /// <summary>
+        /// A non-routable address, reachable only from inside a network (or
+        /// this PC) - "LAN only". Such servers belong on the LAN tab only: in
+        /// the Community or Official list (a server advertising its inside
+        /// address), in Recent or Favorites they are either unreachable or
+        /// duplicates of the LAN tab's rows.
+        ///
+        ///   IPv4  10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16   private
+        ///         127.0.0.0/8                                 loopback (the whole block)
+        ///         169.254.0.0/16                              link-local
+        ///         100.64.0.0/10                               carrier-grade NAT (also Tailscale)
+        ///         0.0.0.0/8                                   "this network"
+        ///   IPv6  ::1/128 loopback, fc00::/7 unique local, fe80::/10 link-local,
+        ///         and any IPv4-mapped address (::ffff:a.b.c.d) of the above
+        ///   name  localhost
+        /// </summary>
+        internal static bool IsPrivateAddress(string host)
+        {
+            string h = (host ?? "").Trim();
+            if (h.StartsWith("[") && h.EndsWith("]")) h = h.Substring(1, h.Length - 2);   // [::1]
+            int zone = h.IndexOf('%');                                                  // fe80::1%12
+            if (zone > 0) h = h.Substring(0, zone);
+            if (string.Equals(h, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
+
             System.Net.IPAddress ip;
-            if (!System.Net.IPAddress.TryParse(host ?? "", out ip)) return false;
+            if (!System.Net.IPAddress.TryParse(h, out ip)) return false;
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+
             byte[] b = ip.GetAddressBytes();
-            if (b.Length != 4) return false;
-            return b[0] == 10
-                || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
-                || (b[0] == 192 && b[1] == 168);
+            if (b.Length == 4)
+                return b[0] == 10
+                    || b[0] == 127
+                    || b[0] == 0
+                    || (b[0] == 172 && (b[1] & 0xF0) == 16)          // 172.16.0.0/12
+                    || (b[0] == 192 && b[1] == 168)
+                    || (b[0] == 169 && b[1] == 254)
+                    || (b[0] == 100 && (b[1] & 0xC0) == 64);         // 100.64.0.0/10
+
+            if (b.Length == 16)
+                return System.Net.IPAddress.IsLoopback(ip)              // ::1
+                    || (b[0] & 0xFE) == 0xFC                            // fc00::/7
+                    || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80);          // fe80::/10
+            return false;
         }
 
         private int LearntQueryPort(string endpoint)
@@ -7713,6 +7837,11 @@ namespace ABeautifulPotatoLauncher
                             StreamerMode.Name(row.Name, row.Endpoint), shown, modCount);
                 }
 
+                // The query port this list was just read from - the one that
+                // answered. Hidden in streamer mode, like the address.
+                if (!StreamerMode.On)
+                    _modsHeader.Text += "      Query port " + row.EffectiveQueryPort;
+
                 FillModFindChoices(rules);
 
                 // Which of these have other versions on this PC - see ModNameText.
@@ -8594,6 +8723,10 @@ namespace ABeautifulPotatoLauncher
 
         private void OnModClick(object sender, MouseEventArgs e)
         {
+            // Right-click opens the Copy Mod Info menu; it must not also act
+            // as a click on Repair, Remove or the name's drop-down.
+            if (e.Button != MouseButtons.Left) return;
+
             var hit = _mods.HitTest(e.Location);
             if (hit.Item == null || hit.SubItem == null) return;
 
@@ -10203,8 +10336,13 @@ private static ServerRules QueryModsChecked(Row row)
         {
             if (row == null || _queryPortSearchBusy) return;
 
+            // Start from the port the server is assumed to answer on: one that
+            // answered before, else the one the lists report, else game port + 1.
+            int learnt = LearntQueryPort(row.Endpoint);
+            int assumed = learnt > 0 ? learnt : row.EffectiveQueryPort;
+
             int firstPort, lastPort;
-            if (!QueryPortSearchDialog.Show(this, row.QueryPort, out firstPort, out lastPort)) return;
+            if (!QueryPortSearchDialog.Show(this, assumed, out firstPort, out lastPort)) return;
 
             _queryPortSearchBusy = true;
             _status.Text = "Searching query ports for " + row.Endpoint + "...";
@@ -10274,6 +10412,78 @@ private static ServerRules QueryModsChecked(Row row)
         }
 
         /// <summary>Puts the selected server on the clipboard.</summary>
+        /// <summary>The mods panel's right-click menu. Colours set as for the server menu - see BuildServerMenu.</summary>
+        private ContextMenuStrip BuildModMenu()
+        {
+            var menu = new ContextMenuStrip
+            {
+                BackColor = Panel2,
+                ForeColor = Color.Gainsboro,
+                ShowImageMargin = false,
+                Renderer = new ToolStripProfessionalRenderer(new DarkMenu())
+            };
+            var copy = new ToolStripMenuItem("Copy Mod Info") { ForeColor = Color.Gainsboro, BackColor = Panel2 };
+            copy.Click += (s, e) => CopyModInfo();
+            menu.Items.Add(copy);
+
+            menu.Opening += (s, e) =>
+            {
+                int n = SelectedMods().Count;
+                if (n == 0) { e.Cancel = true; return; }
+                copy.Text = n == 1 ? "Copy Mod Info" : "Copy Mod Info (" + n + " mods)";
+            };
+            return menu;
+        }
+
+        private List<KeyValuePair<Mod, string>> SelectedMods()
+        {
+            var picked = new List<KeyValuePair<Mod, string>>();
+            foreach (ListViewItem it in _mods.SelectedItems)
+            {
+                var m = it.Tag as Mod;
+                if (m != null) picked.Add(new KeyValuePair<Mod, string>(m, it.SubItems[MColStatus].Text));
+            }
+            return picked;
+        }
+
+        /// <summary>
+        /// The selected mods, ready to paste into Discord or a bug report:
+        /// name, workshop id and link (or "local"), and the status shown.
+        /// </summary>
+        private void CopyModInfo()
+        {
+            var picked = SelectedMods();
+            if (picked.Count == 0) return;
+
+            var sb = new StringBuilder();
+            foreach (var p in picked)
+            {
+                var m = p.Key;
+                if (sb.Length > 0) sb.AppendLine();
+                sb.AppendLine(m.IsLocal ? "@" + m.BareName : m.Name);
+                if (m.IsLocal)
+                    sb.AppendLine("Local mod (the server loads it from its own disk - not on the Workshop)");
+                else
+                {
+                    sb.AppendLine("Workshop ID: " + m.WorkshopId);
+                    sb.AppendLine("https://steamcommunity.com/sharedfiles/filedetails/?id=" + m.WorkshopId);
+                }
+                if (!string.IsNullOrWhiteSpace(p.Value)) sb.AppendLine("Status: " + p.Value);
+            }
+
+            try
+            {
+                Clipboard.SetText(sb.ToString().TrimEnd());
+                _status.Text = picked.Count == 1
+                    ? "Copied mod info for " + (picked[0].Key.IsLocal ? "@" + picked[0].Key.BareName : picked[0].Key.Name) + "."
+                    : "Copied mod info for " + picked.Count + " mods.";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "Could not copy: " + ex.Message;
+            }
+        }
+
         private void CopyServerInfo(bool addressOnly)
         {
             var row = SelectedRow;
@@ -10297,7 +10507,7 @@ private static ServerRules QueryModsChecked(Row row)
                 if (text.Length > 0) Clipboard.SetText(text);
                 _status.Text = addressOnly
                     ? "Copied " + row.Endpoint + " to the clipboard."
-                    : "Copied server info for " + row.Name + " to the clipboard.";
+                    : "Copied server info for " + StreamerMode.Name(row.Name, row.Endpoint) + " to the clipboard.";
             }
             catch (Exception ex)
             {

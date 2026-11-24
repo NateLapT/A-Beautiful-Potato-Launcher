@@ -89,7 +89,9 @@ namespace ABeautifulPotatoLauncher
                         json = wc.DownloadString(ReleasesApi);
 
                     return Parse(json)
-                        .Where(r => r.ExeUrl.Length > 0 && IsNewer(r.Version, Program.Version))
+                        // A beta (0.9.91) is compared by the release it follows
+                        // (0.9.9): read part by part, 91 would beat a later 0.9.10.
+                        .Where(r => r.ExeUrl.Length > 0 && IsNewer(r.Version, Program.UpdateBaseVersion))
                         .OrderByDescending(r => r.Version, VersionComparer.Instance)
                         .ToList();
                 }

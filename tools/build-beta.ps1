@@ -2,7 +2,7 @@
     build-beta.ps1 - build the next beta of the launcher.
 
     Every beta that gets installed has its own number: after the v0.9.7 release
-    they are 0.9.7.1, 0.9.7.2, ... This bumps <BetaBuild> in the project file,
+    they are 0.9.71, 0.9.72, ... (the number is appended, not another decimal place) This bumps <BetaBuild> in the project file,
     then builds to bin\Release\net48. A plain compile check (dotnet build -o
     somewhere else) does not bump anything.
 
@@ -30,7 +30,7 @@ if (-not $NoBump) {
     $text = $text.Substring(0, $m.Index) + "<BetaBuild>$num</BetaBuild>" + $text.Substring($m.Index + $m.Length)
     [IO.File]::WriteAllText($proj, $text)
 }
-Write-Host "building Beta v$base.$num"
+Write-Host "building Beta v$base$num"
 
 dotnet build $proj -c Release
 if ($LASTEXITCODE -ne 0) { throw "build failed (exit $LASTEXITCODE)" }
