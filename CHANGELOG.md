@@ -16,6 +16,31 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.93] - 2026-11-25
+
+### Optimization
+
+- **The launcher opens about twice as fast.** Measured on a list of 22,000
+  servers, the window now appears in under 2 seconds, down from about 3.5.
+  - Sorting the server list is over ten times faster. Each comparison
+    re-checked whether the server still had a host's default name; that
+    is now worked out once per server.
+  - Each server's answer (ping, players, name) is taken in about 0.1 ms,
+    down from about 6 ms, which also makes every refresh smoother. Each
+    one used to search the whole saved list for the server it belonged
+    to, and redo the status line.
+  - Connecting to Steam happens just after the window opens instead of
+    holding it back for a second.
+
+### Fixed
+
+- **White panels when the launcher opens.** Buttons, boxes and the bottom
+  bar showed as plain white for a few seconds after start. Server answers
+  were handed to the window one at a time, so many at once that Windows
+  had no chance to draw anything else. They are now handed over in
+  batches, and the window stays hidden until everything in it has been
+  drawn once.
+
 ## [0.92] - 2026-11-25
 
 ### Fixed

@@ -37,8 +37,22 @@ namespace ABeautifulPotatoLauncher
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         private const int WM_SETREDRAW = 0x000B;
 
+        [DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr region, uint flags);
+        private const uint RDW_INVALIDATE = 0x0001, RDW_ERASE = 0x0004, RDW_ALLCHILDREN = 0x0080, RDW_UPDATENOW = 0x0100;
+
+        private readonly System.Diagnostics.Stopwatch _startClock = System.Diagnostics.Stopwatch.StartNew();
+        private bool _revealed;
+
         public LauncherWindow()
         {
+            // NO WHITE FLASH ON START. Windows shows a new window at once and
+            // fills every part not yet drawn with white; the launcher's panels
+            // each draw a moment later, so it opened as a "flashbang" of white
+            // panels on a dark app. The window starts fully transparent, every
+            // panel draws once, and only then is it shown - see Reveal.
+            Opacity = 0;
+
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(1180, 800);
             MinimumSize = new Size(1020, 680);
@@ -48,7 +62,38 @@ namespace ABeautifulPotatoLauncher
             RestoreWindow();
             ResizeEnd += (s, e) => RememberWindow();
 
-            Attach(new MainForm());
+            Program.Trace("LauncherWindow: ctor");
+            var content = new MainForm();
+            Program.Trace("LauncherWindow: MainForm built");
+            Attach(content);
+            Program.Trace("LauncherWindow: attached");
+            HandleCreated += (s, e) => Program.Trace("LauncherWindow: handle created");
+            Load += (s, e) => Program.Trace("LauncherWindow: Load");
+            Program.LogLine("Start-up: window built in " + _startClock.ElapsedMilliseconds + " ms.");
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Program.LogLine("Start-up: Shown at " + _startClock.ElapsedMilliseconds + " ms.");
+            // After whatever is already queued (the first paints), not inside
+            // Shown itself. The timer is the safety net: the window is shown
+            // within a second and a half whatever happens.
+            BeginInvoke((Action)Reveal);
+            var safety = new Timer { Interval = 1500 };
+            safety.Tick += (s, a) => { safety.Stop(); safety.Dispose(); Reveal(); };
+            safety.Start();
+        }
+
+        /// <summary>Paints every panel now, then makes the window visible. Once.</summary>
+        private void Reveal()
+        {
+            if (_revealed || IsDisposed) return;
+            _revealed = true;
+            try { RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW); }
+            catch { }
+            Opacity = 1;
+            Program.LogLine("Start-up: window shown after " + _startClock.ElapsedMilliseconds + " ms.");
         }
 
         /// <summary>Puts a launcher in the window and shows it.</summary>

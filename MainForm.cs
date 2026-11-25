@@ -227,6 +227,7 @@ namespace ABeautifulPotatoLauncher
 
             // One window for the whole run. Choosing the other game swaps the
             // launcher inside it - see LauncherWindow.
+            Trace("Main: before LauncherWindow");
             Application.Run(new LauncherWindow());
 
             // Every window is closed and every launcher has saved and stopped
@@ -234,6 +235,15 @@ namespace ABeautifulPotatoLauncher
             // see SteamWorkshop.Shutdown for the crash this ends.
             SteamWorkshop.Shutdown();
             LogLine("Launcher closed.");
+        }
+
+        private static readonly bool Tracing = Environment.GetEnvironmentVariable("ABPL_TRACE") == "1";
+        private static readonly Stopwatch TraceClock = Stopwatch.StartNew();
+
+        /// <summary>Start-up timing mark, only with ABPL_TRACE=1 set.</summary>
+        internal static void Trace(string what)
+        {
+            if (Tracing) LogLine("TRACE " + TraceClock.ElapsedMilliseconds + " ms  " + what);
         }
 
         /// <summary>A line in the log file, for the moments no window is open to show it.</summary>
@@ -1055,13 +1065,25 @@ namespace ABeautifulPotatoLauncher
             // The PZ mod scan reads the workshop folders of every library.
             Zomboid.SteamPathForScan = FindSteam();
 
+            Program.Trace("MainForm: settings read");
             BuildUi();
+            Program.Trace("MainForm: BuildUi done");
+            HandleCreated += (s, e) => Program.Trace("MainForm: handle created");
+            Load += (s, e) => Program.Trace("MainForm: Load");
 
             // Once the window is up, never before: a slow or absent network
             // must not hold up the launcher opening. Then every 30 minutes, so
             // a launcher left open all day hears of a release the same hour.
             Load += (s, e) => CheckForUpdates();     // hosted forms get Load, not Shown
-            Load += (s, e) => EnsureSteamSession();
+            // Opening the Steam session takes about a second on the UI thread,
+            // and in Load that second came before the window could draw. A timer
+            // only fires once the window has painted, so the window shows first.
+            Load += (s, e) =>
+            {
+                var later = new System.Windows.Forms.Timer { Interval = 250 };
+                later.Tick += (s2, e2) => { later.Stop(); later.Dispose(); EnsureSteamSession(); };
+                later.Start();
+            };
             Load += (s, e) => ShowSavedPlayersOnline();
             _updateTimer.Interval = (int)TimeSpan.FromMinutes(30).TotalMilliseconds;
             _updateTimer.Tick += (s, e) => CheckForUpdates();
@@ -1244,6 +1266,7 @@ namespace ABeautifulPotatoLauncher
             };
 
             RefreshCurrent();
+            Program.Trace("MainForm: RefreshCurrent done");
         }
 
         // ------------------------------------------------------------- ui --
@@ -3130,12 +3153,19 @@ namespace ABeautifulPotatoLauncher
                     break;
             }
 
+            // Worked out once per row, not inside the comparison: a sort of
+            // 16,000 rows compares about 230,000 times, and Unconfigured's
+            // text searches there took 0.66 s of every start-up.
+            var unconfiguredRows = new HashSet<Row>();
+            foreach (var r in rows)
+                if (Unconfigured(r)) unconfiguredRows.Add(r);
+
             rows.Sort((x, y) =>
             {
                 // Servers still carrying the stock name have never been
                 // configured - nobody is looking for one, so they go last
                 // whatever else the sort says.
-                int unconfigured = (Unconfigured(x) ? 1 : 0) - (Unconfigured(y) ? 1 : 0);
+                int unconfigured = (unconfiguredRows.Contains(x) ? 1 : 0) - (unconfiguredRows.Contains(y) ? 1 : 0);
                 if (unconfigured != 0) return unconfigured;
 
                 // The server named exactly as searched for comes first.
@@ -3773,6 +3803,7 @@ namespace ABeautifulPotatoLauncher
             _caches[key] = mine;
             _cacheTimes[key] = DateTime.Now;
             _indexByEndpoint.Clear();
+            _indexMapList = null;
             ServerStore.SaveList(key, mine, _lastSeen);
 
             Log("Server list updated: " + mine.Count.ToString("N0") + " servers (as of "
@@ -4732,6 +4763,7 @@ namespace ABeautifulPotatoLauncher
                 + " known maps. Searching now filters this list instantly.");
 
             _indexByEndpoint.Clear();
+            _indexMapList = null;
             _indexDirty = true;
             ServerStore.SaveList(CacheKey, combined, _lastSeen);
             _indexDirty = false;
@@ -5561,11 +5593,34 @@ namespace ABeautifulPotatoLauncher
 
                 lock (_pingLock) { _pingBusy.Remove(row.Endpoint); }
 
-                var captured = row;
-                var result = info;
-                try { BeginInvoke((Action)(() => ApplyLive(captured, result))); }
-                catch (InvalidOperationException) { return; }
+                // ONE POST FOR MANY ANSWERS. A post per answer from sixteen
+                // workers kept the UI thread's queue full at start-up, and
+                // Windows only paints when that queue is empty - so plain
+                // controls (the rail's buttons, the bottom bar) stayed white
+                // for seconds. Answers now wait in a queue and one post applies
+                // all of them, leaving room to paint between batches.
+                _liveResults.Enqueue(new KeyValuePair<Row, ServerInfo>(row, info));
+                if (Interlocked.Exchange(ref _liveDrainPosted, 1) == 0)
+                {
+                    try { BeginInvoke((Action)DrainLiveResults); }
+                    catch (InvalidOperationException) { return; }
+                }
             }
+        }
+
+        private readonly System.Collections.Concurrent.ConcurrentQueue<KeyValuePair<Row, ServerInfo>> _liveResults
+            = new System.Collections.Concurrent.ConcurrentQueue<KeyValuePair<Row, ServerInfo>>();
+        private int _liveDrainPosted;
+
+        private void DrainLiveResults()
+        {
+            // Cleared first: an answer arriving during the drain posts again
+            // rather than waiting for one that never comes.
+            Interlocked.Exchange(ref _liveDrainPosted, 0);
+            KeyValuePair<Row, ServerInfo> next;
+            int n = 0;
+            while (_liveResults.TryDequeue(out next)) { ApplyLive(next.Key, next.Value); n++; }
+            if (n > 0 && IsSteamTab(_tab)) UpdateStatus(null);
         }
 
         /// <summary>
@@ -5841,8 +5896,7 @@ namespace ABeautifulPotatoLauncher
             // a server renaming itself, filling up or going quiet must change
             // the line the player is reading, never move it out from under them.
             Redraw(row.Endpoint);
-
-            if (IsSteamTab(_tab)) UpdateStatus(null);
+            // The status line is updated once per batch - see DrainLiveResults.
 
             // Offline servers DO sort to the bottom - but only once the sweep
             // has gone quiet.
@@ -5871,10 +5925,23 @@ namespace ABeautifulPotatoLauncher
             BrowserServer entry;
             if (!_indexByEndpoint.TryGetValue(endpoint, out entry))
             {
-                entry = _cache.FirstOrDefault(
-                    c => string.Equals(c.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase));
-                if (entry == null) return;
-                _indexByEndpoint[endpoint] = entry;
+                // Filled from the whole list in one pass, not searched per
+                // answer: a search of 22,000 entries for every reply cost about
+                // 6 ms each and held up the window at start-up. Rebuilt when
+                // the list is a different one or has grown since.
+                var cache = _cache;
+                if (!ReferenceEquals(_indexMapList, cache) || _indexMapCount != cache.Count)
+                {
+                    _indexByEndpoint.Clear();
+                    foreach (var c in cache)
+                    {
+                        string ep = c.Endpoint;
+                        if (!_indexByEndpoint.ContainsKey(ep)) _indexByEndpoint[ep] = c;
+                    }
+                    _indexMapList = cache;
+                    _indexMapCount = cache.Count;
+                }
+                if (!_indexByEndpoint.TryGetValue(endpoint, out entry)) return;
             }
 
             bool changed = false;
@@ -5918,6 +5985,8 @@ namespace ABeautifulPotatoLauncher
         /// <summary>Endpoint to its entry in the index, so a reply is not a linear scan.</summary>
         private readonly Dictionary<string, BrowserServer> _indexByEndpoint =
             new Dictionary<string, BrowserServer>(StringComparer.OrdinalIgnoreCase);
+        private List<BrowserServer> _indexMapList;
+        private int _indexMapCount = -1;
 
         private bool _indexDirty;
 

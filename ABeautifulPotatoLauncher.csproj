@@ -17,7 +17,7 @@
          [Unreleased] section of CHANGELOG.md under the same number. -->
     <!-- Written and compared like a decimal: 0.55 comes BEFORE 0.6. The
          GitHub release tag must match, with a v: v0.55. See Updater. -->
-    <VersionBase>0.92</VersionBase>
+    <VersionBase>0.93</VersionBase>
 
     <!-- An unpublished build: the footer and the log say "Beta v0.9.91", so a
          test copy is never mistaken for the release. Set to false when cutting
