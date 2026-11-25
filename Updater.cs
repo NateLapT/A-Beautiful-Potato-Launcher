@@ -234,19 +234,13 @@ namespace ABeautifulPotatoLauncher
                 throw new Exception("The download is " + fi.Length + " bytes, but GitHub lists "
                                     + r.ExeSize + ". Try again.");
 
-            string got;
-            try
-            {
-                var name = AssemblyName.GetAssemblyName(target);
-                if (!string.Equals(name.Name, "ABeautifulPotatoLauncher", StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("it is " + name.Name);
-                got = InformationalVersionOf(target) ?? name.Version.ToString();
-            }
-            catch (Exception ex)
+            var name = await ReadAssemblyNameAsync(target);
+            if (!string.Equals(name.Name, "ABeautifulPotatoLauncher", StringComparison.OrdinalIgnoreCase))
             {
                 try { File.Delete(target); } catch { }
-                throw new Exception("The downloaded file is not the launcher (" + ex.Message + ").");
+                throw new Exception("The downloaded file is not the launcher (it is " + name.Name + ").");
             }
+            string got = InformationalVersionOf(target) ?? name.Version.ToString();
 
             int plus = got.IndexOf('+');
             if (plus > 0) got = got.Substring(0, plus);
@@ -276,6 +270,43 @@ namespace ABeautifulPotatoLauncher
                 throw Blocked("Your antivirus blocked the new version after it downloaded.");
             }
             return target;
+        }
+
+        /// <summary>
+        /// Reads the download's assembly name. An antivirus scans a new exe the
+        /// moment it is written and holds it open while it does - read too soon,
+        /// that looks like "could not load file or assembly ... being used by
+        /// another process" (seen on a player's PC updating to v0.91). So a
+        /// locked file is waited for, a vanished one is the antivirus, and only
+        /// a file that opens but is not a .NET assembly is "not the launcher".
+        /// </summary>
+        private static async Task<AssemblyName> ReadAssemblyNameAsync(string target)
+        {
+            Exception last = null;
+            for (int attempt = 0; attempt < 20; attempt++)          // up to ~20 s
+            {
+                if (attempt > 0) await Task.Delay(1000);
+                if (!File.Exists(target))
+                {
+                    Log("Update: the download vanished while it was checked.");
+                    throw Blocked("Your antivirus removed the new version as it downloaded.");
+                }
+                try { return AssemblyName.GetAssemblyName(target); }
+                catch (BadImageFormatException ex)
+                {
+                    Log("Update: the download is not a .NET assembly - " + ex.Message);
+                    try { File.Delete(target); } catch { }
+                    throw new Exception("The downloaded file is not the launcher. Try again.");
+                }
+                catch (Exception ex) when (ex is FileLoadException || ex is FileNotFoundException
+                                           || ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    last = ex;      // locked by a scanner (or briefly gone) - wait and look again
+                }
+            }
+            Log("Update: the download stayed locked - " + last.GetType().Name + ": " + last.Message);
+            try { File.Delete(target); } catch { }
+            throw Blocked("Your antivirus kept the new version locked after it downloaded.");
         }
 
         private static string DownloadPath

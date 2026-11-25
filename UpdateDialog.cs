@@ -77,9 +77,11 @@ namespace ABeautifulPotatoLauncher
                     Bounds = new Rectangle(16, 432, 400, 30),
                     TextAlign = ContentAlignment.MiddleLeft,
                     ForeColor = Dim,
+                    AutoEllipsis = true,
                     Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
                 };
                 f.Controls.Add(status);
+                var statusTip = new ToolTip();
 
                 bool canSwap = Updater.CanSelfUpdate();
                 var go = new Button
@@ -138,8 +140,10 @@ namespace ABeautifulPotatoLauncher
                     }
                     catch (Exception ex)
                     {
+                        Program.LogLine("Update failed: " + ex);
                         status.ForeColor = Color.FromArgb(230, 130, 130);
                         status.Text = "Update failed: " + ex.Message;
+                        statusTip.SetToolTip(status, status.Text);   // the label cuts long messages off
                         go.Text = "TRY AGAIN";
                         go.Enabled = true;
                         f.ControlBox = true;

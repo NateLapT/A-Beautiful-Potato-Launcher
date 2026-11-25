@@ -560,6 +560,23 @@ namespace ABeautifulPotatoLauncher
         }
 
         /// <summary>
+        /// Every searched word is in the name as a word of its own, in any
+        /// order: "nightmare" finds "Namalsk Nightmare" but not "Nightmares".
+        /// This is "the list has the server I typed" - see MainForm.FinishSearch.
+        /// </summary>
+        public static bool NameHasEveryWholeWord(string name, string search)
+        {
+            string[] words = SearchWords(search);
+            if (words.Length == 0 || string.IsNullOrEmpty(name)) return false;
+            foreach (string w in words)
+                if (!System.Text.RegularExpressions.Regex.IsMatch(name,
+                        @"(?<![\p{L}\p{N}])" + System.Text.RegularExpressions.Regex.Escape(w) + @"(?![\p{L}\p{N}])",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    return false;
+            return true;
+        }
+
+        /// <summary>
         /// The name holds the search exactly as typed (spacing aside). A
         /// single word only counts when it is the whole name - otherwise every
         /// server holding it would light up.

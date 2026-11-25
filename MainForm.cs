@@ -2005,7 +2005,12 @@ namespace ABeautifulPotatoLauncher
             {
                 FetchFlags(true);
                 var picked = SelectedRow;
-                RefreshCurrent(true);
+                // With a name in the search box, REFRESH is a search too: the
+                // player is looking for that server, so Steam is asked for it
+                // when the list download doesn't have it. See FinishSearch.
+                string typed = _search.Text.Trim();
+                if (typed.Length > 0 && IsSteamTab(_tab)) RunSteamSearch(true);
+                else RefreshCurrent(true);
                 // The list download never re-asked the selected server, so its
                 // mods stayed as first read until a background ping came by.
                 RefreshOneRow(SelectedRow ?? picked, true);
@@ -7569,8 +7574,9 @@ namespace ABeautifulPotatoLauncher
             if (_slowSearchFor != null)
             {
                 string asked = _slowSearchFor;
-                int found = ServersShown;
-                Log("Slow search for \"" + asked + "\" done: " + found + " server" + (found == 1 ? "" : "s") + " shown.");
+                int found = _rows.Count(r => !r.IsHeading && BrowserFilters.NameHasEveryWholeWord(r.Name, asked));
+                Log("Slow search for \"" + asked + "\" done: " + found + " server" + (found == 1 ? "" : "s")
+                    + " named that, " + ServersShown + " shown.");
                 StopSearch(found > 0
                     ? found + " server" + (found == 1 ? "" : "s") + " found for \"" + asked + "\"."
                     : "Steam has no server named \"" + asked + "\" right now - it may be offline, or check the filters.");
@@ -7580,14 +7586,24 @@ namespace ABeautifulPotatoLauncher
             string text = _searchPending;
             if (text == null) return;
 
-            if (ServersShown > 0 || !fromService)
+            // Re-check what is shown now, so one that was offline shows as it is.
+            Enqueue(_rows.Where(Pingable).Take(40).ToList(), true);
+
+            // ALWAYS FALL BACK TO STEAM when the service's list doesn't have
+            // the server. "Has it" means a name holding every typed word as a
+            // whole word: the loose match the list shows ("nightmare" inside
+            // "The Nightmares ... [NAMALSK]") once passed for "Namalsk
+            // Nightmare" while that server - back after a day offline - was
+            // not in the list yet, and Steam was never asked. Only the list
+            // download leads here; Steam's own answer (fromService false) is final.
+            bool have = _rows.Any(r => !r.IsHeading && BrowserFilters.NameHasEveryWholeWord(r.Name, text));
+            if (!fromService || have)
             {
-                Enqueue(_rows.Where(Pingable).Take(40).ToList(), true);
                 StopSearch(ServersShown > 0 ? null : "No server named \"" + text + "\" found.");
                 return;
             }
 
-            // The service's list has nothing by this name: ask Steam itself.
+            // The service's list doesn't have it: ask Steam itself.
             EnsureSteamSession();
             if (!_steamReady)
             {

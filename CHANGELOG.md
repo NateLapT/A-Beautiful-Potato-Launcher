@@ -16,6 +16,27 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.92] - 2026-11-25
+
+### Fixed
+
+- **SEARCH didn't find a server that had just come back online.** When the
+  downloaded server list didn't have it yet, SEARCH only asked Steam if
+  nothing at all matched, and a lookalike counted as a match ("Namalsk
+  Nightmare" was taken as found because "The Nightmares DayZ [NAMALSK]"
+  holds both words). Now Steam is always asked directly unless a server
+  has every word you typed as a whole word, in any order. What the list
+  found stays on screen while Steam answers.
+- **REFRESH with a name in the search box searches for it too**, and asks
+  Steam the same way when the list doesn't have that server.
+- **Updating could fail with "The downloaded file is not the launcher".**
+  Antivirus programs scan a new download straight away and keep it open
+  while they do; the updater checked the file during that scan and gave
+  up. It now waits for the scan to finish (up to 20 seconds). If the
+  antivirus removes or keeps blocking the file, it says so and offers the
+  download page. The full error is also written to the log, and a long
+  error message can be read by hovering over it.
+
 ## [0.91] - 2026-11-24
 
 ### Added
