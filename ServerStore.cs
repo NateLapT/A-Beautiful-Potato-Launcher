@@ -410,6 +410,44 @@ namespace ABeautifulPotatoLauncher
             catch { }
         }
 
+        // ---- the search box, per tab ----
+        //
+        // What was in the search box on each tab, so the launcher opens with the
+        // search it was left with. One "tab <TAB> text" line per tab that had any.
+        private static string SearchFile { get { return Path.Combine(Dir, "search.txt"); } }
+
+        public static Dictionary<int, string> LoadSearches()
+        {
+            var d = new Dictionary<int, string>();
+            try
+            {
+                if (!File.Exists(SearchFile)) return d;
+                foreach (string line in File.ReadAllLines(SearchFile))
+                {
+                    int tab = line.IndexOf('\t'), t;
+                    if (tab > 0 && int.TryParse(line.Substring(0, tab), out t) && tab + 1 < line.Length)
+                        d[t] = line.Substring(tab + 1);
+                }
+            }
+            catch { }
+            return d;
+        }
+
+        public static void SaveSearches(Dictionary<int, string> searches)
+        {
+            try
+            {
+                var lines = new List<string>();
+                foreach (var kv in searches)
+                {
+                    string text = (kv.Value ?? "").Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+                    if (text.Trim().Length > 0) lines.Add(kv.Key + "\t" + text);
+                }
+                File.WriteAllLines(SearchFile, lines);
+            }
+            catch { }
+        }
+
         // ---- remembered server passwords ----
         //
         // One line per server: "host:port <TAB> base64". The base64 is the

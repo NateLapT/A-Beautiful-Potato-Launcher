@@ -16,6 +16,46 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.94] - 2026-11-27
+
+### Added
+
+- **Auto reJoin.** When a server doesn't answer, the new "Failed to
+  connect" window can keep asking it every 2 seconds and joins as soon as
+  it's back - handy while a server restarts.
+- **Report Server Showing offline while Online**, in the same window. One
+  click sends the server's details to us to check; nothing to fill in.
+- **Streamer mode hides more of what points to a server.** In the server
+  list, Players and Ping read "Show" until you click the cell (click again
+  to hide), and Time, Mods, View and Password are masked. The mod list stays
+  covered until you click Show on its header; Hide covers it again. All of
+  it hides again whenever streamer mode is switched on.
+- **Auto join with a remembered password.** When the password window opens
+  with your last password filled in, it joins by itself after 5 seconds,
+  counting down on Connect. Untick "Auto join" (or click into the box to
+  type a new password) to stay on the window.
+- **Installed mods get their !Workshop link.** A mod installed through the
+  launcher now also appears in DayZ's `!Workshop` folder as `@ModName`, the
+  way DayZ's own launcher does it. Mods installed earlier without one get it
+  the next time you join a server that uses them.
+- **The search box remembers what was in it.** The launcher opens with the
+  search each tab was left with.
+
+### Changed
+
+- **"Failed to connect" window in the launcher's own style**, replacing
+  the Windows message box that listed query ports. It now just says the
+  join failed and to check the server is online; the details still go
+  in the log.
+- **The password box no longer shows how long the password is.** It
+  always shows the same twelve asterisks once anything is in it, whether
+  the password is remembered or typed, and whatever its length. Typing,
+  Backspace, Ctrl+V and Ctrl+A work as before. Holding SHOW still
+  reveals a password you typed (never a remembered one).
+- **Clicking the password box starts a new password.** The asterisks
+  clear and whatever you type replaces the old password. Click away
+  without typing and the last password is kept - CONNECT sends it.
+
 ## [0.93] - 2026-11-25
 
 ### Optimization

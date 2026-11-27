@@ -77,7 +77,8 @@ namespace ABeautifulPotatoLauncher
             Controls.Add(new Label
             {
                 Text = StreamerMode.Address(row.Endpoint) + (string.IsNullOrEmpty(row.Map) ? "" : "   -   " + row.Map)
-                     + "   -   " + row.Players + " / " + row.MaxPlayers + " players",
+                     // Streamer mode hides the player count, as the list does.
+                     + (StreamerMode.On ? "" : "   -   " + row.Players + " / " + row.MaxPlayers + " players"),
                 Bounds = new Rectangle(14, 34, 472, 18),
                 ForeColor = Dim,
                 UseMnemonic = false

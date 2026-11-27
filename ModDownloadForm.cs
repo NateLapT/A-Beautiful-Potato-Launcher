@@ -436,6 +436,8 @@ namespace ABeautifulPotatoLauncher
                     {
                         it.Ready = true;
                         it.Done = it.Total = SteamWorkshop.SizeOnDisk(_steam, it.Mod.WorkshopId);
+                        // Its "@Name" link in !Workshop, as DayZ's launcher makes.
+                        MainForm.LinkWorkshopMods(_steam, new[] { it.Mod.WorkshopId });
                     }
                     ready++;
                     fractionSum += 1.0;

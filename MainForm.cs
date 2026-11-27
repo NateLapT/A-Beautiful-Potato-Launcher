@@ -943,6 +943,15 @@ namespace ABeautifulPotatoLauncher
         private Label _descHeader;
         private TextBox _name, _log, _search;
         private Label _status, _modsHeader, _searchHint, _searchClear;
+
+        // Streamer mode: the mod list stays covered until SHOW is clicked, and
+        // a server's player count and ping until their cell is clicked. All
+        // are hidden again whenever streamer mode is switched on.
+        private Panel _modsCover;
+        private Button _modsShowHide;
+        private bool _modsRevealed;
+        private readonly HashSet<string> _playersShown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pingShown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Button _connect, _refresh, _filterToggle, _favBtn;
 
         /// <summary>
@@ -1115,7 +1124,7 @@ namespace ABeautifulPotatoLauncher
             _liveTimer.Start();
 
             _typeTimer.Interval = 220;
-            _typeTimer.Tick += (s, e) => { _typeTimer.Stop(); ApplyFilters(); };
+            _typeTimer.Tick += (s, e) => { _typeTimer.Stop(); SaveSearches(); ApplyFilters(); };
 
             _autoSearchTimer.Interval = AutoSearchAfterMs;
             _autoSearchTimer.Tick += (s, e) => { _autoSearchTimer.Stop(); RunSteamSearch(false); };
@@ -1199,6 +1208,7 @@ namespace ABeautifulPotatoLauncher
                 if (landed.Count > 0)
                 {
                     Log("  " + landed.Count + " mod(s) finished downloading.");
+                    LinkWorkshopMods(steam, landed);
                     RefreshInstalledState();
                 }
 
@@ -1512,6 +1522,14 @@ namespace ABeautifulPotatoLauncher
             };
             _search.KeyDown += OnSearchKey;
             _search.PasswordChar = StreamerMode.On ? '*' : '\0';
+
+            // The launcher opens with the search each tab was left with. Filled
+            // in before TextChanged is hooked up, so it doesn't start a search of
+            // its own: the first RefreshCurrent reads it like any other filter.
+            foreach (var kv in ServerStore.LoadSearches())
+                if (Enum.IsDefined(typeof(Tab), kv.Key)) _searchByTab[(Tab)kv.Key] = kv.Value;
+            string lastSearch;
+            if (_searchByTab.TryGetValue(_tab, out lastSearch)) _search.Text = lastSearch;
             searchArea.Controls.Add(_search);
 
             _searchClear = new Label
@@ -1523,7 +1541,7 @@ namespace ABeautifulPotatoLauncher
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
                 Tag = "clickable",
-                Visible = false
+                Visible = _search.Text.Length > 0
             };
             _searchClear.Click += (s, e) =>
             {
@@ -1542,7 +1560,8 @@ namespace ABeautifulPotatoLauncher
                 Bounds = new Rectangle(11, 5, 198, 21),
                 ForeColor = Color.FromArgb(105, 105, 112),
                 BackColor = Panel2,
-                TextAlign = ContentAlignment.MiddleLeft
+                TextAlign = ContentAlignment.MiddleLeft,
+                Visible = _search.Text.Length == 0
             };
             _searchHint.Click += (s, e) => _search.Focus();
             _search.GotFocus += (s, e) => _searchHint.Visible = false;
@@ -1706,6 +1725,27 @@ namespace ABeautifulPotatoLauncher
 
             var detailSplit = MakeSplit(Orientation.Vertical, 600, "mods");
             detailArea.Controls.Add(detailSplit);
+
+            // Streamer mode: a server's mod list tells a viewer which server
+            // this is, so the list is covered until the streamer clicks SHOW on
+            // the header. The cover lies over the list rather than hiding it,
+            // so the list stays loaded and is there the moment it is shown.
+            _modsShowHide = new Button
+            {
+                Dock = DockStyle.Right,
+                Width = 64,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(60, 60, 66),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                TabStop = false
+            };
+            _modsShowHide.FlatAppearance.BorderColor = Color.FromArgb(78, 78, 86);
+            _modsShowHide.Click += (s, e) => { _modsRevealed = !_modsRevealed; UpdateModsCover(); };
+            new ToolTip().SetToolTip(_modsShowHide, "Streamer mode: show or hide this server's mods and description.");
+            _modsHeader.Controls.Add(_modsShowHide);
+
             detailArea.Controls.SetChildIndex(detailSplit, 0);
             detailArea.Controls.SetChildIndex(_modsHeader, 1);
 
@@ -1777,6 +1817,35 @@ namespace ABeautifulPotatoLauncher
             // "has it got X and Y" is the next question.
             var modSearchBar = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Ink };
             detailSplit.Panel1.Controls.Add(modSearchBar);
+
+            // The streamer-mode cover (see _modsShowHide): it fills the same
+            // space as the mod list, on top of it. Index 0 docks last, after
+            // the search bar has taken its strip.
+            // A click anywhere on it shows the mods, as SHOW does.
+            _modsCover = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Panel,
+                BorderStyle = BorderStyle.FixedSingle,
+                Cursor = Cursors.Hand
+            };
+            var coverText = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Mods hidden (streamer mode).\r\nClick to show them.",
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Dim,
+                Cursor = Cursors.Hand
+            };
+            EventHandler reveal = (s, e) => { _modsRevealed = true; UpdateModsCover(); };
+            _modsCover.Click += reveal;
+            coverText.Click += reveal;
+            _modsCover.Controls.Add(coverText);
+            detailSplit.Panel1.Controls.Add(_modsCover);
+            detailSplit.Panel1.Controls.SetChildIndex(_modsCover, 0);
+            detailSplit.Panel1.Controls.SetChildIndex(_mods, 1);
+            detailSplit.Panel1.Controls.SetChildIndex(modSearchBar, 2);
+            UpdateModsCover();
 
             modSearchBar.Controls.Add(new Label
             {
@@ -2554,6 +2623,7 @@ namespace ABeautifulPotatoLauncher
 
             _tab = next;
             ServerStore.SaveTab((int)_tab);
+            SaveSearches();
             HighlightTab();
             ReadFilterUi();
             PaintFilterToggle();
@@ -2562,6 +2632,16 @@ namespace ABeautifulPotatoLauncher
 
         /// <summary>What was in the search box on each tab when it was left.</summary>
         private readonly Dictionary<Tab, string> _searchByTab = new Dictionary<Tab, string>();
+
+        /// <summary>Keeps each tab's search (the current one as it is now) for the next start.</summary>
+        private void SaveSearches()
+        {
+            if (_search == null) return;
+            _searchByTab[_tab] = _search.Text;
+            var d = new Dictionary<int, string>();
+            foreach (var kv in _searchByTab) d[(int)kv.Key] = kv.Value;
+            ServerStore.SaveSearches(d);
+        }
 
         private static string TabName(Tab t)
         {
@@ -3362,6 +3442,7 @@ namespace ABeautifulPotatoLauncher
                 : body;
             it.SubItems[ColPassword].ForeColor = row.Password
                 ? Color.FromArgb(225, 175, 90) : Color.FromArgb(110, 110, 118);
+            HideForStreamer(it, row);
             it.SubItems[ColStatus].ForeColor =
                 !row.Online.HasValue ? Color.FromArgb(120, 120, 128)
                 : row.Online.Value ? StatusOn : StatusOff;
@@ -6081,9 +6162,58 @@ namespace ABeautifulPotatoLauncher
             if (_search != null) _search.PasswordChar = StreamerMode.On ? '*' : '\0';
             RedrawLog();
             _status.Text = StreamerMode.On ? "Streamer mode on." : "Streamer mode off.";
+            _modsRevealed = false;
+            _playersShown.Clear();
+            _pingShown.Clear();
+            UpdateModsCover();
             _paintItems.Clear();
             _list.Invalidate();
             RepopulateModsFromCache();
+        }
+
+        /// <summary>Streamer mode: covers the mod panel unless SHOW was clicked; outside it, no cover and no button.</summary>
+        private void UpdateModsCover()
+        {
+            if (_modsCover == null) return;
+            bool streamer = StreamerMode.On;
+            _modsShowHide.Visible = streamer;
+            _modsShowHide.Text = _modsRevealed ? "Hide" : "Show";
+            _modsHeader.Padding = new Padding(8, 0, streamer ? _modsShowHide.Width + 6 : 0, 0);
+            _modsCover.Visible = streamer && !_modsRevealed;
+            if (_modsCover.Visible) _modsCover.BringToFront();
+        }
+
+        /// <summary>Streamer mode: a click on a server's Players or Ping cell shows it, a second click hides it.</summary>
+        private void ToggleShown(HashSet<string> shown, Row row)
+        {
+            if (!shown.Remove(row.Endpoint)) shown.Add(row.Endpoint);
+            _paintItems.Clear();
+            _list.Invalidate();
+        }
+
+        private const string ShowCell = "Show";
+
+        /// <summary>
+        /// Streamer mode hides the cells that, read together on stream, point
+        /// to one server: players and ping ("Show" until clicked), and the
+        /// time, mods, view and password ones (masked). Empty cells stay empty.
+        /// </summary>
+        private void HideForStreamer(ListViewItem it, Row row)
+        {
+            if (!StreamerMode.On) return;
+            Action<int, HashSet<string>> hide = (col, shown) =>
+            {
+                var cell = it.SubItems[col];
+                if (string.IsNullOrEmpty(cell.Text) || (shown != null && shown.Contains(row.Endpoint))) return;
+                cell.Text = shown != null ? ShowCell : StreamerMode.Mask;
+                if (shown != null) cell.ForeColor = Color.FromArgb(120, 150, 190);
+            };
+            hide(ColPlayers, _playersShown);
+            hide(ColPing, _pingShown);
+            hide(ColTime, null);
+            hide(ColMods, null);
+            hide(ColView, null);
+            hide(ColPassword, null);
         }
 
         private void ClearModCache(Row row)
@@ -6303,6 +6433,12 @@ namespace ABeautifulPotatoLauncher
             if (col == ColReport) { ReportServer(row); return; }
             if (col == ColRefresh) { RefreshOneRow(row); return; }
             if (col == ColStar) { ToggleFavourite(row); return; }
+            if (StreamerMode.On && !row.IsHeading && (col == ColPlayers || col == ColPing)
+                && !string.IsNullOrEmpty(hit.SubItem.Text))
+            {
+                ToggleShown(col == ColPlayers ? _playersShown : _pingShown, row);
+                return;
+            }
         }
 
         private void OnListMouseDown(object sender, MouseEventArgs e)
@@ -9011,22 +9147,79 @@ namespace ABeautifulPotatoLauncher
             var row = SelectedRow;
             if (row == null) { MessageBox.Show("Pick a server first."); return; }
 
-            _connect.Enabled = false;
-            Cursor = Cursors.WaitCursor;
-            try { Launch(row); }
-            catch (Exception ex)
+            bool again = true;
+            while (again)
             {
-                Log("ERROR: " + ex.Message);
-                MessageBox.Show(ex.Message, "A Beautiful Potato Launcher",
-                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                again = false;
+                _connect.Enabled = false;
+                Cursor = Cursors.WaitCursor;
+                ServerNotAnsweringException noAnswer = null;
+                try { Launch(row); }
+                catch (ServerNotAnsweringException ex)
+                {
+                    // The details are for the log; the window says what to do.
+                    Log("ERROR: " + ex.Message);
+                    noAnswer = ex;
+                }
+                catch (Exception ex)
+                {
+                    Log("ERROR: " + ex.Message);
+                    MessageBox.Show(ex.Message, "A Beautiful Potato Launcher",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    // Not while a launch is settling: the cooldown owns the button
+                    // until it ends, and re-enabling here would undo it.
+                    if (!InLaunchCooldown) _connect.Enabled = true;
+                    Cursor = Cursors.Default;
+                }
+
+                // Auto reJoin found it answering: the whole join runs again.
+                if (noAnswer != null)
+                {
+                    again = ShowConnectFailed(row, noAnswer);
+                    if (again) Log("Auto reJoin: " + row.Endpoint + " answered - joining again.");
+                }
             }
-            finally
+        }
+
+        /// <summary>
+        /// The "Failed to connect" window for a server that did not answer.
+        /// True when Auto reJoin found it answering and the join should run again.
+        /// </summary>
+        private bool ShowConnectFailed(Row row, ServerNotAnsweringException ex)
+        {
+            string host = row.Host;
+            var ports = ex.Tried.Count > 0 ? ex.Tried.ToArray() : new[] { row.EffectiveQueryPort };
+
+            Func<bool> answers = () =>
             {
-                // Not while a launch is settling: the cooldown owns the button
-                // until it ends, and re-enabling here would undo it.
-                if (!InLaunchCooldown) _connect.Enabled = true;
-                Cursor = Cursors.Default;
-            }
+                foreach (int p in ports)
+                    if (A2S.GetInfoAt(host, p, 1500).Online) return true;
+                return false;
+            };
+
+            // Everything we need to check the server - the player types nothing.
+            string server = row.Name + "  (" + row.Endpoint + ")";
+            string message = "Server showing offline while online - sent from the Failed to connect window.\n"
+                           + "Address: " + row.Endpoint + "\n"
+                           + "Query ports tried: " + string.Join(", ", ports) + "\n"
+                           + "Listed query port: " + (row.QueryPort > 0 ? row.QueryPort.ToString() : "none") + "\n"
+                           + "Answer: " + (string.IsNullOrEmpty(ex.Error) ? "none" : ex.Error) + "\n"
+                           + "Map: " + (row.Map ?? "") + "   Players (last seen): " + row.Players + "/" + row.MaxPlayers + "\n"
+                           + "Build: " + row.GameLabel;
+            Func<string> report = () =>
+            {
+                string problem;
+                bool sent = Relay.SendFeedback(message, null, server, null, null, out problem);
+                if (sent)
+                    try { BeginInvoke((Action)(() => Log("Reported " + row.Endpoint + " as showing offline while online."))); }
+                    catch (InvalidOperationException) { }
+                return sent ? null : (problem ?? "no answer");
+            };
+
+            return ConnectFailedDialog.Show(Host, StreamerMode.Name(row.Name, row.Endpoint), answers, report);
         }
 
 private void Launch(Row srv)
@@ -9119,11 +9312,11 @@ private void Launch(Row srv)
             }
 
             if (!live.Online)
-                throw new Exception("The server at " + srv.Endpoint + " did not answer on "
+                throw new ServerNotAnsweringException("The server at " + srv.Endpoint + " did not answer on "
                                     + (tried.Count == 1 ? "query port " : "any of the query ports ")
-                                    + string.Join(", ", tried) + ".\r\n\r\n"
+                                    + string.Join(", ", tried) + ". "
                                     + "The query port is steamQueryPort in the server's cfg - "
-                                    + "27015 (or 27016) when it is not set.\r\n\r\n" + live.Error);
+                                    + "27015 (or 27016) when it is not set. " + live.Error, tried, live.Error);
             Log("Query : port " + srv.QueryPort);
             Log("Server: " + live.Name);
             Log("Build : " + live.GameLabel + " (app " + live.AppId + ")  version " + live.Version);
@@ -9373,6 +9566,10 @@ private void Launch(Row srv)
                 loadedKeys.Add(m.IsLocal || source != SteamWorkshop.ItemPath(steam, m.WorkshopId)
                     ? LoadedMods.FolderKey(source) : m.WorkshopId.ToString());
             }
+
+            // Any of them installed without its !Workshop link (by this launcher
+            // before it made them, say) gets one now.
+            LinkWorkshopMods(steam, mods.Where(m => !m.IsLocal).Select(m => m.WorkshopId));
 
             var args = new List<string>();
             if (modArgs.Count > 0)
@@ -9783,6 +9980,10 @@ private void Launch(Row srv)
                 modArgs.Add(ModArg(gameDir, unique, r.Value));
                 Log("  " + (m.IsLocal ? "[local]   " : "[ok]      ") + m.Name + " -> " + r.Value);
             }
+
+            // Any of them installed without its !Workshop link (by this launcher
+            // before it made them, say) gets one now.
+            LinkWorkshopMods(steam, mods.Where(m => !m.IsLocal).Select(m => m.WorkshopId));
 
             var args = new List<string>();
             if (modArgs.Count > 0)
@@ -10690,6 +10891,42 @@ private static ServerRules QueryModsChecked(Row row)
         /// An installed copy of the current game - whichever build, for DayZ -
         /// for things that only need its steam_api64.dll.
         /// </summary>
+        /// <summary>
+        /// Gives installed workshop mods the "@Name" link in DayZ's !Workshop
+        /// folder (Stable and Experimental, where installed) that DayZ's own
+        /// launcher makes - see WorkshopLinks.Ensure. In the background; a mod
+        /// that already has one is left alone. DayZ only.
+        /// </summary>
+        internal static void LinkWorkshopMods(string steam, IEnumerable<ulong> ids)
+        {
+            if (Games.IsZomboid || string.IsNullOrEmpty(steam) || ids == null) return;
+            var list = ids.Where(i => i != 0).Distinct().ToList();
+            if (list.Count == 0) return;
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    var games = new[] { FindGameDir(steam, A2S.StableAppId), FindGameDir(steam, A2S.ExperimentalAppId) }
+                        .Where(d => d != null).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    var made = WorkshopLinks.Ensure(games,
+                        list.Select(id => new KeyValuePair<ulong, string>(id, SteamWorkshop.ItemPath(steam, id))));
+                    if (made.Count == 0) return;
+
+                    foreach (string link in made) Program.LogLine("Workshop link made: " + link);
+                    var main = Active;
+                    if (main != null && !main._closing)
+                        main.BeginInvoke((Action)(() =>
+                        {
+                            if (main._closing) return;
+                            foreach (string link in made)
+                                main.Log("  Linked in !Workshop: " + Path.GetFileName(link));
+                        }));
+                }
+                catch (Exception ex) { Program.LogLine("Workshop links failed: " + ex.Message); }
+            });
+        }
+
         private static string AnyGameDir(string steamPath)
         {
             if (steamPath == null) return null;
@@ -10827,6 +11064,7 @@ private static ServerRules QueryModsChecked(Row row)
             if (Active == this) Active = null;
 
             _closing = true;
+            SaveSearches();
             _updateTimer.Stop();
             ModIndex.Changed -= OnModIndexChanged;
             _modsChangedDelay.Stop();

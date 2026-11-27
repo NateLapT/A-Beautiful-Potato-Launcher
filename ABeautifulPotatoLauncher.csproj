@@ -17,26 +17,25 @@
          [Unreleased] section of CHANGELOG.md under the same number. -->
     <!-- Written and compared like a decimal: 0.55 comes BEFORE 0.6. The
          GitHub release tag must match, with a v: v0.55. See Updater. -->
-    <VersionBase>0.93</VersionBase>
+    <VersionBase>0.94</VersionBase>
 
-    <!-- An unpublished build: the footer and the log say "Beta v0.9.91", so a
+    <!-- An unpublished build: the footer and the log say "Beta v0.93.1", so a
          test copy is never mistaken for the release. Set to false when cutting
          the release, and back to true once it is out.
 
          BETA BUILD NUMBER: every beta build that is installed gets the next one
-         (tools\build-beta.ps1 bumps it and builds). It is appended as a digit,
-         not another decimal place: after the v0.9.9 release the betas are
-         0.9.91, 0.9.92, ... Read part by part, 0.9.91 would count as newer
-         than a later 0.9.10 release, so the update check compares a beta by
-         its VersionBase instead (see Updater). Reset it to 0 when cutting a
-         release. -->
+         (tools\build-beta.ps1 bumps it and builds). It is the third decimal
+         place: after the v0.93 release the betas are 0.93.1, 0.93.2, ... The
+         update check compares a beta by its VersionBase (see Updater), so a
+         beta never counts as newer than the release that follows it. Reset it
+         to 0 when cutting a release. -->
     <Beta>false</Beta>
     <BetaBuild>0</BetaBuild>
 
-    <Version Condition="'$(Beta)' == 'true' And '$(BetaBuild)' != '0'">$(VersionBase)$(BetaBuild)</Version>
+    <Version Condition="'$(Beta)' == 'true' And '$(BetaBuild)' != '0'">$(VersionBase).$(BetaBuild)</Version>
     <Version Condition="'$(Version)' == ''">$(VersionBase)</Version>
     <!-- Windows needs four numeric parts here; 0.3 pads to 0.3.0.0. -->
-    <FileVersion Condition="'$(Beta)' == 'true' And '$(BetaBuild)' != '0'">$(VersionBase)$(BetaBuild).0</FileVersion>
+    <FileVersion Condition="'$(Beta)' == 'true' And '$(BetaBuild)' != '0'">$(VersionBase).$(BetaBuild).0</FileVersion>
     <FileVersion Condition="'$(FileVersion)' == ''">$(VersionBase).0</FileVersion>
 
     <!-- The build time, appended to the informational version as

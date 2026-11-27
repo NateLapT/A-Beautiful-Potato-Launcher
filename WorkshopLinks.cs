@@ -87,6 +87,127 @@ namespace ABeautifulPotatoLauncher
             lock (Lock) _byId = null;
         }
 
+        // ------------------------------------------------- making links --
+        //
+        // DayZ's own launcher makes the "@Name" link when it installs a mod; a
+        // mod installed through this launcher had none, so it never showed up
+        // in !Workshop under a name. Ensure makes the same link.
+
+        private static readonly object EnsureLock = new object();
+
+        /// <summary>
+        /// Gives each workshop mod (id, folder on disk) an "@Name" junction in
+        /// every given DayZ install's !Workshop folder, unless one already points
+        /// at it. The name is the mod's own (meta.cpp, else mod.cpp), else its id.
+        /// Nothing that exists is changed, except a link left by a mod that has
+        /// since gone, which points at nothing. Returns the links made.
+        /// </summary>
+        public static List<string> Ensure(IEnumerable<string> gameDirs, IEnumerable<KeyValuePair<ulong, string>> mods)
+        {
+            var made = new List<string>();
+            var want = new List<KeyValuePair<ulong, string>>();
+            foreach (var kv in mods)
+            {
+                try
+                {
+                    if (kv.Key != 0 && !string.IsNullOrEmpty(kv.Value) && Directory.Exists(kv.Value))
+                        want.Add(new KeyValuePair<ulong, string>(kv.Key, Path.GetFullPath(kv.Value).TrimEnd('\\')));
+                }
+                catch { }
+            }
+            if (want.Count == 0) return made;
+
+            lock (EnsureLock)
+            {
+                foreach (string game in gameDirs)
+                {
+                    string root = Path.Combine(game, "!Workshop");
+                    string[] dirs;
+                    try
+                    {
+                        Directory.CreateDirectory(root);
+                        dirs = Directory.GetDirectories(root, "@*");
+                    }
+                    catch { continue; }
+
+                    // What the links already there point at.
+                    var linkedIds = new HashSet<ulong>();
+                    var linkedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string d in dirs)
+                    {
+                        string t = ResolveLink(d);
+                        if (t == null) continue;
+                        t = t.TrimEnd('\\');
+                        linkedPaths.Add(t);
+                        ulong id;
+                        if (ulong.TryParse(Path.GetFileName(t), out id)) linkedIds.Add(id);
+                    }
+
+                    foreach (var kv in want)
+                    {
+                        if (linkedIds.Contains(kv.Key) || linkedPaths.Contains(kv.Value)) continue;
+
+                        string name = LinkNameFor(kv.Value, kv.Key);
+                        string link = Path.Combine(root, "@" + name);
+                        // Another mod already has the name: tell them apart by id.
+                        if (Taken(link)) link = Path.Combine(root, "@" + name + " (" + kv.Key + ")");
+                        if (Taken(link)) continue;
+
+                        if (Junction.TryCreate(link, kv.Value))
+                        {
+                            made.Add(link);
+                            linkedIds.Add(kv.Key);
+                            linkedPaths.Add(kv.Value);
+                        }
+                    }
+                }
+                if (made.Count > 0) Forget();
+            }
+            return made;
+        }
+
+        /// <summary>
+        /// Something live is at this path: a real folder or file, or a link to
+        /// another mod. A link whose mod has gone points at nothing and is not
+        /// in the way - Junction.TryCreate replaces it (the link only).
+        /// </summary>
+        private static bool Taken(string path)
+        {
+            FileAttributes a;
+            try { a = File.GetAttributes(path); }
+            catch { return false; }                          // nothing there
+            if ((a & FileAttributes.ReparsePoint) == 0) return true;
+            return ResolveLink(path) != null;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex NameLine =
+            new System.Text.RegularExpressions.Regex(@"^\s*name\s*=\s*""([^""]+)""",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline);
+
+        /// <summary>The mod's name as a folder name: from meta.cpp or mod.cpp, else its id.</summary>
+        private static string LinkNameFor(string folder, ulong id)
+        {
+            string name = null;
+            foreach (string file in new[] { "meta.cpp", "mod.cpp" })
+            {
+                try
+                {
+                    string p = Path.Combine(folder, file);
+                    if (!File.Exists(p)) continue;
+                    var m = NameLine.Match(File.ReadAllText(p));
+                    if (m.Success) { name = m.Groups[1].Value; break; }
+                }
+                catch { }
+            }
+
+            var sb = new StringBuilder();
+            var bad = Path.GetInvalidFileNameChars();
+            foreach (char c in name ?? "")
+                sb.Append(c == '@' ? ' ' : Array.IndexOf(bad, c) >= 0 ? ' ' : c);
+            string safe = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim().TrimEnd('.').Trim();
+            return safe.Length > 0 ? safe : id.ToString();
+        }
+
         /// <summary>The "@Name" folder for a mod, or null if it has no link.</summary>
         /// <summary>
         /// The !Workshop folder DayZ loads mods from - the one whose entries are
