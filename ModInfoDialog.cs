@@ -23,6 +23,11 @@ namespace ABeautifulPotatoLauncher
         private static readonly Color Panel2 = Color.FromArgb(38, 38, 42);
         private static readonly Color Dim    = Color.FromArgb(150, 150, 158);
 
+        private const string CreatorRow = "Creator";
+
+        /// <summary>The mod's Workshop preview, top right; rows beside it are kept clear of it.</summary>
+        private const int PreviewSize = 128;
+
         public static void Show(IWin32Window owner, Mod mod, string steamPath)
         {
             var facts = Gather(mod, steamPath);
@@ -57,6 +62,21 @@ namespace ABeautifulPotatoLauncher
 
                 var tips = new ToolTip { AutoPopDelay = 20000 };
 
+                // The Workshop preview, top right, once it has been fetched.
+                PictureBox preview = null;
+                if (!mod.IsLocal)
+                {
+                    preview = new PictureBox
+                    {
+                        Bounds = new Rectangle(f.ClientSize.Width - 16 - PreviewSize, 50, PreviewSize, PreviewSize),
+                        SizeMode = PictureBoxSizeMode.Zoom,
+                        BackColor = Panel2,
+                        Anchor = AnchorStyles.Top | AnchorStyles.Right
+                    };
+                    f.Controls.Add(preview);
+                }
+                Label creatorValue = null;
+
                 int y = 50;
                 foreach (var kv in facts)
                 {
@@ -69,10 +89,13 @@ namespace ABeautifulPotatoLauncher
                         Anchor = AnchorStyles.Top | AnchorStyles.Left
                     });
 
+                    // Rows beside the preview stop short of it.
+                    int width = f.ClientSize.Width - 150
+                              - (preview != null && y < preview.Bottom + 4 ? PreviewSize + 12 : 0);
                     var value = new Label
                     {
                         Text = kv.Value,
-                        Bounds = new Rectangle(134, y, f.ClientSize.Width - 150, 20),
+                        Bounds = new Rectangle(134, y, width, 20),
                         ForeColor = Color.Gainsboro,
                         UseMnemonic = false,
                         AutoEllipsis = true,
@@ -83,7 +106,44 @@ namespace ABeautifulPotatoLauncher
                     // And when it still does not fit, hovering shows all of it.
                     tips.SetToolTip(value, kv.Value);
                     f.Controls.Add(value);
+                    if (kv.Key == CreatorRow) creatorValue = value;
                     y += 23;
+                }
+
+                // Who published it, and its picture - from Steam, after the
+                // window is up, so it opens at once. See WorkshopDetails.
+                if (!mod.IsLocal)
+                {
+                    ulong id = mod.WorkshopId;
+                    f.Shown += (s, e) => System.Threading.Tasks.Task.Run(() =>
+                    {
+                        var d = WorkshopDetails.Get(id);
+                        try
+                        {
+                            f.BeginInvoke((Action)(() =>
+                            {
+                                if (f.IsDisposed) return;
+                                if (creatorValue != null)
+                                {
+                                    creatorValue.Text = d.CreatorId.Length == 0 ? "(Steam didn't say)"
+                                        : (d.CreatorName.Length > 0 ? d.CreatorName + "   " : "") + "(" + d.CreatorId + ")";
+                                    tips.SetToolTip(creatorValue, d.CreatorId.Length > 0 ? "Open the creator's Steam profile" : "");
+                                    if (d.CreatorId.Length > 0)
+                                    {
+                                        creatorValue.ForeColor = Color.FromArgb(120, 150, 190);
+                                        creatorValue.Cursor = Cursors.Hand;
+                                        creatorValue.Click += (s2, e2) => { try { Process.Start(d.ProfileUrl); } catch { } };
+                                    }
+                                }
+                                if (preview != null)
+                                {
+                                    if (d.Preview != null) preview.Image = d.Preview;
+                                    else preview.Visible = false;
+                                }
+                            }));
+                        }
+                        catch (InvalidOperationException) { }      // closed meanwhile
+                    });
                 }
 
                 string modCpp = ModCpp(mod, steamPath);
@@ -227,6 +287,8 @@ namespace ABeautifulPotatoLauncher
             bool installed = steamPath != null && SteamWorkshop.IsInstalled(steamPath, mod.WorkshopId);
 
             add("Workshop ID", mod.WorkshopId.ToString());
+            // Filled in once Steam answers - see WorkshopDetails and Show.
+            add(CreatorRow, "looking it up...");
             add("Source", "Steam Workshop (UGC)");
 
             string author = ReadKey(modCpp, "author");

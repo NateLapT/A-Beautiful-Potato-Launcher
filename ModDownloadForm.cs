@@ -64,6 +64,14 @@ namespace ABeautifulPotatoLauncher
             public bool WasStale;
 
             /// <summary>
+            /// The copy on disk lagged the workshop when queued (StaleBy). Then
+            /// it no longer lagging also means finished - only then, or a copy
+            /// queued on Steam's word alone would count as done before Steam
+            /// had even started.
+            /// </summary>
+            public bool LaggedAtQueue;
+
+            /// <summary>
             /// Steam has had this item in a Downloading or DownloadPending state
             /// at some point. Once that has been true and then stops being true
             /// without the mod appearing, the download is over and it did not
@@ -225,7 +233,8 @@ namespace ABeautifulPotatoLauncher
                     Mod = m,
                     Row = row,
                     StampAtQueue = stamp,
-                    WasStale = stamp != 0
+                    WasStale = stamp != 0,
+                    LaggedAtQueue = stamp != 0 && SteamWorkshop.StaleBy(_steam, m.WorkshopId) > TimeSpan.Zero
                 });
             }
 
@@ -378,7 +387,11 @@ namespace ABeautifulPotatoLauncher
                 if (it.WasStale)
                 {
                     ulong now = SteamWorkshop.MetaTimestamp(_steam, it.Mod.WorkshopId);
-                    onDisk = now != 0 && now != it.StampAtQueue;
+                    // Or the copy no longer lags the workshop: Steam does not
+                    // always rewrite meta.cpp, so its timestamp may never move
+                    // (see SteamWorkshop.InstalledAt).
+                    onDisk = (now != 0 && now != it.StampAtQueue)
+                             || (it.LaggedAtQueue && SteamWorkshop.StaleBy(_steam, it.Mod.WorkshopId) == TimeSpan.Zero);
                 }
                 else
                 {

@@ -183,7 +183,7 @@ namespace ABeautifulPotatoLauncher
         public ServerMod(string name, ulong workshopId) : base(name, workshopId) { }
     }
 
-    internal static class SteamWorkshop
+    internal static partial class SteamWorkshop
     {
         /// <summary>
         /// Asks Steam's public catalogue whether an id exists, and if it does
@@ -830,6 +830,19 @@ namespace ABeautifulPotatoLauncher
                 log("Steam: switching from " + AppName(_sessionApp) + " to " + AppName(appId) + ".");
             }
 
+            ForgetSession();
+
+            _sessionApp = appId;
+
+            bool ok = TryInit(gameDir, log);
+            log(ok ? "Steam now shows " + AppName(appId) + "."
+                   : "Steam could not be switched to " + AppName(appId) + " - mods may not update until the launcher is restarted.");
+            return ok;
+        }
+
+        /// <summary>Everything bound to a session that has just been shut down.</summary>
+        private static void ForgetSession()
+        {
             _initialised = false;
             _ugc = IntPtr.Zero;
             _utils = IntPtr.Zero;
@@ -839,13 +852,52 @@ namespace ABeautifulPotatoLauncher
             _createDetails = null; _sendQuery = null; _queryResult = null;
             _releaseQuery = null; _callDone = null;
             _createAll = null; _setSearchText = null; _setLongDescription = null;
+        }
 
-            _sessionApp = appId;
+        // ------------------------------------------------------- unlinking --
+        //
+        // Steam deletes an unsubscribed mod only once the game has quit, and
+        // while the session is open as DayZ, Steam counts DayZ as running - so
+        // a mod removed here stayed on disk until the launcher closed.
+        //
+        // Shutting the session down does NOT help: measured 2026-11-28, Steam
+        // keeps DayZ "running" after SteamAPI_Shutdown, and after unloading
+        // every Steam library, until the PROCESS exits. So the session lives in
+        // the Steam link's helper (see SteamLink): Release ends the helper -
+        // Steam sees DayZ close and does its deleting - and the next thing
+        // that needs Steam after Resume starts a new one. The launcher stays
+        // open throughout. While unlinked, nothing opens a session early (see
+        // TryInit, EnsureWorkshopApp): that would have Steam see DayZ again.
 
-            bool ok = TryInit(gameDir, log);
-            log(ok ? "Steam now shows " + AppName(appId) + "."
-                   : "Steam could not be switched to " + AppName(appId) + " - mods may not update until the launcher is restarted.");
-            return ok;
+        private static DateTime _heldUntil = DateTime.MinValue;
+
+        /// <summary>True while the session is unlinked on purpose (see Release).</summary>
+        public static bool Held { get { return DateTime.UtcNow < _heldUntil; } }
+
+        /// <summary>
+        /// Ends the Steam session - the helper - for at most
+        /// <paramref name="atMost"/>, so Steam stops counting the game as
+        /// running. False when it can't: the session is in this process (the
+        /// helper could not be started), or there is none.
+        /// </summary>
+        public static bool Release(TimeSpan atMost, Action<string> log)
+        {
+            lock (ApiLock)
+            {
+                if (!Remote || !_initialised) return false;
+                _heldUntil = DateTime.UtcNow + atMost;
+                log("Steam: unlinking for a moment, so Steam can finish removing mods.");
+                SteamServerList.Forget();
+                SteamLink.Stop();
+                ForgetSession();
+                return true;
+            }
+        }
+
+        /// <summary>Ends a Release: the next thing that needs Steam links again.</summary>
+        public static void Resume()
+        {
+            _heldUntil = DateTime.MinValue;
         }
 
         /// <summary>The game a Steam app id belongs to, for messages a player reads.</summary>
@@ -868,6 +920,7 @@ namespace ABeautifulPotatoLauncher
         public static bool EnsureWorkshopApp(string gameDir, Action<string> log)
         {
             uint app = Games.WorkshopApp;
+            if (Held) return false;                 // parked on purpose - see Release
             return !_initialised || _sessionApp == app
                 ? TryInit(gameDir, log)
                 : SwitchApp(app, gameDir, log);
@@ -881,7 +934,11 @@ namespace ABeautifulPotatoLauncher
         public static bool TryInit(string gameDir, Action<string> log)
         {
             if (_initialised) return Available;
+            if (Held) return false;                 // unlinked on purpose - see Release
             if (_sessionApp == 0) _sessionApp = Games.WorkshopApp;
+
+            // In the launcher the session lives in the Steam link's helper.
+            if (Remote) return TryInitRemote(gameDir, log);
 
             try
             {
@@ -1086,6 +1143,7 @@ namespace ABeautifulPotatoLauncher
             try
             {
                 _subscribe(_ugc, id);
+                ModRemoval.Forget(id);                              // wanted after all
                 if (_download != null) _download(_ugc, id, true);   // true = high priority
                 return true;
             }
@@ -1586,14 +1644,36 @@ namespace ABeautifulPotatoLauncher
                     ? updated.ToUniversalTime() : DateTime.MinValue;
             }
 
+            // When Steam last wrote this copy: the NEWEST of meta.cpp, mod.cpp
+            // and the PBOs. meta.cpp alone used to stand for it, but Steam does
+            // not always rewrite it - Community Online Tools, 2026-11-27: the
+            // update arrived at 11:32 (PBOs, signatures, mod.cpp), meta.cpp
+            // stayed as written in July, and the mod was called 135 days out
+            // of date on the morning it was updated.
             try
             {
                 string meta = MetaPath(steamPath, id);
                 if (!File.Exists(meta)) return DateTime.MinValue;
-                return File.GetLastWriteTimeUtc(meta);
+                DateTime newest = File.GetLastWriteTimeUtc(meta);
+
+                string folder = Path.GetDirectoryName(meta);
+                string modCpp = Path.Combine(folder, "mod.cpp");
+                if (File.Exists(modCpp)) newest = Max(newest, File.GetLastWriteTimeUtc(modCpp));
+
+                foreach (string addons in new[] { "addons", "Addons" })
+                {
+                    string dir = Path.Combine(folder, addons);
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (string pbo in Directory.EnumerateFiles(dir, "*.pbo"))
+                        newest = Max(newest, File.GetLastWriteTimeUtc(pbo));
+                    break;                      // the same folder either way on Windows
+                }
+                return newest;
             }
             catch { return DateTime.MinValue; }
         }
+
+        private static DateTime Max(DateTime a, DateTime b) { return a > b ? a : b; }
 
         /// <summary>
         /// How far the local copy lags the published one, or TimeSpan.Zero when
@@ -1816,6 +1896,18 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static void Shutdown()
         {
+            // In the launcher: end the helper, which shuts its session down.
+            if (Remote)
+            {
+                lock (ApiLock)
+                {
+                    try { SteamServerList.Forget(); } catch { }
+                    try { SteamLink.Stop(); } catch { }
+                    ForgetSession();
+                }
+                return;
+            }
+
             lock (ApiLock)
             {
                 bool wasUp = _initialised;

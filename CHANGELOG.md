@@ -16,6 +16,45 @@ arbitrary until you know what they were measured against.
 
 ---
 
+## [0.95] - 2026-11-28
+
+### Added
+
+- **Mod info shows who made the mod, and its picture.** The creator's Steam
+  name (click it for their profile) and the mod's Workshop image.
+
+### Changed
+
+- **The players count shows Steam's figure too, updated every 5 minutes.**
+  The bottom bar now reads "playing DayZ" for everyone with the game open
+  as Steam counts it (the figure SteamDB charts, menus and queues
+  included), beside "on servers": the players on listed servers, as before.
+  Hover it for the details.
+
+### Fixed
+
+- **Server info could stop appearing for a whole session.** When the
+  launcher opened, a server could answer before the window was ready to
+  show it, and from then on no answer was ever shown - most visibly on
+  FAVORITES, which stayed on "Querying saved servers..." with no ping,
+  players or time. Answers that arrive early now wait for the window.
+- **Mods updated by Steam no longer show as months out of date.** Steam
+  doesn't always rewrite a mod's meta.cpp when it updates the mod, and the
+  launcher took that file's date as the day the copy arrived - so a mod
+  updated that morning could read "out of date by 135 days" and be
+  downloaded again for nothing. The launcher now goes by the newest of the
+  mod's files. Updating such a mod also no longer waits for that date to
+  change before it counts as done.
+- **Remove now removes, with the launcher open.** Steam only deletes an
+  unsubscribed mod once DayZ has quit, and while the launcher is open Steam
+  counts DayZ as running - so after Remove the mod stayed, still marked
+  "installed". The launcher's link to Steam now runs in a small background
+  helper: after unsubscribing, the launcher unlinks for a moment, Steam sees
+  DayZ close and deletes the mod itself, and the launcher links again. The
+  deleting is Steam's, not the launcher's. If Steam hasn't deleted it within
+  45 seconds - or DayZ itself is running - the mod shows "removed - Steam
+  deletes it when the launcher closes".
+
 ## [0.94] - 2026-11-27
 
 ### Added

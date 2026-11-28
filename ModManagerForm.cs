@@ -1243,7 +1243,7 @@ namespace ABeautifulPotatoLauncher
                        MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
-        private void RemoveSelected()
+        private async void RemoveSelected()
         {
             var m = _selected;
             if (m == null) return;
@@ -1260,8 +1260,18 @@ namespace ABeautifulPotatoLauncher
                                 "Steam not available", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            SteamWorkshop.Unsubscribe(m.WorkshopId);
-            _status.Text = "Unsubscribed from " + m.Name + ".";
+            _status.Text = "Removing " + m.Name + "...";
+            string result;
+            try
+            {
+                var main = MainForm.Active;
+                result = await ModRemoval.RemoveAsync(_steam, m.WorkshopId, m.Name,
+                                                      s => { if (main != null) main.LogFromElsewhere(s); });
+            }
+            catch (Exception ex) { result = "Removing " + m.Name + " failed: " + ex.Message; }
+            if (IsDisposed) return;
+            _status.Text = result;
+            Rescan();
         }
 
         // ------------------------------------------------- bulk actions --
@@ -1290,6 +1300,14 @@ namespace ABeautifulPotatoLauncher
 
             ulong id = InstallByIdDialog.Ask(this);
             if (id == 0) return;
+
+            var mainForMalware = MainForm.Active;
+            if (mainForMalware != null && mainForMalware.Malware.IsFlagged(id, null))
+            {
+                MessageBox.Show(this, "Workshop item " + id + " is flagged as malware, so the launcher won't install it.",
+                                "Malware mod", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
             // Confirm with Steam that this id is real before subscribing to it.
             // Subscribing to a nonexistent item succeeds and downloads nothing,

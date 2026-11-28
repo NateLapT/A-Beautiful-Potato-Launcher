@@ -163,7 +163,7 @@ namespace ABeautifulPotatoLauncher
     /// </summary>
     internal enum ListKind { Internet, Recent, Friends, Lan, SteamFavourites }
 
-    internal static class SteamServerList
+    internal static partial class SteamServerList
     {
         // ------------------------------------------------------- interop -----
 
@@ -205,7 +205,15 @@ namespace ABeautifulPotatoLauncher
         private static IntPtr _filterArray = IntPtr.Zero;
         private static IntPtr[] _filterBlocks = new IntPtr[0];
 
-        public static bool Available { get { return _mm != IntPtr.Zero && _request != null; } }
+        public static bool Available
+        {
+            get
+            {
+                // In the launcher the query runs in the Steam link's helper - see SteamLink.
+                return SteamWorkshop.Remote ? _remoteReady && SteamWorkshop.Available
+                                            : _mm != IntPtr.Zero && _request != null;
+            }
+        }
 
         /// <summary>
         /// Drops everything bound to the Steam session, so the next TryInit
@@ -221,6 +229,7 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static void Forget()
         {
+            if (SteamWorkshop.Remote) { RemoteForget(); return; }
             Stop();          // release the in-flight query while its interface is still valid
 
             _mm = IntPtr.Zero;
@@ -242,6 +251,7 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static bool TryInit(string gameDir, Action<string> log)
         {
+            if (SteamWorkshop.Remote) return RemoteTryInit(gameDir, log);
             if (Available) return true;
             try
             {
@@ -313,6 +323,7 @@ namespace ABeautifulPotatoLauncher
         public static bool Start(ListKind kind, uint appId,
                                  IEnumerable<KeyValuePair<string, string>> filters)
         {
+            if (SteamWorkshop.Remote) return RemoteStart(kind, appId, filters);
             // See SteamWorkshop.ApiLock - a pool thread may be pumping callbacks.
             lock (SteamWorkshop.ApiLock) return StartLocked(kind, appId, filters);
         }
@@ -384,6 +395,7 @@ namespace ABeautifulPotatoLauncher
         /// <param name="done">true once the refresh has finished.</param>
         public static List<BrowserServer> Poll(out bool done, out int rawCount)
         {
+            if (SteamWorkshop.Remote) return RemotePoll(out done, out rawCount);
             lock (SteamWorkshop.ApiLock) return PollLocked(out done, out rawCount);
         }
 
@@ -459,6 +471,7 @@ namespace ABeautifulPotatoLauncher
         /// </summary>
         public static void Stop()
         {
+            if (SteamWorkshop.Remote) { RemoteStop(); return; }
             // _mm is checked as well as _active: these are calls THROUGH the
             // matchmaking interface, and making them once the session behind
             // it has gone is an access violation, not a caught exception.

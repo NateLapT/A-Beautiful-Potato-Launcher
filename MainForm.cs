@@ -162,6 +162,21 @@ namespace ABeautifulPotatoLauncher
         [STAThread]
         private static void Main()
         {
+            // The Steam link's helper: no window, no log, no install checks -
+            // it only holds the Steam session for the launcher. See SteamLink.
+            var startArgs = Environment.GetCommandLineArgs();
+            if (SteamLink.IsHost(startArgs))
+            {
+                try { SteamLink.RunHost(startArgs); }
+                catch (Exception ex)
+                {
+                    try { File.AppendAllText(Path.Combine(LogDirectory, "steam-link.log"),
+                                             "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + ex + Environment.NewLine); }
+                    catch { }
+                }
+                return;
+            }
+
             try { Directory.CreateDirectory(LogDirectory); }
             catch { }
 
@@ -1078,6 +1093,9 @@ namespace ABeautifulPotatoLauncher
             BuildUi();
             Program.Trace("MainForm: BuildUi done");
             HandleCreated += (s, e) => Program.Trace("MainForm: handle created");
+            // Server answers that arrived before there was a window to show
+            // them in - see PostLiveDrain.
+            HandleCreated += (s, e) => { if (!_liveResults.IsEmpty) PostLiveDrain(); };
             Load += (s, e) => Program.Trace("MainForm: Load");
 
             // Once the window is up, never before: a slow or absent network
@@ -1094,6 +1112,10 @@ namespace ABeautifulPotatoLauncher
                 later.Start();
             };
             Load += (s, e) => ShowSavedPlayersOnline();
+            Load += (s, e) => FetchSteamPlayers();
+            _steamPlayersTimer.Interval = (int)SteamPlayersEvery.TotalMilliseconds;
+            _steamPlayersTimer.Tick += (s, e) => FetchSteamPlayers();
+            _steamPlayersTimer.Start();
             _updateTimer.Interval = (int)TimeSpan.FromMinutes(30).TotalMilliseconds;
             _updateTimer.Tick += (s, e) => CheckForUpdates();
             _updateTimer.Start();
@@ -3471,6 +3493,7 @@ namespace ABeautifulPotatoLauncher
 
         private void SetRows(List<Row> rows, string keepSelected)
         {
+            rows = WithoutMalware(rows);
             rows = WithHeadings(rows);
 
             // NOTHING CHANGED, SO CHANGE NOTHING.
@@ -3733,6 +3756,27 @@ namespace ABeautifulPotatoLauncher
             if (gameDir != null) _steamReady = SteamServerList.TryInit(gameDir, Log);
         }
 
+        /// <summary>
+        /// The Steam session was let go (see SteamWorkshop.Release) and may be
+        /// opened again: opens it, and binds the server browser to it.
+        /// </summary>
+        internal void ReconnectSteam()
+        {
+            if (_closing) return;
+            _steamReady = false;
+            EnsureSteamSession();
+            Log(_steamReady ? "Steam: back on " + Games.Name + "."
+                            : "Steam: could not reconnect yet - it will on the next refresh.");
+        }
+
+        /// <summary>A line in this window's log from another window (the Mod Manager).</summary>
+        internal void LogFromElsewhere(string line)
+        {
+            if (_closing) return;
+            if (InvokeRequired) { try { BeginInvoke((Action)(() => Log(line))); } catch { } }
+            else Log(line);
+        }
+
         private void StartRelayDownload()
         {
             if (_relayBusy) return;
@@ -3815,13 +3859,86 @@ namespace ABeautifulPotatoLauncher
 
         private void ShowPlayersOnline(long players, int servers, DateTime builtUtc)
         {
-            _playersLabel.Text = players.ToString("N0") + " playing " + Games.Name;
+            _serverPlayers = players;
+            _serverCount = servers;
+            _serverPlayersBuilt = builtUtc;
+            RenderPlayersOnline();
+        }
+
+        // The two figures in the bottom bar: Steam's count of everyone with the
+        // game open (see SteamPlayerCount, asked every SteamPlayersEvery), and
+        // the players on listed servers (from the server list). -1 = not known.
+        private long _serverPlayers = -1, _steamPlayers = -1;
+        private int _serverCount;
+        private DateTime _serverPlayersBuilt, _steamPlayersAt;
+        private string _steamPlayersParts = "";
+        private static readonly TimeSpan SteamPlayersEvery = TimeSpan.FromMinutes(5);
+        private readonly System.Windows.Forms.Timer _steamPlayersTimer = new System.Windows.Forms.Timer();
+        private bool _steamPlayersBusy;
+
+        /// <summary>Asks Steam how many have the game running (DayZ: Stable and Experimental), in the background.</summary>
+        private void FetchSteamPlayers()
+        {
+            if (_steamPlayersBusy || _closing) return;
+            _steamPlayersBusy = true;
+            var apps = Games.IsZomboid
+                ? new[] { new KeyValuePair<string, uint>("", Zomboid.AppId) }
+                : new[] { new KeyValuePair<string, uint>("Stable", (uint)A2S.StableAppId),
+                          new KeyValuePair<string, uint>("Experimental", (uint)A2S.ExperimentalAppId) };
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                long total = -1;
+                var parts = new List<string>();
+                foreach (var app in apps)
+                {
+                    long n = SteamPlayerCount.Fetch(app.Value);
+                    if (n < 0) continue;
+                    total = Math.Max(0, total) + n;
+                    if (app.Key.Length > 0) parts.Add(app.Key + " " + n.ToString("N0"));
+                }
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _steamPlayersBusy = false;
+                        if (_closing || total < 0) return;      // keep the last figure
+                        _steamPlayers = total;
+                        _steamPlayersAt = DateTime.Now;
+                        _steamPlayersParts = parts.Count > 1 ? " (" + string.Join(", ", parts) + ")" : "";
+                        RenderPlayersOnline();
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        /// <summary>"33,715 playing DayZ · 22,104 on servers" - or whichever of the two is known.</summary>
+        private void RenderPlayersOnline()
+        {
+            if (_steamPlayers < 0 && _serverPlayers < 0) return;
+
+            if (_steamPlayers >= 0 && _serverPlayers >= 0)
+                _playersLabel.Text = _steamPlayers.ToString("N0") + " playing " + Games.Name
+                                   + "  ·  " + _serverPlayers.ToString("N0") + " on servers";
+            else if (_steamPlayers >= 0)
+                _playersLabel.Text = _steamPlayers.ToString("N0") + " playing " + Games.Name;
+            else
+                _playersLabel.Text = _serverPlayers.ToString("N0") + " on " + Games.Name + " servers";
+
+            var tip = new List<string>();
+            if (_steamPlayers >= 0)
+                tip.Add(_steamPlayers.ToString("N0") + " playing" + _steamPlayersParts + ": everyone with " + Games.Name
+                        + " running, as Steam counts it - in the menu, in a queue and offline too ("
+                        + _steamPlayersAt.ToString("HH:mm") + ", updated every " + (int)SteamPlayersEvery.TotalMinutes + " minutes).");
+            if (_serverPlayers >= 0)
+                tip.Add(_serverPlayers.ToString("N0") + " on " + _serverCount.ToString("N0")
+                        + " listed servers, as the servers report it (" + _serverPlayersBuilt.ToLocalTime().ToString("HH:mm")
+                        + "). Every build and tab; servers caught claiming players who aren't there are left out."
+                        + " Updated with the server list on every refresh.");
+            _playersTip.SetToolTip(_playersLabel, string.Join("\r\n\r\n", tip));
+
             _playersChip.Width = TextRenderer.MeasureText(_playersLabel.Text, _playersLabel.Font).Width + 20 + _playersChip.Padding.Left;
-            _playersTip.SetToolTip(_playersLabel,
-                players.ToString("N0") + " players on " + servers.ToString("N0") + " servers, as the servers report it ("
-                + builtUtc.ToLocalTime().ToString("HH:mm") + ").\r\n"
-                + "Every build and tab. Servers caught claiming players who aren't there are left out.\r\n"
-                + "Updated with the server list on every refresh.");
             _playersChip.Visible = true;
         }
 
@@ -5681,12 +5798,31 @@ namespace ABeautifulPotatoLauncher
                 // for seconds. Answers now wait in a queue and one post applies
                 // all of them, leaving room to paint between batches.
                 _liveResults.Enqueue(new KeyValuePair<Row, ServerInfo>(row, info));
-                if (Interlocked.Exchange(ref _liveDrainPosted, 1) == 0)
-                {
-                    try { BeginInvoke((Action)DrainLiveResults); }
-                    catch (InvalidOperationException) { return; }
-                }
+                PostLiveDrain();
             }
+        }
+
+        /// <summary>
+        /// Asks the UI thread to apply the queued answers, unless it already has
+        /// been asked.
+        ///
+        /// NOT BEFORE THE WINDOW EXISTS. On FAVORITES (and the other saved-server
+        /// tabs) the queries start in the constructor, and the first answers
+        /// come back before Windows has made the window - when BeginInvoke
+        /// throws. That used to leave the "already asked" flag set for good, so
+        /// no answer was ever shown again, on any tab, all session (2026-11-28:
+        /// a player's FAVORITES with no ping, players or time). Now the flag is
+        /// let go, and HandleCreated drains whatever arrived early.
+        /// </summary>
+        private void PostLiveDrain()
+        {
+            if (Interlocked.Exchange(ref _liveDrainPosted, 1) != 0) return;
+            if (IsHandleCreated)
+            {
+                try { BeginInvoke((Action)DrainLiveResults); return; }
+                catch (InvalidOperationException) { }       // closing, or the handle just went
+            }
+            Interlocked.Exchange(ref _liveDrainPosted, 0);
         }
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<KeyValuePair<Row, ServerInfo>> _liveResults
@@ -6374,12 +6510,16 @@ namespace ABeautifulPotatoLauncher
                 catch { }
                 try { approved = Relay.TryApproved(); }
                 catch { }
+                MalwareInfo malware = null;
+                try { malware = Relay.TryMalware(); }
+                catch { }
                 try
                 {
                     BeginInvoke((Action)(() =>
                     {
                         _flagsBusy = false;
                         if (_closing) return;
+                        if (malware != null) ApplyMalware(malware);
                         if (approved != null && !approved.SetEquals(_slotsApproved))
                         {
                             _slotsApproved = approved;
@@ -6396,6 +6536,151 @@ namespace ABeautifulPotatoLauncher
                 }
                 catch { }     // the window closed meanwhile
             });
+        }
+
+        // ------------------------------------------------------- malware --
+
+        /// <summary>Mods flagged as malware, and servers running them - see MalwareInfo.</summary>
+        private MalwareInfo _malware = new MalwareInfo();
+
+        /// <summary>The current malware list, for the Mod Manager.</summary>
+        internal MalwareInfo Malware { get { return _malware; } }
+
+        /// <summary>Installed malware mods already warned about this session, by id.</summary>
+        private readonly HashSet<ulong> _malwareWarned = new HashSet<ulong>();
+
+        /// <summary>A new malware list from the relay: hide what it names, and check what is installed.</summary>
+        private void ApplyMalware(MalwareInfo next)
+        {
+            bool same = next.Ids.SetEquals(_malware.Ids) && next.Names.SetEquals(_malware.Names)
+                     && next.Servers.SetEquals(_malware.Servers)
+                     && next.BlockedServers.SetEquals(_malware.BlockedServers)
+                     && next.BlockedHosts.SetEquals(_malware.BlockedHosts);
+            _malware = next;
+            if (same) return;
+
+            if (IsSteamTab(_tab)) RenderFromCache();
+            else RefreshMine();
+            WarnInstalledMalware();
+        }
+
+        /// <summary>
+        /// The flagged mod this server runs, or null: the relay says so, or the
+        /// mods the launcher read from the server itself (with Workshop ids
+        /// when it asked this session, by name from the saved lists).
+        /// </summary>
+        private string MalwareOn(string endpoint)
+        {
+            if (_malware.IsEmpty || string.IsNullOrEmpty(endpoint)) return null;
+            if (_malware.IsBlocked(endpoint)) return Blocked;
+            if (_malware.Servers.Contains(endpoint)) return "a mod flagged as malware";
+
+            ServerRules rules;
+            lock (_modLock) _modCache.TryGetValue(endpoint, out rules);
+            string found = rules == null ? null : _malware.FlaggedAmong(rules.Mods);
+            return found ?? _malware.FlaggedAmongNames(KnownModsFor(endpoint));
+        }
+
+        /// <summary>Servers already reported in the log as hidden, so each is named there once.</summary>
+        private readonly HashSet<string> _malwareHidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Every list shown leaves out servers running a malware mod (see MalwareInfo).</summary>
+        private List<Row> WithoutMalware(List<Row> rows)
+        {
+            if (_malware.IsEmpty) return rows;
+            var kept = new List<Row>(rows.Count);
+            int newlyHidden = 0;
+            foreach (var r in rows)
+            {
+                if (!r.IsHeading && MalwareOn(r.Endpoint) != null)
+                {
+                    if (_malwareHidden.Add(r.Endpoint)) newlyHidden++;
+                    continue;
+                }
+                kept.Add(r);
+            }
+            if (newlyHidden > 0)
+                Log("Hid " + newlyHidden + " blocked server(s).");
+            return kept;
+        }
+
+        /// <summary>
+        /// Names any installed mod that is flagged as malware - once each per
+        /// session - and offers to remove it (see RemoveMod: Steam deletes it).
+        /// </summary>
+        private void WarnInstalledMalware()
+        {
+            if (_malware.Ids.Count == 0 && _malware.Names.Count == 0) return;
+            string steam = FindSteam();
+            if (steam == null) return;
+
+            var found = new List<KeyValuePair<ulong, string>>();
+            try
+            {
+                foreach (ulong id in _malware.Ids)
+                    if (!_malwareWarned.Contains(id) && SteamWorkshop.IsInstalled(steam, id))
+                    {
+                        string shown;
+                        found.Add(new KeyValuePair<ulong, string>(id, _malware.Shown.TryGetValue(id.ToString(), out shown) ? shown : id.ToString()));
+                    }
+                // By name too: a re-upload under an id not on the list yet.
+                foreach (var e in ModIndex.All())
+                    if (e != null && !e.IsLocal && !_malwareWarned.Contains(e.WorkshopId)
+                        && _malware.IsFlagged(0, e.Name) && !found.Any(f => f.Key == e.WorkshopId))
+                        found.Add(new KeyValuePair<ulong, string>(e.WorkshopId, e.Name));
+            }
+            catch { }
+            if (found.Count == 0) return;
+
+            foreach (var f in found) _malwareWarned.Add(f.Key);
+            string names = string.Join("\r\n", found.Select(f => "    " + f.Value + "  (" + f.Key + ")"));
+            Log("WARNING: installed mod(s) flagged as malware: " + string.Join(", ", found.Select(f => f.Value + " (" + f.Key + ")")) + ".");
+            if (MessageBox.Show(Host,
+                    "These installed mods are flagged as malware:\r\n\r\n" + names
+                    + "\r\n\r\nThe launcher will not load them, and servers running them are hidden.\r\n\r\n"
+                    + "Remove " + (found.Count == 1 ? "it" : "them") + " now? Steam deletes the files.",
+                    "Malware mod installed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+            RemoveModsInTurn(steam, found);
+        }
+
+        /// <summary>
+        /// True, after saying why, when this server runs a mod flagged as
+        /// malware - by the relay's word, or in the mod list just read from it.
+        /// </summary>
+        /// <summary>What MalwareOn says for a server blocked by hand rather than for a mod.</summary>
+        private const string Blocked = "(blocked)";
+
+        private bool RefuseMalwareServer(string endpoint, List<Mod> mods)
+        {
+            if (_malware.IsBlocked(endpoint))
+            {
+                Log("Refused: " + StreamerMode.Address(endpoint) + " is blocked.");
+                MessageBox.Show(Host, "This server can't be joined from the launcher.",
+                                "Server blocked", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true;
+            }
+            string flagged = _malware.FlaggedAmong(mods);
+            if (flagged == null && _malware.Servers.Contains(endpoint)) flagged = "a mod flagged as malware";
+            if (flagged == null) return false;
+
+            Log("Refused: " + StreamerMode.Address(endpoint) + " runs " + flagged + ", which is flagged as malware.");
+            MessageBox.Show(Host,
+                "This server runs " + (flagged.StartsWith("a mod") ? flagged : "\"" + flagged + "\"")
+                + ", which is flagged as malware.\r\n\r\n"
+                + "The launcher won't download or load it, so it won't join this server.",
+                "Malware mod", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return true;
+        }
+
+        /// <summary>One at a time: each Remove moves the Steam session aside while Steam deletes.</summary>
+        private async void RemoveModsInTurn(string steam, List<KeyValuePair<ulong, string>> mods)
+        {
+            foreach (var m in mods)
+            {
+                if (_closing) return;
+                await RemoveModAsync(steam, m.Key, m.Value);
+            }
         }
 
         /// <summary>
@@ -8499,8 +8784,14 @@ namespace ABeautifulPotatoLauncher
 
             string status;
             Color colour;
-            if (broken) { status = "BROKEN - files present but no meta.cpp"; colour = Color.FromArgb(230, 130, 130); }
+            if (_malware.IsFlagged(m.WorkshopId, m.Name))
+            {
+                status = have ? "MALWARE - remove it" : "MALWARE - never downloaded";
+                colour = Color.FromArgb(240, 90, 90);
+            }
+            else if (broken) { status = "BROKEN - files present but no meta.cpp"; colour = Color.FromArgb(230, 130, 130); }
             else if (!have) { status = "NOT installed"; colour = Color.FromArgb(220, 190, 120); }
+            else if (ModRemoval.IsPending(m.WorkshopId)) { status = ModRemoval.PendingStatus; colour = Dim; }
             else if (stale)
             {
                 TimeSpan behind = steam == null ? TimeSpan.Zero : SteamWorkshop.StaleBy(steam, m.WorkshopId);
@@ -8606,6 +8897,7 @@ namespace ABeautifulPotatoLauncher
             if (busy) { state = "downloading..."; colour = Color.FromArgb(200, 190, 130); }
             else if (broken) { state = "BROKEN - no mods folder in it"; colour = Color.FromArgb(230, 130, 130); }
             else if (!have) { state = "not installed - fetched on join"; colour = Color.FromArgb(220, 190, 120); }
+            else if (ModRemoval.IsPending(m.WorkshopId)) { state = ModRemoval.PendingStatus; colour = Dim; }
             else if (stale)
             {
                 TimeSpan behind = SteamWorkshop.StaleBy(steam, m.WorkshopId);
@@ -9030,6 +9322,13 @@ namespace ABeautifulPotatoLauncher
                 }
             }
 
+            if ((col == MColRepair || col == MColSub) && _malware.IsFlagged(mod.WorkshopId, mod.Name))
+            {
+                MessageBox.Show(Host, mod.Name + " is flagged as malware, so the launcher won't download it.",
+                                "Malware mod", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             if (col == MColRepair)
             {
                 // Subscribe first: repairing something unsubscribed would
@@ -9056,14 +9355,30 @@ namespace ABeautifulPotatoLauncher
                         "Remove mod", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                     return;
 
-                SteamWorkshop.Unsubscribe(mod.WorkshopId);
-                Log("Unsubscribed from " + mod.Name + " (" + mod.WorkshopId + ").");
+                Log("Removing " + mod.Name + " (" + mod.WorkshopId + ")...");
                 hit.Item.SubItems[MColStatus].Text = "removing...";
+                RemoveMod(steam, mod.WorkshopId, mod.Name);
             }
 
             hit.Item.SubItems[MColStatus].ForeColor = Color.FromArgb(200, 190, 130);
             _modRecheck.Stop();
             _modRecheck.Start();
+        }
+
+        /// <summary>Unsubscribes (see ModRemoval - Steam does the deleting), then redraws the mod panel.</summary>
+        private async void RemoveMod(string steam, ulong id, string name)
+        {
+            await RemoveModAsync(steam, id, name);
+        }
+
+        private async System.Threading.Tasks.Task RemoveModAsync(string steam, ulong id, string name)
+        {
+            string result;
+            try { result = await ModRemoval.RemoveAsync(steam, id, name, Log); }
+            catch (Exception ex) { result = "Removing " + name + " failed: " + ex.Message; }
+            if (_closing) return;
+            Log(result);
+            RefreshInstalledState();
         }
 
         // ---------------------------------------------------- connections ----
@@ -9357,6 +9672,11 @@ private void Launch(Row srv)
                 throw new Exception("The server did not answer the mod query on port " +
                                     srv.EffectiveQueryPort + ".");
             Log("Server publishes " + mods.Count + " mod(s).");
+
+            // A MALWARE MOD IS NEVER DOWNLOADED OR LOADED - and a server that
+            // requires one can't be joined without it. See MalwareInfo.
+            if (RefuseMalwareServer(srv.Endpoint, mods)) return;
+
             Log("Note: a server only advertises as many mods as its steamProtocolMaxDataSize");
             Log("      allows. If it kicks you for a mod not listed above, that setting is");
             Log("      too small on the server and no launcher can see the rest.");
@@ -9942,7 +10262,9 @@ private void Launch(Row srv)
             foreach (var m in mods)
             {
                 string folder = m.Folder;
-                if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+                if (!m.IsLocal && _malware.IsFlagged(m.WorkshopId, m.Name))
+                    left.Add(m.Name + " - flagged as malware; never loaded");
+                else if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
                     left.Add(m.Name + " - its folder is gone");
                 else if (m.Status(steam) == "Corrupt")
                     left.Add(m.Name + " - its download never finished (Repair it in the Mod Manager)");
@@ -10104,6 +10426,9 @@ private void Launch(Row srv)
             catch { }
             if (rules != null)
                 Log("Server lists " + rules.Mods.Count + " mod(s); the game downloads any you are missing as it connects.");
+
+            // The game would download a malware mod itself, so the join is refused here.
+            if (RefuseMalwareServer(srv.Endpoint, rules != null ? rules.Mods : null)) return;
 
             // WHICH ACCOUNT, AND HOW. The command line carries only the server
             // password; the account and Steam Relay are filled into the game's
@@ -11066,6 +11391,7 @@ private static ServerRules QueryModsChecked(Row row)
             _closing = true;
             SaveSearches();
             _updateTimer.Stop();
+            _steamPlayersTimer.Stop();
             ModIndex.Changed -= OnModIndexChanged;
             _modsChangedDelay.Stop();
             if (_cooldownTimer != null) _cooldownTimer.Stop();

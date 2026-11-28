@@ -460,6 +460,50 @@ namespace ABeautifulPotatoLauncher
             return approved;
         }
 
+        // --------------------------------------------------------- malware --
+
+        /// <summary>
+        /// Mods flagged by hand as malware, and the listed servers running them
+        /// - see MalwareInfo. From the service, or the copy kept last time.
+        /// Null when there is neither (or this relay doesn't publish it yet).
+        /// </summary>
+        public static MalwareInfo TryMalware()
+        {
+            string problem;
+            byte[] gz = Download("malware", out problem);
+            try { if (gz == null && File.Exists(CacheFile("malware"))) gz = File.ReadAllBytes(CacheFile("malware")); }
+            catch { }
+            if (gz == null) return null;
+
+            var info = new MalwareInfo();
+            if (gz.Length == 0) return info;
+            try
+            {
+                foreach (string line in Lines(gz))
+                {
+                    string[] f = line.Split('\t');
+                    if (f.Length >= 3 && f[0] == "mod")
+                    {
+                        ulong id;
+                        if (ulong.TryParse(f[1], out id) && id != 0) info.Ids.Add(id);
+                        string name = f[2].Trim();
+                        if (name.Length > 0) info.Names.Add(name);
+                        info.Shown[id != 0 ? id.ToString() : name] = name.Length > 0 ? name : id.ToString();
+                    }
+                    else if (f.Length >= 2 && f[0] == "server" && f[1].IndexOf(':') > 0)
+                        info.Servers.Add(f[1].Trim());
+                    else if (f.Length >= 2 && f[0] == "block" && f[1].Trim().Length > 0)
+                    {
+                        // "ip:port" one server, "ip" every server on the address.
+                        string a = f[1].Trim();
+                        if (a.IndexOf(':') > 0) info.BlockedServers.Add(a); else info.BlockedHosts.Add(a);
+                    }
+                }
+            }
+            catch { return null; }
+            return info;
+        }
+
         // ------------------------------------------------------------ wire --
 
         private static string CacheFile(string kind) { return Path.Combine(ServerStore.GameDir, "relay-" + kind + ".gz"); }
